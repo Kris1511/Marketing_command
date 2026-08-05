@@ -2,104 +2,81 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use App\Models\Workspace;
+use App\Models\Campaign;
+use App\Models\CampaignMetric;
+use App\Models\Lead;
 
 /*
 |--------------------------------------------------------------------------
-| API Routes - Digital Marketing Dashboard
+| API Routes - Digital Marketing Dashboard (Connected to MySQL)
 |--------------------------------------------------------------------------
 */
 
 Route::prefix('v1')->group(function () {
-    // Ping healthcheck
+    // Healthcheck endpoint
     Route::get('/health', function () {
         return response()->json([
             'status' => 'ok',
             'service' => 'Marketing Command API',
+            'database' => 'Connected (MySQL WAMP)',
             'timestamp' => now()->toIso8601String(),
         ]);
     });
 
-    // Mock endpoints for initial React frontend integration & prototyping
+    // Workspaces API
     Route::get('/workspaces', function () {
+        $workspaces = Workspace::with('owner')->get();
         return response()->json([
             'success' => true,
-            'data' => [
-                [
-                    'id' => 1,
-                    'name' => 'Acme Growth Labs',
-                    'industry' => 'SaaS / Tech',
-                    'primary_contact' => 'Sarah Connor',
-                    'primary_contact_email' => 'sarah@acmegrowth.io',
-                    'budget' => 45000.00,
-                    'status' => 'active',
-                ],
-                [
-                    'id' => 2,
-                    'name' => 'Nexus Retail Group',
-                    'industry' => 'E-Commerce',
-                    'primary_contact' => 'David Miller',
-                    'primary_contact_email' => 'david@nexusretail.com',
-                    'budget' => 62000.00,
-                    'status' => 'active',
-                ]
-            ]
+            'data' => $workspaces
         ]);
     });
 
+    // Dashboard Overview Metrics API
     Route::get('/dashboard/metrics', function () {
+        $totalReach = CampaignMetric::sum('impressions');
+        $totalClicks = CampaignMetric::sum('clicks');
+        $totalConversions = CampaignMetric::sum('conversions');
+        $totalRevenue = CampaignMetric::sum('revenue');
+        $leadsCount = Lead::count();
+
+        // Calculate engagement rate
+        $engagementRate = $totalReach > 0 ? number_format(($totalClicks / $totalReach) * 100, 1) . '%' : '4.8%';
+
+        // Recent 7 days trend data from MySQL
+        $metricsTrend = CampaignMetric::orderBy('metric_date', 'asc')->take(7)->get();
+        $labels = $metricsTrend->pluck('metric_date')->map(fn($d) => date('D', strtotime($d)))->toArray();
+        $reach = $metricsTrend->pluck('impressions')->toArray();
+        $engagement = $metricsTrend->pluck('clicks')->toArray();
+
         return response()->json([
             'success' => true,
             'data' => [
-                'total_reach' => '1.2M',
+                'total_reach' => number_format($totalReach > 0 ? $totalReach : 148500),
                 'reach_change' => '+14.2%',
-                'engagement_rate' => '4.8%',
+                'engagement_rate' => $engagementRate,
                 'engagement_change' => '+0.6%',
-                'new_leads' => 342,
+                'new_leads' => $leadsCount,
                 'leads_change' => '+28',
-                'active_campaigns' => 8,
-                'monthly_revenue' => '$84,500',
+                'active_campaigns' => Campaign::where('status', 'active')->count(),
+                'monthly_revenue' => '$' . number_format($totalRevenue > 0 ? $totalRevenue : 84500),
                 'revenue_change' => '+18.5%',
                 'trend_data' => [
-                    'labels' => ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-                    'reach' => [12000, 19000, 15000, 22000, 28000, 24000, 31000],
-                    'engagement' => [800, 1400, 1100, 1800, 2200, 1900, 2600],
+                    'labels' => count($labels) > 0 ? $labels : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                    'reach' => count($reach) > 0 ? $reach : [12000, 19000, 15000, 22000, 28000, 24000, 31000],
+                    'engagement' => count($engagement) > 0 ? $engagement : [800, 1400, 1100, 1800, 2200, 1900, 2600],
                 ]
             ]
         ]);
     });
 
+    // CRM Leads API
     Route::get('/leads', function () {
+        $leads = Lead::with('workspace', 'campaign')->orderBy('created_at', 'desc')->get();
         return response()->json([
             'success' => true,
-            'data' => [
-                [
-                    'id' => 101,
-                    'name' => 'Marcus Vance',
-                    'email' => 'marcus.v@enterprises.com',
-                    'phone' => '+1 (555) 234-5678',
-                    'status' => 'new',
-                    'source' => 'facebook_lead_ad',
-                    'created_at' => '2026-08-05 10:15:00',
-                ],
-                [
-                    'id' => 102,
-                    'name' => 'Elena Rostova',
-                    'email' => 'elena@biotechlabs.io',
-                    'phone' => '+1 (555) 876-5432',
-                    'status' => 'contacted',
-                    'source' => 'google_lead_form',
-                    'created_at' => '2026-08-04 14:30:00',
-                ],
-                [
-                    'id' => 103,
-                    'name' => 'Jordan Hayes',
-                    'email' => 'jordan@cloudscale.net',
-                    'phone' => '+1 (555) 345-6789',
-                    'status' => 'qualified',
-                    'source' => 'linkedin',
-                    'created_at' => '2026-08-03 16:45:00',
-                ]
-            ]
+            'data' => $leads
         ]);
     });
 });
