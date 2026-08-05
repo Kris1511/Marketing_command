@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Digital Marketing Management, CRM and Reporting Dashboard">
+  <title>Marketing Operations Dashboard</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark">RM</div>
+        <div>
+          <strong>Marketing Command</strong>
+          <small>Operations Dashboard</small>
+        </div>
+      </div>
+
+      <div class="nav-group-title">Workspace</div>
+      <nav class="nav-list" aria-label="Main navigation">
+        <button class="nav-btn active" data-view="overview"><span class="nav-icon">⌂</span>Overview</button>
+        <button class="nav-btn" data-view="clients"><span class="nav-icon">▦</span>Clients</button>
+        <button class="nav-btn" data-view="publishing"><span class="nav-icon">✦</span>Publishing</button>
+        <button class="nav-btn" data-view="crm"><span class="nav-icon">◎</span>CRM & Leads</button>
+        <button class="nav-btn" data-view="reports"><span class="nav-icon">▥</span>Reports</button>
+      </nav>
+
+      <div class="nav-group-title">System</div>
+      <nav class="nav-list" aria-label="System navigation">
+        <button class="nav-btn" data-view="notifications"><span class="nav-icon">◉</span>Notifications</button>
+        <button class="nav-btn" data-view="integrations"><span class="nav-icon">⌁</span>API Connections</button>
+        <button class="nav-btn" data-view="team"><span class="nav-icon">♙</span>Team & Access</button>
+      </nav>
+
+      <div class="sidebar-help">
+        <strong>Need help?</strong>
+        <p>Use the setup guide to connect a client account or understand any dashboard section.</p>
+        <button type="button" id="openHelp">Open simple guide</button>
+      </div>
+    </aside>
+
+    <div class="main-shell">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" class="mobile-menu" id="mobileMenu" aria-label="Open menu">☰</button>
+          <div class="page-heading">
+            <strong id="pageTitle">Overview</strong>
+            <small id="pageSubtitle">All important updates in one place</small>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <div class="top-control">
+            <label for="clientSelector">Current client workspace</label>
+            <select id="clientSelector" aria-label="Select client"></select>
+          </div>
+          <button type="button" class="icon-btn" id="quickSync" aria-label="Sync connected platforms" title="Sync connected platforms">↻</button>
+          <button type="button" class="icon-btn" data-nav-target="notifications" aria-label="Open notifications">◉<span class="notification-dot"></span></button>
+          <div class="avatar" id="userAvatar" title="Digital Marketing Team">DM</div>
+        </div>
+      </header>
+
+      <main class="content">
+        <!-- OVERVIEW -->
+        <section class="view active" id="view-overview">
+          <div class="welcome-panel">
+            <div class="welcome-copy">
+              <h2 id="welcomeTitle">Welcome to Marketing Command</h2>
+              <p id="welcomeMessage">Add a client workspace to begin connecting channels, tracking leads, and generating reports.</p>
+            </div>
+            <div class="welcome-actions">
+              <button type="button" class="btn btn-outline-white" data-nav-target="reports">View report</button>
+              <button type="button" class="btn btn-white" data-nav-target="publishing">+ Create content</button>
+            </div>
+          </div>
+
+          <div class="metric-grid" id="overviewMetrics"></div>
+
+          <div class="grid-2">
+            <section class="panel">
+              <div class="panel-header">
+                <div class="panel-title">
+                  <h3>Performance trend</h3>
+                  <p>Reach and engagement for the selected period</p>
+                </div>
+                <div class="panel-actions">
+                  <select class="select" id="performanceRange" style="width:145px" aria-label="Performance date range">
+                    <option value="30">Last 30 days</option>
+                    <option value="7">Last 7 days</option>
+                    <option value="90">Last 90 days</option>
+                  </select>
+                </div>
+              </div>
+              <div class="chart-legend">
+                <span class="legend-item"><span class="legend-line"></span>Reach</span>
+                <span class="legend-item"><span class="legend-line secondary"></span>Engagement</span>
+              </div>
+              <div class="chart-wrap"><canvas id="performanceChart" aria-label="Performance trend chart"></canvas></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div class="panel-title">
+                  <h3>Connected channels</h3>
+                  <p>Only channels enabled for this client</p>
+                </div>
+                <button type="button" class="link-button" data-nav-target="integrations">Manage</button>
+              </div>
+              <div class="channel-list" id="channelList"></div>
+            </section>
+          </div>
+
+          <div class="grid-2">
+            <section class="panel">
+              <div class="panel-header">
+                <div class="panel-title"><h3>Google Ads Manager</h3><p>Paid campaign performance for the selected client</p></div>
+                <button type="button" class="link-button" data-nav-target="integrations">Manage</button>
+              </div>
+              <div class="funnel" id="googleAdsSummary"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-header">
+                <div class="panel-title"><h3>Google Business Profile (GMB)</h3><p>Local discovery and customer actions</p></div>
+                <button type="button" class="link-button" data-nav-target="integrations">Manage</button>
+              </div>
+              <div class="funnel" id="gmbSummary"></div>
+            </section>
+          </div>
+
+          <div class="grid-3">
+            <section class="panel">
+              <div class="panel-header">
+                <div class="panel-title"><h3>Lead funnel</h3><p>From enquiry to conversion</p></div>
+                <span class="pill" id="overviewConversion">0% conversion</span>
+              </div>
+              <div class="funnel" id="leadFunnel"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div class="panel-title"><h3>Today’s priorities</h3><p>Recommended next actions</p></div>
+              </div>
+              <div class="activity-list" id="priorityList"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div class="panel-title"><h3>Recent activity</h3><p>Latest actions across the workspace</p></div>
+                <button type="button" class="link-button" data-nav-target="notifications">View all</button>
+              </div>
+              <div class="activity-list" id="activityList"></div>
+            </section>
+          </div>
+        </section>
+
+        <!-- CLIENTS -->
+        <section class="view" id="view-clients">
+          <div class="section-head">
+            <div><h2>Client workspaces</h2><p>Each client’s channels, leads, content, and reports stay separate.</p></div>
+            <div class="toolbar">
+              <button type="button" class="btn btn-primary" id="addClientBtn">+ Add new client</button>
+            </div>
+          </div>
+          <div class="metric-grid">
+            <div class="metric-card"><div class="metric-label">Total clients</div><div class="metric-value" id="clientCount">0</div><div class="metric-foot">All isolated workspaces</div></div>
+            <div class="metric-card"><div class="metric-label">Active clients</div><div class="metric-value" id="activeClientCount">0</div><div class="metric-foot">Ready for operations</div></div>
+            <div class="metric-card"><div class="metric-label">Connected accounts</div><div class="metric-value" id="connectedAccountCount">0</div><div class="metric-foot">Across enabled channels</div></div>
+            <div class="metric-card"><div class="metric-label">Setup pending</div><div class="metric-value" id="pendingClientCount">0</div><div class="metric-foot">Workspaces awaiting connection</div></div>
+          </div>
+          <section class="panel">
+            <div class="panel-header">
+              <div class="panel-title"><h3>All clients</h3><p>Select a workspace to view or manage it</p></div>
+              <div class="panel-actions">
+                <div class="search-box"><span>⌕</span><input type="search" id="clientSearch" placeholder="Search client or industry"></div>
+              </div>
+            </div>
+            <div class="client-card-grid" id="clientCards"></div>
+          </section>
+        </section>
+
+        <!-- PUBLISHING -->
+        <section class="view" id="view-publishing">
+          <div class="section-head">
+            <div><h2>Content publishing</h2><p>Create once, choose channels, and publish immediately or schedule for later.</p></div>
+            <div class="toolbar">
+              <button type="button" class="btn btn-secondary" id="saveDraftTop">Save draft</button>
+              <button type="button" class="btn btn-primary" id="publishTop">Publish / Schedule</button>
+            </div>
+          </div>
+
+          <div class="publisher-layout">
+            <section class="panel">
+              <div class="panel-header">
+                <div class="panel-title"><h3>Create content</h3><p>Plain-language form suitable for daily marketing operations</p></div>
+                <span class="pill info">Auto-saved locally</span>
+              </div>
+              <div class="form-grid">
+                <div class="form-field full">
+                  <label class="form-label">Where should this content be posted?</label>
+                  <div class="check-grid" id="platformChecks">
+                    <label class="check-card"><input type="checkbox" value="Facebook"> Facebook</label>
+                    <label class="check-card"><input type="checkbox" value="Instagram"> Instagram</label>
+                    <label class="check-card"><input type="checkbox" value="YouTube"> YouTube</label>
+                    <label class="check-card"><input type="checkbox" value="LinkedIn" disabled> LinkedIn <small>(Phase 2)</small></label>
+                    <label class="check-card"><input type="checkbox" value="X" disabled> X <small>(Phase 2)</small></label>
+                  </div>
+                </div>
+                <div class="form-field full">
+                  <label for="postTitle" class="form-label">Internal content title</label>
+                  <input id="postTitle" class="input" placeholder="Example: Monthly service update">
+                  <div class="form-help">Used by your team to identify the post. It is not always visible to customers.</div>
+                </div>
+                <div class="form-field full">
+                  <label for="postCaption" class="form-label">Caption / post message</label>
+                  <textarea id="postCaption" class="textarea" placeholder="Write the message customers should see"></textarea>
+                </div>
+                <div class="form-field">
+                  <label for="postHashtags" class="form-label">Hashtags</label>
+                  <input id="postHashtags" class="input" placeholder="#YourBrand #Campaign">
+                </div>
+                <div class="form-field">
+                  <label for="postCTA" class="form-label">Call-to-action</label>
+                  <select id="postCTA" class="select">
+                    <option>Learn More</option><option>Book Now</option><option>Contact Us</option><option>Send Message</option><option>No CTA</option>
+                  </select>
+                </div>
+                <div class="form-field full">
+                  <label class="form-label">Image or video</label>
+                  <div class="media-drop">
+                    <strong>Drop media here or click to choose</strong>
+                    <div class="form-help">Images, videos, multiple media, YouTube thumbnails</div>
+                    <input type="file" id="mediaFile" accept="image/*,video/*" multiple style="margin-top:12px;max-width:100%">
+                  </div>
+                </div>
+                <div class="form-field">
+                  <label for="publishType" class="form-label">When should it go live?</label>
+                  <select id="publishType" class="select">
+                    <option value="schedule">Schedule for later</option>
+                    <option value="now">Publish immediately</option>
+                    <option value="draft">Save as draft</option>
+                  </select>
+                </div>
+                <div class="form-field" id="scheduleField">
+                  <label for="scheduleAt" class="form-label">Scheduled date and time</label>
+                  <input type="datetime-local" id="scheduleAt" class="input">
+                </div>
+                <div class="form-field full">
+                  <div class="flex justify-between items-center gap-12">
+                    <span class="form-help">Platform-specific fields can be edited after selecting YouTube.</span>
+                    <div class="flex gap-8">
+                      <button type="button" class="btn btn-secondary" id="saveDraft">Save draft</button>
+                      <button type="button" class="btn btn-primary" id="submitPost">Publish / Schedule</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <aside class="panel">
+              <div class="panel-header">
+                <div class="panel-title"><h3>Live preview</h3><p>How the content may appear on social media</p></div>
+                <span class="pill">Instagram</span>
+              </div>
+              <div class="preview-phone">
+                <div class="preview-top"></div>
+                <div class="preview-body">
+                  <div class="preview-profile"><div class="initial" id="previewInitials">--</div><div><strong style="font-size:12px" id="previewAccount">business_account</strong><div class="muted" style="font-size:10px">Preview</div></div></div>
+                  <div class="preview-image" id="previewMedia">Media preview</div>
+                  <div class="preview-caption" id="previewCaption"></div>
+                  <div class="preview-tags" id="previewTags"></div>
+                  <button class="btn btn-sm btn-primary btn-block mt-12" type="button" id="previewCTA">Learn More</button>
+                </div>
+              </div>
+            </aside>
+          </div>
+
+          <section class="panel mt-18">
+            <div class="panel-header">
+              <div class="panel-title"><h3>Scheduled content calendar</h3><p>Upcoming posts for this week</p></div>
+              <div class="panel-actions"><span class="pill" id="calendarRangeLabel">Current week</span></div>
+            </div>
+            <div class="calendar-grid" id="contentCalendar"></div>
+          </section>
+        </section>
+
+        <!-- CRM -->
+        <section class="view" id="view-crm">
+          <div class="section-head">
+            <div><h2>CRM & lead management</h2><p>Track every enquiry, owner, follow-up, and result from one screen.</p></div>
+            <div class="toolbar"><button type="button" class="btn btn-primary" id="addLeadBtn">+ Add lead</button></div>
+          </div>
+          <div class="metric-grid" id="leadMetrics"></div>
+          <section class="panel">
+            <div class="panel-header">
+              <div class="panel-title"><h3>Lead list</h3><p>Search and filter without technical queries</p></div>
+              <div class="panel-actions">
+                <div class="search-box"><span>⌕</span><input type="search" id="leadSearch" placeholder="Search name, phone or campaign"></div>
+                <select class="select" id="leadStageFilter" style="width:160px"><option value="">All stages</option><option>New Lead</option><option>Contacted</option><option>Follow-Up</option><option>Qualified</option><option>Proposal Sent</option><option>Won</option><option>Lost</option></select>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Lead</th><th>Source / Campaign</th><th>Owner</th><th>Created</th><th>Stage</th><th>Action</th></tr></thead>
+                <tbody id="leadTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel mt-18">
+            <div class="panel-header">
+              <div class="panel-title"><h3>Pipeline view</h3><p>Visual summary of lead progress</p></div>
+              <span class="pill info">Drag-and-drop can be enabled with backend workflow</span>
+            </div>
+            <div class="kanban" id="leadKanban"></div>
+          </section>
+        </section>
+
+        <!-- REPORTS -->
+        <section class="view" id="view-reports">
+          <div class="section-head">
+            <div><h2>Reports & insights</h2><p>Build clear client reports using simple filters and ready-made visuals.</p></div>
+            <div class="toolbar">
+              <button type="button" class="btn btn-secondary" id="downloadCsv">Download Excel/CSV</button>
+              <button type="button" class="btn btn-primary" id="printReport">Download PDF / Print</button>
+            </div>
+          </div>
+          <section class="panel mb-0">
+            <div class="form-grid">
+              <div class="form-field"><label class="form-label" for="reportPlatform">Platform</label><select class="select" id="reportPlatform"><option>All connected platforms</option><option>Facebook</option><option>Instagram</option><option>YouTube</option><option>Google Analytics</option><option>Search Console</option><option>Google Ads Manager</option><option>Google Business Profile (GMB)</option></select></div>
+              <div class="form-field"><label class="form-label" for="reportPeriod">Period</label><select class="select" id="reportPeriod"><option>Last 30 days</option><option>Previous month</option><option>Last 90 days</option><option>Year to date</option><option>Custom dates</option></select></div>
+              <div class="form-field"><label class="form-label" for="reportCompare">Compare with</label><select class="select" id="reportCompare"><option>Previous period</option><option>Previous month</option><option>Previous year</option><option>No comparison</option></select></div>
+              <div class="form-field" style="align-self:end"><button type="button" class="btn btn-primary btn-block" id="generateReport">Generate report</button></div>
+            </div>
+          </section>
+
+          <div class="report-hero mt-18">
+            <section class="report-summary">
+              <h3 id="reportClientTitle">No client selected – Performance Summary</h3>
+              <p id="reportPeriodLabel">Select a client and period to generate a report.</p>
+              <div class="report-summary-grid">
+                <div class="report-stat"><strong id="reportReach">0</strong><span>Total reach</span></div>
+                <div class="report-stat"><strong id="reportLeads">0</strong><span>Leads generated</span></div>
+                <div class="report-stat"><strong id="reportConversion">0%</strong><span>Conversion rate</span></div>
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-header"><div class="panel-title"><h3>Plain-language summary</h3><p>Ready to share with the client</p></div></div>
+              <div class="insight-list" id="reportInsights"></div>
+            </section>
+          </div>
+
+          <div class="metric-grid" id="reportMetrics"></div>
+          <div class="grid-equal">
+            <section class="panel"><div class="panel-header"><div class="panel-title"><h3>Channel contribution</h3><p>Share of total reach</p></div></div><div class="funnel" id="reportChannels"></div></section>
+            <section class="panel"><div class="panel-header"><div class="panel-title"><h3>Lead source performance</h3><p>Which sources created useful enquiries</p></div></div><div class="funnel" id="reportSources"></div></section>
+          </div>
+        </section>
+
+        <!-- NOTIFICATIONS -->
+        <section class="view" id="view-notifications">
+          <div class="section-head">
+            <div><h2>Notifications & alerts</h2><p>Publishing, connections, leads, reminders, and performance alerts.</p></div>
+            <div class="toolbar"><button type="button" class="btn btn-secondary" id="markAllRead">Mark all as read</button></div>
+          </div>
+          <div class="grid-2">
+            <section class="panel">
+              <div class="panel-header"><div class="panel-title"><h3>Latest notifications</h3><p>Important items appear first</p></div></div>
+              <div class="notice-list" id="notificationList"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-header"><div class="panel-title"><h3>Alert preferences</h3><p>Choose what the team should be informed about</p></div></div>
+              <div class="activity-list">
+                <label class="activity-item"><div class="activity-icon">✓</div><div class="activity-text"><strong>Publishing results</strong><span>Success and failure notifications</span></div><input type="checkbox" checked></label>
+                <label class="activity-item"><div class="activity-icon">⌁</div><div class="activity-text"><strong>Account connection alerts</strong><span>Expired or disconnected APIs</span></div><input type="checkbox" checked></label>
+                <label class="activity-item"><div class="activity-icon">+</div><div class="activity-text"><strong>New lead notifications</strong><span>Notify owner when a lead is received</span></div><input type="checkbox" checked></label>
+                <label class="activity-item"><div class="activity-icon">⏰</div><div class="activity-text"><strong>Follow-up reminders</strong><span>Before a due date is missed</span></div><input type="checkbox" checked></label>
+                <label class="activity-item"><div class="activity-icon">↗</div><div class="activity-text"><strong>Performance alerts</strong><span>Sudden improvement or decline</span></div><input type="checkbox"></label>
+              </div>
+              <button type="button" class="btn btn-primary btn-block mt-18" id="saveAlerts">Save alert preferences</button>
+            </section>
+          </div>
+        </section>
+
+        <!-- INTEGRATIONS -->
+        <section class="view" id="view-integrations">
+          <div class="section-head">
+            <div><h2>API connections</h2><p>Connect, test, and monitor every platform from one non-technical screen.</p></div>
+            <div class="toolbar"><button type="button" class="btn btn-primary" id="syncAllIntegrations">Sync all connected accounts</button></div>
+          </div>
+          <div class="code-note">
+            <strong>Developer-friendly setup:</strong> all API URLs and versions are stored in <code>js/api-config.js</code>. Every request, token header, timeout, error, and client-workspace header is handled in <code>js/api-service.js</code>.
+          </div>
+          <div class="integration-grid mt-18" id="integrationGrid"></div>
+          <div class="grid-equal mt-18">
+            <section class="panel">
+              <div class="panel-header"><div class="panel-title"><h3>Simple connection guide</h3><p>For marketing team members</p></div></div>
+              <div class="step-list">
+                <div class="step"><div><strong>Select the correct client</strong><p>Use the client selector at the top before connecting an account.</p></div></div>
+                <div class="step"><div><strong>Click Connect or Reconnect</strong><p>You will be taken to the platform’s secure authorization page.</p></div></div>
+                <div class="step"><div><strong>Choose the correct page or channel</strong><p>Only approve the business accounts required for this client.</p></div></div>
+                <div class="step"><div><strong>Return and click Test</strong><p>The dashboard confirms whether data can be read successfully.</p></div></div>
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-header"><div class="panel-title"><h3>Technical handover notes</h3><p>Production implementation checklist</p></div></div>
+              <div class="activity-list">
+                <div class="activity-item"><div class="activity-icon">1</div><div class="activity-text"><strong>Use backend OAuth callbacks</strong><span>Never store client secrets or refresh tokens in the browser.</span></div></div>
+                <div class="activity-item"><div class="activity-icon">2</div><div class="activity-text"><strong>Use one tenant header</strong><span>Every API request carries the selected client workspace ID.</span></div></div>
+                <div class="activity-item"><div class="activity-icon">3</div><div class="activity-text"><strong>Use scheduled sync jobs</strong><span>Run background server jobs and save normalized analytics data.</span></div></div>
+                <div class="activity-item"><div class="activity-icon">4</div><div class="activity-text"><strong>Enable audit logging</strong><span>Record who published, changed a lead, or reconnected an account.</span></div></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <!-- TEAM -->
+        <section class="view" id="view-team">
+          <div class="section-head">
+            <div><h2>Team & access control</h2><p>Internal digital marketing team only. Clients do not receive login access.</p></div>
+            <div class="toolbar"><button type="button" class="btn btn-primary" id="addUserBtn">+ Add team member</button></div>
+          </div>
+          <div class="grid-3">
+            <div class="panel"><div class="panel-title"><h3>Administrator</h3><p>Full client, API, user, publishing, CRM, and report access.</p></div><div class="metric-value" id="adminCount">0</div><span class="pill success">Full access</span></div>
+            <div class="panel"><div class="panel-title"><h3>Marketing Manager</h3><p>Manage assigned clients, content, leads, and reports.</p></div><div class="metric-value" id="managerCount">0</div><span class="pill info">Operational access</span></div>
+            <div class="panel"><div class="panel-title"><h3>Executive</h3><p>Assigned tasks, publishing drafts, and lead follow-up.</p></div><div class="metric-value" id="executiveCount">0</div><span class="pill warning">Limited access</span></div>
+          </div>
+          <section class="panel">
+            <div class="panel-header"><div class="panel-title"><h3>Team members</h3><p>OTP-based login is recommended for production</p></div></div>
+            <div class="table-wrap">
+              <table><thead><tr><th>Team member</th><th>Role</th><th>Assigned clients</th><th>Last active</th><th>Status</th><th>Action</th></tr></thead>
+              <tbody id="teamTableBody"><tr><td colspan="6"><div class="empty-state"><strong>No team members added</strong>Use Add team member after connecting the user-management API.</div></td></tr></tbody></table>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ADD CLIENT MODAL -->
+  <div class="modal-backdrop" id="clientModal" role="dialog" aria-modal="true" aria-labelledby="clientModalTitle">
+    <div class="modal">
+      <div class="modal-head"><h3 id="clientModalTitle">Add new client workspace</h3><button class="modal-close" data-close-modal="clientModal" aria-label="Close">×</button></div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="form-field"><label class="form-label" for="newClientName">Client / business name</label><input class="input" id="newClientName" placeholder="Example: ABC Retail"></div>
+          <div class="form-field"><label class="form-label" for="newClientIndustry">Industry</label><input class="input" id="newClientIndustry" placeholder="Example: Retail"></div>
+          <div class="form-field"><label class="form-label" for="newClientOwner">Primary contact</label><input class="input" id="newClientOwner" placeholder="Contact person name"></div>
+          <div class="form-field"><label class="form-label" for="newClientTeam">Assigned team member</label><select class="select" id="newClientTeam"><option value="">Unassigned</option></select></div>
+          <div class="form-field full"><label class="form-label">Required channels</label><div class="check-grid"><label class="check-card"><input type="checkbox" value="instagram"> Instagram</label><label class="check-card"><input type="checkbox" value="facebook"> Facebook</label><label class="check-card"><input type="checkbox" value="youtube"> YouTube</label><label class="check-card"><input type="checkbox" value="googleAnalytics"> Google Analytics</label><label class="check-card"><input type="checkbox" value="searchConsole"> Search Console</label><label class="check-card"><input type="checkbox" value="googleAdsManager"> Google Ads Manager</label><label class="check-card"><input type="checkbox" value="googleBusinessProfile"> Google Business Profile (GMB)</label></div></div>
+        </div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-secondary" data-close-modal="clientModal">Cancel</button><button class="btn btn-primary" id="createClient">Create workspace</button></div>
+    </div>
+  </div>
+
+  <!-- ADD LEAD MODAL -->
+  <div class="modal-backdrop" id="leadModal" role="dialog" aria-modal="true" aria-labelledby="leadModalTitle">
+    <div class="modal">
+      <div class="modal-head"><h3 id="leadModalTitle">Add lead manually</h3><button class="modal-close" data-close-modal="leadModal" aria-label="Close">×</button></div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="form-field"><label class="form-label" for="leadName">Lead name</label><input class="input" id="leadName"></div>
+          <div class="form-field"><label class="form-label" for="leadMobile">Mobile number</label><input class="input" id="leadMobile"></div>
+          <div class="form-field"><label class="form-label" for="leadEmail">Email address</label><input type="email" class="input" id="leadEmail"></div>
+          <div class="form-field"><label class="form-label" for="leadSource">Source</label><select class="select" id="leadSource"><option>Manual Entry</option><option>Website Form</option><option>Facebook Lead Ad</option><option>Google Lead Form</option><option>Google Ads</option><option>Google Business Profile</option><option>Landing Page</option><option>Instagram</option></select></div>
+          <div class="form-field"><label class="form-label" for="leadCampaign">Campaign name</label><input class="input" id="leadCampaign"></div>
+          <div class="form-field"><label class="form-label" for="leadOwner">Assign to</label><select class="select" id="leadOwner"><option value="">Unassigned</option></select></div>
+          <div class="form-field full"><label class="form-label" for="leadNotes">Notes</label><textarea class="textarea" id="leadNotes" style="min-height:80px"></textarea></div>
+        </div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-secondary" data-close-modal="leadModal">Cancel</button><button class="btn btn-primary" id="createLead">Save lead</button></div>
+    </div>
+  </div>
+
+  <!-- HELP MODAL -->
+  <div class="modal-backdrop" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
+    <div class="modal">
+      <div class="modal-head"><h3 id="helpModalTitle">Simple dashboard guide</h3><button class="modal-close" data-close-modal="helpModal" aria-label="Close">×</button></div>
+      <div class="modal-body">
+        <div class="step-list">
+          <div class="step"><div><strong>Select a client first</strong><p>The top client selector changes all dashboard data to that workspace.</p></div></div>
+          <div class="step"><div><strong>Use Overview every morning</strong><p>It shows performance, new leads, scheduled content, and urgent actions.</p></div></div>
+          <div class="step"><div><strong>Use Publishing for daily posts</strong><p>Select platforms, add media and caption, then publish now or schedule.</p></div></div>
+          <div class="step"><div><strong>Use CRM for every enquiry</strong><p>Assign an owner and update the stage after each call or follow-up.</p></div></div>
+          <div class="step"><div><strong>Use Reports for client sharing</strong><p>Choose the period and platform, then download PDF or Excel/CSV.</p></div></div>
+        </div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-primary" data-close-modal="helpModal">Understood</button></div>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toastWrap" aria-live="polite"></div>
+
+  <script src="js/api-config.js"></script>
+  <script src="js/initial-state.js"></script>
+  <script src="js/api-service.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
