@@ -28,7 +28,7 @@ export default function Topbar({ onToggleMobileMenu, title = 'Overview', subtitl
           <select
             id="clientSelector"
             aria-label="Select client"
-            value={selectedWorkspaceId}
+            value={selectedWorkspaceId || ''}
             onChange={(e) => setSelectedWorkspaceId(e.target.value)}
           >
             <option value="all">All Workspaces (Combined)</option>
@@ -51,7 +51,7 @@ export default function Topbar({ onToggleMobileMenu, title = 'Overview', subtitl
           ◉<span className="notification-dot"></span>
         </button>
         <div className="avatar" title="Digital Marketing Team">
-          DM
+          PS
         </div>
       </div>
     </header>

@@ -5,10 +5,12 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use App\Models\User;
+use Laravel\Socialite\Facades\Socialite;
 use App\Models\Workspace;
 use App\Models\Campaign;
 use App\Models\CampaignMetric;
 use App\Models\Lead;
+use App\Models\Integration;
 
 /*
 |--------------------------------------------------------------------------
@@ -490,5 +492,159 @@ Route::prefix('v1')->group(function () {
             ], 201);
         });
 
+    });
+
+    // Integrations (API Connections) — list all
+    Route::get('/integrations', function (Request $request) {
+        $query = \App\Models\Integration::query();
+        if ($request->has('workspace_id')) {
+            $query->where('workspace_id', $request->workspace_id);
+        }
+        $integrations = $query->orderBy('created_at', 'desc')->get();
+        return response()->json(['success' => true, 'data' => $integrations]);
+    });
+
+    // Integrations — connect a new platform
+    Route::post('/integrations', function (Request $request) {
+        $validated = $request->validate([
+            'workspace_id'   => 'required|exists:workspaces,id',
+            'platform'       => 'required|string|in:facebook,instagram,youtube,google_analytics,search_console,google_business,linkedin,twitter,mailchimp,slack',
+            'account_name'   => 'nullable|string|max:255',
+            'account_id'     => 'required|string|max:255',
+            'refresh_token'  => 'nullable|string',
+        ]);
+
+        // Upsert — if same workspace+platform+account already exists, update it
+        $integration = \App\Models\Integration::updateOrCreate(
+            [
+                'workspace_id' => $validated['workspace_id'],
+                'platform'     => $validated['platform'],
+                'account_id'   => $validated['account_id'],
+            ],
+            [
+                'account_name'      => $validated['account_name'] ?? $validated['account_id'],
+                'refresh_token'     => $validated['refresh_token'] ?? null,
+                'is_connected'      => true,
+                'connection_status' => 'connected',
+                'last_sync_at'      => now(),
+            ]
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Platform connected successfully.',
+            'data'    => $integration,
+        ], 201);
+    });
+
+    // Integrations — disconnect (delete)
+    Route::delete('/integrations/{id}', function ($id) {
+        $integration = Integration::findOrFail($id);
+        $integration->delete();
+        return response()->json(['success' => true, 'message' => 'Platform disconnected.']);
+    });
+
+    // ── Facebook OAuth ────────────────────────────────────────────────────────
+
+    // Step 1: Redirect to Facebook login
+    // Frontend opens: http://localhost:8000/api/v1/auth/facebook/redirect?workspace_id=1
+    Route::get('/auth/facebook/redirect', function (Request $request) {
+        $workspaceId = $request->query('workspace_id', '1');
+
+        // Encode workspace_id in the OAuth state parameter (safe base64)
+        $state = base64_encode(json_encode(['workspace_id' => $workspaceId, 'ts' => time()]));
+
+        return Socialite::driver('facebook')
+            ->scopes([
+                'pages_show_list',
+                'pages_read_engagement',
+                'instagram_basic',
+                'instagram_manage_insights',
+                'read_insights',
+            ])
+            ->with(['state' => $state])
+            ->stateless()
+            ->redirect();
+    });
+
+    // Step 2: Facebook sends user back here after login
+    Route::get('/auth/facebook/callback', function (Request $request) {
+        try {
+            $fbUser = Socialite::driver('facebook')->stateless()->user();
+
+            // Decode workspace_id from OAuth state parameter
+            $workspaceId = 1; // default
+            $stateRaw = $request->query('state', '');
+            if ($stateRaw) {
+                $decoded = json_decode(base64_decode($stateRaw), true);
+                $workspaceId = $decoded['workspace_id'] ?? 1;
+            }
+
+            // Save / update the Facebook integration in DB
+            $integration = Integration::updateOrCreate(
+                [
+                    'workspace_id' => $workspaceId ?: 1,
+                    'platform'     => 'facebook',
+                    'account_id'   => $fbUser->getId(),
+                ],
+                [
+                    'account_name'      => $fbUser->getName(),
+                    'refresh_token'     => $fbUser->token,
+                    'is_connected'      => true,
+                    'connection_status' => 'connected',
+                    'last_sync_at'      => now(),
+                ]
+            );
+
+            // Also save Instagram integration using same Facebook token
+            Integration::updateOrCreate(
+                [
+                    'workspace_id' => $workspaceId ?: 1,
+                    'platform'     => 'instagram',
+                    'account_id'   => $fbUser->getId(),
+                ],
+                [
+                    'account_name'      => $fbUser->getName() . ' (Instagram)',
+                    'refresh_token'     => $fbUser->token,
+                    'is_connected'      => true,
+                    'connection_status' => 'connected',
+                    'last_sync_at'      => now(),
+                ]
+            );
+
+            // Close the popup and notify the parent window
+            return response()->make(
+                '<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#f0fdf4">'
+                . '<h2 style="color:#16a34a">&#x2705; Facebook Connected!</h2>'
+                . '<p style="color:#374151">Connected as <strong>' . htmlspecialchars($fbUser->getName()) . '</strong></p>'
+                . '<p style="color:#6b7280;font-size:13px">This window will close automatically...</p>'
+                . '<script>'
+                . 'setTimeout(function(){'  
+                . '  if(window.opener){ window.opener.postMessage({type:"FACEBOOK_OAUTH_SUCCESS",name:"' . addslashes($fbUser->getName()) . '"}, "*"); }'
+                . '  window.close();'
+                . '}, 1500);'
+                . '</script>'
+                . '</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            );
+
+        } catch (\Exception $e) {
+            return response()->make(
+                '<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#fef2f2">'
+                . '<h2 style="color:#dc2626">&#x274C; Connection Failed</h2>'
+                . '<p style="color:#374151">' . htmlspecialchars($e->getMessage()) . '</p>'
+                . '<p style="color:#6b7280;font-size:13px">You can close this window.</p>'
+                . '<script>'
+                . 'setTimeout(function(){'
+                . '  if(window.opener){ window.opener.postMessage({type:"FACEBOOK_OAUTH_ERROR",error:"' . addslashes($e->getMessage()) . '"}, "*"); }'
+                . '  window.close();'
+                . '}, 2500);'
+                . '</script>'
+                . '</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            );
+        }
     });
 });
