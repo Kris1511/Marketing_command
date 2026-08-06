@@ -15,9 +15,9 @@ return new class extends Migration
             $table->string('primary_contact')->nullable();
             $table->string('primary_contact_email')->nullable();
             $table->decimal('budget', 12, 2)->unsigned()->nullable();
-            $table->enum('status', ['active', 'paused', 'archived'])->default('active');
+            $table->enum('status', ['active', 'paused', 'archived', 'inactive', 'pending'])->default('active');
             $table->string('logo_url', 500)->nullable();
-            $table->foreignId('owner_id')->constrained('users')->onDelete('restrict');
+            $table->foreignId('owner_id')->nullable()->constrained('users')->onDelete('set null');
             $table->softDeletes();
             $table->timestamps();
 

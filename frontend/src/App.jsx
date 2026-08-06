@@ -8,31 +8,34 @@ import ClientsPage from './pages/ClientsPage';
 import PublishingPage from './pages/PublishingPage';
 import IntegrationsPage from './pages/IntegrationsPage';
 import ReportsPage from './pages/ReportsPage';
+import { WorkspaceProvider } from './context/WorkspaceContext';
 import './assets/styles.css';
 
 export default function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <Router>
-      <div className="app-shell">
-        <Sidebar isOpen={mobileMenuOpen} onClose={() => setMobileMenuOpen(false)} />
-        <div className="main-shell">
-          <Topbar onToggleMobileMenu={() => setMobileMenuOpen(!mobileMenuOpen)} />
-          <main className="content">
-            <Routes>
-              <Route path="/" element={<DashboardPage />} />
-              <Route path="/clients" element={<ClientsPage />} />
-              <Route path="/publishing" element={<PublishingPage />} />
-              <Route path="/leads" element={<LeadsPage />} />
-              <Route path="/reports" element={<ReportsPage />} />
-              <Route path="/notifications" element={<DashboardPage />} />
-              <Route path="/integrations" element={<IntegrationsPage />} />
-              <Route path="/team" element={<ClientsPage />} />
-            </Routes>
-          </main>
+    <WorkspaceProvider>
+      <Router>
+        <div className="app-shell">
+          <Sidebar isOpen={mobileMenuOpen} onClose={() => setMobileMenuOpen(false)} />
+          <div className="main-shell">
+            <Topbar onToggleMobileMenu={() => setMobileMenuOpen(!mobileMenuOpen)} />
+            <main className="content">
+              <Routes>
+                <Route path="/" element={<DashboardPage />} />
+                <Route path="/clients" element={<ClientsPage />} />
+                <Route path="/publishing" element={<PublishingPage />} />
+                <Route path="/leads" element={<LeadsPage />} />
+                <Route path="/reports" element={<ReportsPage />} />
+                <Route path="/notifications" element={<DashboardPage />} />
+                <Route path="/integrations" element={<IntegrationsPage />} />
+                <Route path="/team" element={<ClientsPage />} />
+              </Routes>
+            </main>
+          </div>
         </div>
-      </div>
-    </Router>
+      </Router>
+    </WorkspaceProvider>
   );
 }

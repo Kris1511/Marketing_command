@@ -252,3 +252,13 @@ tr:hover td { background: #fbfdff; }
   .grid-2, .grid-equal, .publisher-layout, .report-hero { grid-template-columns: 1fr; }
   .welcome-panel { align-items: flex-start; }
 }
+
+.modal-backdrop { position: fixed; inset: 0; background: rgba(8,18,38,.52); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.modal { width: min(640px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; background: #fff; border-radius: 18px; box-shadow: 0 24px 80px rgba(0,0,0,.24); }
+.modal-head { padding: 18px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.modal-head h3 { margin: 0; font-size: 17px; font-weight: 700; color: var(--text); }
+.modal-close { border: 0; background: var(--surface-2); border-radius: 9px; width: 32px; height: 32px; font-size: 18px; color: var(--muted); cursor: pointer; display: grid; place-items: center; }
+.modal-close:hover { background: var(--border); color: var(--text); }
+.modal-body { padding: 20px; }
+.modal-foot { padding: 15px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 9px; }
+
