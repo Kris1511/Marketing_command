@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Send, Upload, Save, Image as ImageIcon, Smartphone } from 'lucide-react';
 
 export default function PublishingPage() {
   const [postTitle, setPostTitle] = useState('');
@@ -21,8 +22,12 @@ export default function PublishingPage() {
           <p>Create once, choose channels, and publish immediately or schedule for later.</p>
         </div>
         <div className="toolbar">
-          <button type="button" className="btn btn-secondary">Save draft</button>
-          <button type="button" className="btn btn-primary">Publish / Schedule</button>
+          <button type="button" className="btn btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <Save size={16} /> Save draft
+          </button>
+          <button type="button" className="btn btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <Send size={16} /> Publish / Schedule
+          </button>
         </div>
       </div>
 

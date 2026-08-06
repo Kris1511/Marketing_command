@@ -1,4 +1,13 @@
 import React, { useState } from 'react';
+import {
+  TrendingUp,
+  Check,
+  AlertTriangle,
+  BookOpen,
+  Heart,
+  ArrowUpRight,
+  UserPlus
+} from 'lucide-react';
 
 export default function ReportsPage() {
   const [platform, setPlatform] = useState('all');
@@ -129,7 +138,7 @@ export default function ReportsPage() {
 
           <div className="insight-list">
             <div className="insight-item">
-              <div className="insight-icon-box success">↑</div>
+              <div className="insight-icon-box success"><TrendingUp size={16} /></div>
               <div>
                 <strong>Reach improved strongly</strong>
                 <div className="muted" style={{ fontSize: '12px', marginTop: '2px' }}>
@@ -139,7 +148,7 @@ export default function ReportsPage() {
             </div>
 
             <div className="insight-item">
-              <div className="insight-icon-box success">✓</div>
+              <div className="insight-icon-box success"><Check size={16} /></div>
               <div>
                 <strong>Instagram generated the most engagement</strong>
                 <div className="muted" style={{ fontSize: '12px', marginTop: '2px' }}>
@@ -149,7 +158,7 @@ export default function ReportsPage() {
             </div>
 
             <div className="insight-item">
-              <div className="insight-icon-box warning">!</div>
+              <div className="insight-icon-box warning"><AlertTriangle size={16} /></div>
               <div>
                 <strong>Follow-up speed can improve</strong>
                 <div className="muted" style={{ fontSize: '12px', marginTop: '2px' }}>
@@ -166,7 +175,7 @@ export default function ReportsPage() {
         <div className="metric-card">
           <div className="metric-top">
             <span className="metric-label">Impressions</span>
-            <div className="metric-icon">📖</div>
+            <div className="metric-icon"><BookOpen size={20} /></div>
           </div>
           <div className="metric-value">220.9K</div>
           <div className="metric-foot">
@@ -177,7 +186,7 @@ export default function ReportsPage() {
         <div className="metric-card">
           <div className="metric-top">
             <span className="metric-label">Engagement</span>
-            <div className="metric-icon">♡</div>
+            <div className="metric-icon"><Heart size={20} /></div>
           </div>
           <div className="metric-value">7.8K</div>
           <div className="metric-foot">
@@ -188,7 +197,7 @@ export default function ReportsPage() {
         <div className="metric-card">
           <div className="metric-top">
             <span className="metric-label">Website users</span>
-            <div className="metric-icon">↗</div>
+            <div className="metric-icon"><ArrowUpRight size={20} /></div>
           </div>
           <div className="metric-value">18.4K</div>
           <div className="metric-foot">
@@ -199,7 +208,7 @@ export default function ReportsPage() {
         <div className="metric-card">
           <div className="metric-top">
             <span className="metric-label">Followers</span>
-            <div className="metric-icon">+</div>
+            <div className="metric-icon"><UserPlus size={20} /></div>
           </div>
           <div className="metric-value">24.9K</div>
           <div className="metric-foot">

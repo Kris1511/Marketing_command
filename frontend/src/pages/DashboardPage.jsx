@@ -3,6 +3,16 @@ import axiosInstance from '../api/axiosInstance';
 import { useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../context/WorkspaceContext';
 import {
+  Eye,
+  Zap,
+  Globe,
+  Target,
+  Check,
+  Plus,
+  RefreshCw,
+  AlertTriangle
+} from 'lucide-react';
+import {
   Chart as ChartJS,
   CategoryScale,
   LinearScale,
@@ -23,6 +33,14 @@ ChartJS.register(
   Tooltip,
   Legend
 );
+
+const renderActivityIcon = (icon) => {
+  if (icon === '✓' || icon === 'check') return <Check size={16} />;
+  if (icon === '+' || icon === 'plus') return <Plus size={16} />;
+  if (icon === '↻' || icon === 'sync') return <RefreshCw size={16} />;
+  if (icon === '!' || icon === 'alert') return <AlertTriangle size={16} />;
+  return <Check size={16} />;
+};
 
 const CLIENT_OVERVIEW_DATA = {
   'Aara Wellness': {
@@ -194,7 +212,9 @@ export default function DashboardPage() {
         </div>
         <div className="welcome-actions">
           <button type="button" className="btn btn-outline-white" onClick={() => navigate('/reports')}>View report</button>
-          <button type="button" className="btn btn-white" onClick={() => navigate('/publishing')}>+ Create content</button>
+          <button type="button" className="btn btn-white" onClick={() => navigate('/publishing')} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <Plus size={16} /> Create content
+          </button>
         </div>
       </div>
 
@@ -202,7 +222,7 @@ export default function DashboardPage() {
         <div className="metric-card">
           <div className="metric-top">
             <span className="metric-label">Total reach</span>
-            <div className="metric-icon">👁</div>
+            <div className="metric-icon"><Eye size={20} /></div>
           </div>
           <div className="metric-value">{totalReach}</div>
           <div className="metric-foot">
@@ -213,7 +233,7 @@ export default function DashboardPage() {
         <div className="metric-card">
           <div className="metric-top">
             <span className="metric-label">Engagement</span>
-            <div className="metric-icon">⚡</div>
+            <div className="metric-icon"><Zap size={20} /></div>
           </div>
           <div className="metric-value">{engagementRate}</div>
           <div className="metric-foot">
@@ -224,7 +244,7 @@ export default function DashboardPage() {
         <div className="metric-card">
           <div className="metric-top">
             <span className="metric-label">Website traffic</span>
-            <div className="metric-icon">🌐</div>
+            <div className="metric-icon"><Globe size={20} /></div>
           </div>
           <div className="metric-value">{websiteTraffic}</div>
           <div className="metric-foot">
@@ -235,7 +255,7 @@ export default function DashboardPage() {
         <div className="metric-card">
           <div className="metric-top">
             <span className="metric-label">Leads generated</span>
-            <div className="metric-icon">🎯</div>
+            <div className="metric-icon"><Target size={20} /></div>
           </div>
           <div className="metric-value">{newLeads}</div>
           <div className="metric-foot">
@@ -369,7 +389,9 @@ export default function DashboardPage() {
           <div className="activity-list">
             {(clientData.activities.length > 0 ? clientData.activities : DEFAULT_ZERO_DATA.activities).map((act) => (
               <div className="activity-item" key={act.title}>
-                <div className="activity-icon" style={{ background: act.bg, color: act.color }}>{act.icon}</div>
+                <div className="activity-icon" style={{ background: act.bg, color: act.color }}>
+                  {renderActivityIcon(act.icon)}
+                </div>
                 <div className="activity-text">
                   <strong>{act.title}</strong>
                   <span>{act.sub}</span>

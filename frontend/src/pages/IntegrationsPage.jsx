@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { CheckCircle2 } from 'lucide-react';
 
 const initialConnections = [
   {
@@ -148,9 +149,13 @@ export default function IntegrationsPage() {
             marginBottom: '16px',
             fontSize: '13px',
             fontWeight: '600',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
           }}
         >
-          ✓ {syncMsg}
+          <CheckCircle2 size={16} />
+          <span>{syncMsg}</span>
         </div>
       )}
 

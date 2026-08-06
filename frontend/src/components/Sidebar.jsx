@@ -1,6 +1,18 @@
 import React, { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import {
+  Home,
+  Building2,
+  Send,
+  Target,
+  BarChart3,
+  Bell,
+  Link2,
+  Shield,
+  X,
+  LogOut
+} from 'lucide-react';
 
 export default function Sidebar({ isOpen, onClose }) {
   const [showGuideModal, setShowGuideModal] = useState(false);
@@ -13,17 +25,17 @@ export default function Sidebar({ isOpen, onClose }) {
   };
 
   const navItems = [
-    { label: 'Overview', path: '/', icon: '⌂' },
-    { label: 'Clients', path: '/clients', icon: '▦' },
-    { label: 'Publishing', path: '/publishing', icon: '✦' },
-    { label: 'CRM & Leads', path: '/leads', icon: '◎' },
-    { label: 'Reports', path: '/reports', icon: '▥' },
+    { label: 'Overview', path: '/', icon: Home },
+    { label: 'Clients', path: '/clients', icon: Building2 },
+    { label: 'Publishing', path: '/publishing', icon: Send },
+    { label: 'CRM & Leads', path: '/leads', icon: Target },
+    { label: 'Reports', path: '/reports', icon: BarChart3 },
   ];
 
   const systemItems = [
-    { label: 'Notifications', path: '/notifications', icon: '◉' },
-    { label: 'API Connections', path: '/integrations', icon: '⌁' },
-    { label: 'Team & Access', path: '/team', icon: '♙' },
+    { label: 'Notifications', path: '/notifications', icon: Bell },
+    { label: 'API Connections', path: '/integrations', icon: Link2 },
+    { label: 'Team & Access', path: '/team', icon: Shield },
   ];
 
   const steps = [
@@ -67,32 +79,42 @@ export default function Sidebar({ isOpen, onClose }) {
 
         <div className="nav-group-title">Workspace</div>
         <nav className="nav-list" aria-label="Main navigation">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              onClick={onClose}
-              className={({ isActive }) => `nav-btn ${isActive ? 'active' : ''}`}
-            >
-              <span className="nav-icon">{item.icon}</span>
-              {item.label}
-            </NavLink>
-          ))}
+          {navItems.map((item) => {
+            const IconComponent = item.icon;
+            return (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                onClick={onClose}
+                className={({ isActive }) => `nav-btn ${isActive ? 'active' : ''}`}
+              >
+                <span className="nav-icon" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <IconComponent size={18} />
+                </span>
+                {item.label}
+              </NavLink>
+            );
+          })}
         </nav>
 
         <div className="nav-group-title">System</div>
         <nav className="nav-list" aria-label="System navigation">
-          {systemItems.map((item) => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              onClick={onClose}
-              className={({ isActive }) => `nav-btn ${isActive ? 'active' : ''}`}
-            >
-              <span className="nav-icon">{item.icon}</span>
-              {item.label}
-            </NavLink>
-          ))}
+          {systemItems.map((item) => {
+            const IconComponent = item.icon;
+            return (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                onClick={onClose}
+                className={({ isActive }) => `nav-btn ${isActive ? 'active' : ''}`}
+              >
+                <span className="nav-icon" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <IconComponent size={18} />
+                </span>
+                {item.label}
+              </NavLink>
+            );
+          })}
         </nav>
 
         <div className="sidebar-help">
@@ -138,8 +160,12 @@ export default function Sidebar({ isOpen, onClose }) {
                 fontWeight: '700',
                 cursor: 'pointer',
                 flexShrink: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
               }}
             >
+              <LogOut size={13} />
               Logout
             </button>
           </div>
@@ -174,7 +200,7 @@ export default function Sidebar({ isOpen, onClose }) {
                   placeItems: 'center',
                 }}
               >
-                ✕
+                <X size={18} />
               </button>
             </div>
 

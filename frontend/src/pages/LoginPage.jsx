@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { AlertTriangle, KeyRound } from 'lucide-react';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -92,9 +93,13 @@ export default function LoginPage() {
               fontSize: '13px',
               marginBottom: '20px',
               fontWeight: '600',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
             }}
           >
-            ⚠️ {localError || authError}
+            <AlertTriangle size={16} />
+            <span>{localError || authError}</span>
           </div>
         )}
 
@@ -202,8 +207,8 @@ export default function LoginPage() {
             color: '#475569',
           }}
         >
-          <strong style={{ color: '#0f172a', display: 'block', marginBottom: '8px' }}>
-            🔑 Demo Credentials (Click to pre-fill):
+          <strong style={{ color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+            <KeyRound size={16} /> Demo Credentials (Click to pre-fill):
           </strong>
           <div
             style={{

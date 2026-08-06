@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axiosInstance from '../api/axiosInstance';
 import { useWorkspace } from '../context/WorkspaceContext';
+import { Plus, Search, X, CheckCircle2 } from 'lucide-react';
 
 const CHANNELS = ['Instagram', 'Facebook', 'YouTube', 'Google Analytics', 'Search Console', 'Google Business'];
 
@@ -84,7 +85,7 @@ export default function ClientsPage() {
       });
 
       if (res.data.success) {
-        setSuccessMsg(`✅ "${res.data.data.name}" workspace created!`);
+        setSuccessMsg(`"${res.data.data.name}" workspace created!`);
         if (fetchWorkspaces) fetchWorkspaces();
         setTimeout(() => {
           closeModal();
@@ -132,8 +133,8 @@ export default function ClientsPage() {
           <p>Each client's channels, leads, content, and reports stay separate.</p>
         </div>
         <div className="toolbar">
-          <button type="button" className="btn btn-primary" onClick={openModal}>
-            + Add new client
+          <button type="button" className="btn btn-primary" onClick={openModal} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <Plus size={16} /> Add new client
           </button>
         </div>
       </div>
@@ -149,7 +150,9 @@ export default function ClientsPage() {
           <div className="metric-label">Active clients</div>
           <div className="metric-value">{(workspaces || []).filter((w) => (w.status || 'active').toLowerCase() === 'active').length}</div>
           <div className="metric-foot">
-            <span className="trend-up">● Healthy</span>
+            <span className="trend-up" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              <CheckCircle2 size={13} /> Healthy
+            </span>
           </div>
         </div>
         <div className="metric-card">
@@ -175,7 +178,7 @@ export default function ClientsPage() {
           </div>
           <div className="panel-actions">
             <div className="search-box">
-              <span>⌕</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center' }}><Search size={16} /></span>
               <input
                 type="search"
                 placeholder="Search client or industry"
@@ -264,15 +267,16 @@ export default function ClientsPage() {
             <div className="modal-head">
               <h3 id="clientModalTitle">Add new client workspace</h3>
               <button type="button" className="modal-close" onClick={closeModal} aria-label="Close">
-                ×
+                <X size={18} />
               </button>
             </div>
 
             <form onSubmit={handleSubmit}>
               <div className="modal-body">
                 {successMsg && (
-                  <div style={{ background: '#dcfce7', color: '#15803d', padding: '0.7rem 1rem', borderRadius: 8, marginBottom: '1rem', fontSize: '0.875rem' }}>
-                    {successMsg}
+                  <div style={{ background: '#dcfce7', color: '#15803d', padding: '0.7rem 1rem', borderRadius: 8, marginBottom: '1rem', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <CheckCircle2 size={16} />
+                    <span>{successMsg}</span>
                   </div>
                 )}
                 {error && (

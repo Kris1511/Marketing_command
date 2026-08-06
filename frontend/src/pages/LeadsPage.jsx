@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import axiosInstance from '../api/axiosInstance';
+import { Plus, Search, X } from 'lucide-react';
 
 const initialDefaultLeads = [
   {
@@ -180,8 +181,9 @@ export default function LeadsPage() {
           type="button"
           className="btn btn-primary"
           onClick={() => setShowModal(true)}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
-          + Add lead
+          <Plus size={16} /> Add lead
         </button>
       </div>
 
@@ -231,7 +233,7 @@ export default function LeadsPage() {
           </div>
           <div className="panel-actions">
             <div className="search-box">
-              <span>🔍</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center' }}><Search size={16} /></span>
               <input
                 type="text"
                 placeholder="Search name, phone or ca"
@@ -387,7 +389,7 @@ export default function LeadsPage() {
                 className="modal-close-btn"
                 onClick={() => setShowModal(false)}
               >
-                &times;
+                <X size={18} />
               </button>
             </div>
 

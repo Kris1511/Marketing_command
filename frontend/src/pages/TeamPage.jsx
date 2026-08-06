@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import axiosInstance from '../api/axiosInstance';
+import { Plus, X } from 'lucide-react';
 
 const initialMembers = [
   {
@@ -122,8 +123,9 @@ export default function TeamPage() {
           type="button"
           className="btn btn-primary"
           onClick={() => setShowModal(true)}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
-          + Add team member
+          <Plus size={16} /> Add team member
         </button>
       </div>
 
@@ -239,7 +241,7 @@ export default function TeamPage() {
                 className="modal-close-btn"
                 onClick={() => setShowModal(false)}
               >
-                &times;
+                <X size={18} />
               </button>
             </div>
 

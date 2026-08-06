@@ -1,6 +1,27 @@
 import React, { useEffect, useState } from 'react';
 import axiosInstance from '../api/axiosInstance';
 import { useNavigate } from 'react-router-dom';
+import {
+  CheckCircle2,
+  Search,
+  Check,
+  AlertTriangle,
+  Plus,
+  RefreshCw,
+  Megaphone,
+  Link2,
+  Bell
+} from 'lucide-react';
+
+const renderNotificationIcon = (iconStr, statusType, category) => {
+  if (iconStr === '✓' || statusType === 'success') return <Check size={18} />;
+  if (iconStr === '!' || statusType === 'warning') return <AlertTriangle size={18} />;
+  if (iconStr === '+') return <Plus size={18} />;
+  if (iconStr === '↻') return <RefreshCw size={18} />;
+  if (iconStr === '📢' || category === 'publishing') return <Megaphone size={18} />;
+  if (iconStr === '🔗' || category === 'system') return <Link2 size={18} />;
+  return <Bell size={18} />;
+};
 
 export default function NotificationsPage() {
   const navigate = useNavigate();
@@ -99,7 +120,9 @@ export default function NotificationsPage() {
           <span className="metric-label">System Status</span>
           <div className="metric-value">99.2%</div>
           <div className="metric-foot">
-            <span className="trend-up">• Healthy WAMP sync</span>
+            <span className="trend-up" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              <CheckCircle2 size={13} /> Healthy WAMP sync
+            </span>
           </div>
         </div>
 
@@ -154,7 +177,7 @@ export default function NotificationsPage() {
           </div>
 
           <div className="search-box">
-            <span>🔍</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center' }}><Search size={16} /></span>
             <input
               type="text"
               placeholder="Search notifications..."
@@ -209,7 +232,7 @@ export default function NotificationsPage() {
                     fontSize: '16px',
                   }}
                 >
-                  {item.icon}
+                  {renderNotificationIcon(item.icon, item.status_type, item.category)}
                 </div>
 
                 <div className="activity-text">

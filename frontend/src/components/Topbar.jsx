@@ -1,6 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../context/WorkspaceContext';
+import { Menu, RefreshCw, Bell } from 'lucide-react';
 
 export default function Topbar({ onToggleMobileMenu, title = 'Overview', subtitle = 'All important updates in one place' }) {
   const navigate = useNavigate();
@@ -15,7 +16,7 @@ export default function Topbar({ onToggleMobileMenu, title = 'Overview', subtitl
           onClick={onToggleMobileMenu}
           aria-label="Open menu"
         >
-          ☰
+          <Menu size={20} />
         </button>
         <div className="page-heading">
           <strong>{title}</strong>
@@ -40,7 +41,7 @@ export default function Topbar({ onToggleMobileMenu, title = 'Overview', subtitl
           </select>
         </div>
         <button type="button" className="icon-btn" title="Sync connected platforms">
-          ↻
+          <RefreshCw size={18} />
         </button>
         <button
           type="button"
@@ -48,7 +49,8 @@ export default function Topbar({ onToggleMobileMenu, title = 'Overview', subtitl
           title="Notifications"
           onClick={() => navigate('/notifications')}
         >
-          ◉<span className="notification-dot"></span>
+          <Bell size={18} />
+          <span className="notification-dot"></span>
         </button>
         <div className="avatar" title="Digital Marketing Team">
           PS
