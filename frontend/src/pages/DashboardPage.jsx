@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
+import axiosInstance from '../api/axiosInstance';
+import { useNavigate } from 'react-router-dom';
+import { useWorkspace } from '../context/WorkspaceContext';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -23,18 +25,25 @@ ChartJS.register(
 );
 
 export default function DashboardPage() {
+  const navigate = useNavigate();
+  const { selectedWorkspaceId, selectedWorkspace } = useWorkspace();
   const [metrics, setMetrics] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    axios
-      .get('/api/v1/dashboard/metrics')
+    setLoading(true);
+    axiosInstance
+      .get('/dashboard/metrics', {
+        params: { workspace_id: selectedWorkspaceId },
+      })
       .then((res) => {
         if (res.data.success) {
           setMetrics(res.data.data);
         }
       })
-      .catch((err) => console.error('Error loading metrics:', err));
-  }, []);
+      .catch((err) => console.error('Error loading metrics:', err))
+      .finally(() => setLoading(false));
+  }, [selectedWorkspaceId]);
 
   const chartData = {
     labels: metrics?.trend_data?.labels || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
@@ -64,26 +73,40 @@ export default function DashboardPage() {
     },
   };
 
+  const defaultChannels = [
+    { name: 'Facebook Page', meta: 'Connected • 1.2k Followers', value: '45.2k', change: '+12%', logo: 'FB' },
+    { name: 'Instagram Profile', meta: 'Connected • 8.4k Followers', value: '89.1k', change: '+24%', logo: 'IG' },
+    { name: 'Google Analytics 4', meta: 'Active Stream', value: '12.4k', change: '+8%', logo: 'GA' },
+  ];
+
+  const activeChannels = metrics?.channels || defaultChannels;
+
   return (
     <div>
       <div className="welcome-panel">
         <div className="welcome-copy">
-          <h2>Welcome to Marketing Command</h2>
-          <p>Add a client workspace to begin connecting channels, tracking leads, and generating reports.</p>
+          <h2>
+            {metrics?.workspace_name ? `${metrics.workspace_name} Overview` : 'Welcome to Marketing Command'}
+          </h2>
+          <p>
+            {selectedWorkspace
+              ? `Currently viewing performance data, connected platforms, and CRM leads for ${selectedWorkspace.name}.`
+              : 'Add or select a client workspace to begin connecting channels, tracking leads, and generating reports.'}
+          </p>
         </div>
         <div className="welcome-actions">
-          <button type="button" className="btn btn-outline-white">View report</button>
-          <button type="button" className="btn btn-white">+ Create content</button>
+          <button type="button" className="btn btn-outline-white" onClick={() => navigate('/reports')}>View report</button>
+          <button type="button" className="btn btn-white" onClick={() => navigate('/publishing')}>+ Create content</button>
         </div>
       </div>
 
-      <div className="metric-grid">
+      <div className="metric-grid" style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
         <div className="metric-card">
           <div className="metric-top">
             <span className="metric-label">Total Reach</span>
             <div className="metric-icon">👁</div>
           </div>
-          <div className="metric-value">{metrics?.total_reach || '1.2M'}</div>
+          <div className="metric-value">{metrics?.total_reach || '148,500'}</div>
           <div className="metric-foot">
             <span className="trend-up">{metrics?.reach_change || '+14.2%'}</span> vs last period
           </div>
@@ -105,7 +128,7 @@ export default function DashboardPage() {
             <span className="metric-label">New Leads</span>
             <div className="metric-icon">🎯</div>
           </div>
-          <div className="metric-value">{metrics?.new_leads || 342}</div>
+          <div className="metric-value">{metrics?.new_leads ?? 342}</div>
           <div className="metric-foot">
             <span className="trend-up">{metrics?.leads_change || '+28'}</span> this week
           </div>
@@ -123,12 +146,12 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="grid-2">
+      <div className="grid-2" style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
         <section className="panel">
           <div className="panel-header">
             <div className="panel-title">
               <h3>Performance trend</h3>
-              <p>Reach and engagement for the selected period</p>
+              <p>Reach and engagement for {metrics?.workspace_name || 'selected workspace'}</p>
             </div>
             <div className="panel-actions">
               <select className="select" style={{ width: '145px' }} aria-label="Performance date range">
@@ -151,44 +174,24 @@ export default function DashboardPage() {
           <div className="panel-header">
             <div className="panel-title">
               <h3>Connected channels</h3>
-              <p>Only channels enabled for this client</p>
+              <p>Only channels enabled for {metrics?.workspace_name || 'this client'}</p>
             </div>
-            <button type="button" className="link-button">Manage</button>
+            <button type="button" className="link-button" onClick={() => navigate('/integrations')}>Manage</button>
           </div>
           <div className="channel-list">
-            <div className="channel-row">
-              <div className="channel-logo">FB</div>
-              <div>
-                <div className="channel-name">Facebook Page</div>
-                <div className="channel-meta">Connected • 1.2k Followers</div>
+            {activeChannels.map((ch, idx) => (
+              <div className="channel-row" key={idx}>
+                <div className="channel-logo">{ch.logo}</div>
+                <div>
+                  <div className="channel-name">{ch.name}</div>
+                  <div className="channel-meta">{ch.meta}</div>
+                </div>
+                <div className="channel-value">
+                  <strong>{ch.value}</strong>
+                  <small>{ch.change}</small>
+                </div>
               </div>
-              <div className="channel-value">
-                <strong>45.2k</strong>
-                <small>+12%</small>
-              </div>
-            </div>
-            <div className="channel-row">
-              <div className="channel-logo">IG</div>
-              <div>
-                <div className="channel-name">Instagram Profile</div>
-                <div className="channel-meta">Connected • 8.4k Followers</div>
-              </div>
-              <div className="channel-value">
-                <strong>89.1k</strong>
-                <small>+24%</small>
-              </div>
-            </div>
-            <div className="channel-row">
-              <div className="channel-logo">GA</div>
-              <div>
-                <div className="channel-name">Google Analytics 4</div>
-                <div className="channel-meta">Active Stream</div>
-              </div>
-              <div className="channel-value">
-                <strong>12.4k</strong>
-                <small>+8%</small>
-              </div>
-            </div>
+            ))}
           </div>
         </section>
       </div>

@@ -40,7 +40,7 @@ export default function PublishingPage() {
             <div className="form-field full">
               <label className="form-label">Where should this content be posted?</label>
               <div className="check-grid">
-                {['Facebook', 'Instagram', 'YouTube'].map((plat) => (
+                {['Facebook', 'Instagram', 'YouTube', 'LinkedIn', 'X (Twitter)'].map((plat) => (
                   <label key={plat} className="check-card">
                     <input
                       type="checkbox"
@@ -51,12 +51,6 @@ export default function PublishingPage() {
                     {' '}{plat}
                   </label>
                 ))}
-                <label className="check-card">
-                  <input type="checkbox" value="LinkedIn" disabled /> LinkedIn <small>(Phase 2)</small>
-                </label>
-                <label className="check-card">
-                  <input type="checkbox" value="X" disabled /> X <small>(Phase 2)</small>
-                </label>
               </div>
             </div>
 

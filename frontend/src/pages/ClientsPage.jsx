@@ -1,13 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
+import axiosInstance from '../api/axiosInstance';
 
 export default function ClientsPage() {
   const [workspaces, setWorkspaces] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    axios
-      .get('/api/v1/workspaces')
+    axiosInstance
+      .get('/workspaces')
       .then((res) => {
         if (res.data.success) {
           setWorkspaces(res.data.data);

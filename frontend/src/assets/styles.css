@@ -47,7 +47,7 @@ button { cursor: pointer; }
 }
 .brand { display: flex; gap: 12px; align-items: center; padding: 2px 8px 22px; border-bottom: 1px solid rgba(255,255,255,.1); }
 .brand-mark { width: 42px; height: 42px; border-radius: 14px; display: grid; place-items: center; background: #fff; color: var(--primary); font-weight: 900; letter-spacing: -.04em; }
-.brand strong { display: block; font-size: 15px; }
+.brand strong { display: block; font-size: 15px; white-space: nowrap; }
 .brand small { color: rgba(255,255,255,.62); }
 .nav-group-title { color: rgba(255,255,255,.45); font-size: 11px; letter-spacing: .09em; text-transform: uppercase; padding: 22px 12px 8px; }
 .nav-list { display: grid; gap: 5px; }
@@ -252,3 +252,500 @@ tr:hover td { background: #fbfdff; }
   .grid-2, .grid-equal, .publisher-layout, .report-hero { grid-template-columns: 1fr; }
   .welcome-panel { align-items: flex-start; }
 }
+
+/* Modal & Stat Cards Styling */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.modal-card {
+  background: #ffffff;
+  border-radius: 20px;
+  width: 100%;
+  max-width: 680px;
+  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.18);
+  overflow: hidden;
+  animation: slideUp 0.25s ease-out;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 28px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.modal-close-btn {
+  background: #f1f5f9;
+  border: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  font-size: 20px;
+  color: #64748b;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: all 0.15s ease;
+}
+
+.modal-close-btn:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.modal-body {
+  padding: 24px 28px;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 28px 24px;
+  border-top: 1px solid var(--border);
+  background: #fafbfc;
+}
+
+.channel-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.channel-checkbox-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 14px;
+  font-weight: 500;
+  user-select: none;
+}
+
+.channel-checkbox-card:hover {
+  border-color: #2457e6;
+  background: #f8fafc;
+}
+
+.channel-checkbox-card input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  accent-color: #2457e6;
+  cursor: pointer;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(16px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* Pipeline Kanban Styles */
+.pipeline-kanban {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(180px, 1fr));
+  gap: 14px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.kanban-column {
+  background: #f1f5f9;
+  border-radius: 14px;
+  padding: 14px;
+  min-height: 220px;
+}
+
+.kanban-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+  font-weight: 700;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.kanban-badge {
+  background: #ffffff;
+  color: #334155;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.kanban-empty {
+  color: #94a3b8;
+  font-size: 12px;
+  padding: 16px 0;
+  margin: 0;
+}
+
+.kanban-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 10px;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+}
+
+.kanban-card h5 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.kanban-card p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.kanban-card-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.kanban-tag {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: #475569;
+}
+
+.kanban-avatar {
+  background: #e0e7ff;
+  color: #2457e6;
+  font-size: 11px;
+  font-weight: 700;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+
+/* Report Page Progress & Insight Styles */
+.report-progress-list {
+  display: grid;
+  gap: 16px;
+  margin-top: 10px;
+}
+
+.report-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.report-progress-label {
+  width: 110px;
+  font-weight: 500;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.report-progress-bar {
+  flex: 1;
+  height: 10px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.report-progress-fill {
+  height: 100%;
+  background: #2457e6;
+  border-radius: inherit;
+  transition: width 0.3s ease;
+}
+
+.report-progress-fill.success {
+  background: #11875d;
+}
+
+.report-progress-val {
+  width: 36px;
+  text-align: right;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.insight-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.insight-icon-box {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.insight-icon-box.success {
+  background: #e7f7f0;
+  color: #11875d;
+}
+
+/* API Connections Page Styles */
+.dev-alert-banner {
+  background: #eef4ff;
+  border-left: 4px solid #2457e6;
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 22px;
+  font-size: 13px;
+  color: #334155;
+  line-height: 1.5;
+}
+
+.dev-alert-banner code {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-family: monospace;
+  font-size: 12px;
+  color: #0f172a;
+}
+
+.api-logo-box {
+  width: 38px;
+  height: 38px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 14px;
+  color: #0f172a;
+  flex-shrink: 0;
+}
+
+.integration-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.integration-card-head h4 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.integration-card-head p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.status-bar-wrap {
+  background: #f8fafc;
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin: 16px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.status-pill {
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-pill.connected {
+  background: #e7f7f0;
+  color: #11875d;
+}
+
+.status-pill.disconnected {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.status-pill.attention {
+  background: #fff4db;
+  color: #b66a00;
+}
+
+.status-pill.phase2 {
+  background: #e8f2fe;
+  color: #1a6cd4;
+}
+
+/* Guide List Styles */
+.guide-step-list {
+  display: grid;
+  gap: 16px;
+  margin-top: 10px;
+}
+
+.guide-step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.guide-step-num {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #e8f0fe;
+  color: #2457e6;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.modal-step-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #eaf0ff;
+  color: #2457e6;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+
+.guide-step-text strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.guide-step-text p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+
+.status-time {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.card-action-row {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-outline-dark {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+  cursor: pointer;
+  flex: 1;
+  text-align: center;
+  transition: background 0.15s ease;
+}
+
+.btn-outline-dark:hover {
+  background: #f8fafc;
+}
+
+.btn-test-primary {
+  background: #2457e6;
+  border: 1px solid #2457e6;
+  border-radius: 8px;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.btn-test-primary:hover {
+  background: #1d46be;
+}
+
+.btn-test-disabled {
+  background: #b4c6fa;
+  border: 1px solid #b4c6fa;
+  border-radius: 8px;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  cursor: not-allowed;
+}
+
+
+
+
