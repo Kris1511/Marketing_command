@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { CheckCircle2, AlertCircle, Layers, X, ShieldCheck, Share2, Key } from 'lucide-react';
 
 const initialConnections = [
   {
@@ -7,10 +7,10 @@ const initialConnections = [
     name: 'Facebook Pages',
     code: 'f',
     subtitle: 'Phase 1 integration',
-    status: 'connected',
-    statusText: '• Connected',
-    timeAgo: '8 min ago',
-    canTest: true,
+    status: 'disconnected',
+    statusText: '• Not connected',
+    timeAgo: 'No data',
+    canTest: false,
   },
   {
     id: 2,
@@ -88,6 +88,73 @@ export default function IntegrationsPage() {
   const [connections, setConnections] = useState(initialConnections);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
+  
+  // Facebook Page Selection Modal state (OAuth)
+  const [showModal, setShowModal] = useState(false);
+  const [fetchedPages, setFetchedPages] = useState([]);
+  const [selectedPageId, setSelectedPageId] = useState('');
+
+  // Manual Page Connection Modal state
+  const [showManualModal, setShowManualModal] = useState(false);
+  const [manualPageId, setManualPageId] = useState('');
+  const [manualPageName, setManualPageName] = useState('');
+  const [manualPageToken, setManualPageToken] = useState('');
+
+  const [connectingPage, setConnectingPage] = useState(false);
+  const [connectedFbPages, setConnectedFbPages] = useState([]);
+
+  useEffect(() => {
+    fetchConnectedFacebookPages();
+  }, []);
+
+  const fetchConnectedFacebookPages = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/v1/facebook/pages?workspace_id=1');
+      const json = await res.json();
+      if (json.success && json.data.length > 0) {
+        setConnectedFbPages(json.data);
+        setConnections((prev) =>
+          prev.map((c) => {
+            if (c.name.includes('Facebook')) {
+              const activePage = json.data[0];
+              return {
+                ...c,
+                status: 'connected',
+                statusText: `• Connected (${activePage.account_name})`,
+                timeAgo: 'Active Page',
+                canTest: true,
+              };
+            }
+            return c;
+          })
+        );
+      }
+    } catch (err) {
+      console.error('Failed to fetch connected Facebook pages:', err);
+    }
+  };
+
+  useEffect(() => {
+    const handleMessage = (event) => {
+      if (event.data?.type === 'FACEBOOK_PAGES_FETCHED') {
+        const pages = event.data.pages || [];
+        if (pages.length === 0) {
+          alert('No Facebook Pages were returned by Meta. Reason: Either your Facebook Account has no Pages, or you opted out of selecting a Page during login, or your Facebook Account is not listed as a Tester/Admin in the Meta Developer Dashboard.\n\nYou can also click "Manual Token Connect" to connect using a Page Access Token directly.');
+          return;
+        }
+
+        setFetchedPages(pages);
+        setSelectedPageId(pages[0].id);
+        setShowModal(true);
+        setSyncMsg(`OAuth success! Please select which Facebook Page to connect.`);
+      } else if (event.data?.type === 'FACEBOOK_OAUTH_ERROR') {
+        alert(`Facebook connection error: ${event.data.error || 'Failed to authenticate'}`);
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
 
   const handleSyncAll = () => {
     setSyncing(true);
@@ -99,10 +166,24 @@ export default function IntegrationsPage() {
     }, 1200);
   };
 
-  const handleConnectToggle = (id) => {
+  const handleConnectToggle = (item) => {
+    if (item.name.includes('Facebook') || item.name.includes('Instagram')) {
+      const popup = window.open(
+        'http://localhost:8000/api/v1/auth/facebook?workspace_id=1',
+        'MetaOAuthPopup',
+        'width=650,height=750,scrollbars=yes'
+      );
+      if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+        alert('Pop-up blocked! Please allow pop-ups for this site to complete Meta connection.');
+      } else {
+        setSyncMsg('Authenticating with Meta... Complete Facebook login in the pop-up.');
+      }
+      return;
+    }
+
     setConnections((prev) =>
       prev.map((c) => {
-        if (c.id === id) {
+        if (c.id === item.id) {
           const isConn = c.status === 'connected';
           return {
             ...c,
@@ -117,26 +198,118 @@ export default function IntegrationsPage() {
     );
   };
 
+  const handleConfirmConnectPage = async () => {
+    const pageToConnect = fetchedPages.find((p) => p.id === selectedPageId);
+    if (!pageToConnect) return;
+
+    setConnectingPage(true);
+
+    try {
+      const res = await fetch('http://localhost:8000/api/v1/facebook/connect-page', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({
+          workspace_id: 1,
+          page_id: pageToConnect.id,
+          page_name: pageToConnect.name,
+          page_access_token: pageToConnect.access_token,
+        }),
+      });
+
+      const json = await res.json();
+
+      if (res.ok && json.success) {
+        setShowModal(false);
+        setSyncMsg(`Facebook Page "${pageToConnect.name}" successfully connected!`);
+        fetchConnectedFacebookPages();
+      } else {
+        alert(json.message || 'Failed to connect page');
+      }
+    } catch (err) {
+      console.error('Error connecting page:', err);
+      alert('Network error connecting page to backend.');
+    } finally {
+      setConnectingPage(false);
+    }
+  };
+
+  const handleManualTokenSubmit = async (e) => {
+    e.preventDefault();
+    if (!manualPageId || !manualPageToken) {
+      alert('Please enter both Page ID and Page Access Token.');
+      return;
+    }
+
+    setConnectingPage(true);
+
+    try {
+      const res = await fetch('http://localhost:8000/api/v1/facebook/connect-page', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({
+          workspace_id: 1,
+          page_id: manualPageId.trim(),
+          page_name: manualPageName.trim() || `Page (${manualPageId.trim()})`,
+          page_access_token: manualPageToken.trim(),
+        }),
+      });
+
+      const json = await res.json();
+
+      if (res.ok && json.success) {
+        setShowManualModal(false);
+        setManualPageId('');
+        setManualPageName('');
+        setManualPageToken('');
+        setSyncMsg(`Facebook Page Token successfully saved!`);
+        fetchConnectedFacebookPages();
+      } else {
+        alert(json.message || 'Failed to connect page');
+      }
+    } catch (err) {
+      console.error('Error connecting manual page:', err);
+      alert('Network error saving page token.');
+    } finally {
+      setConnectingPage(false);
+    }
+  };
+
   const handleTestConnection = (name) => {
     alert(`Testing API connection for ${name}... Connection verified successfully!`);
   };
 
   return (
     <div>
-      {/* 1. Header Section */}
+      {/* Header */}
       <div className="section-head">
         <div>
           <h2>API connections</h2>
-          <p>Connect, test, and monitor every platform from one non-technical screen.</p>
+          <p>Connect Meta Facebook Pages, test API endpoints, and monitor platform status.</p>
         </div>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={handleSyncAll}
-          disabled={syncing}
-        >
-          {syncing ? 'Syncing...' : 'Sync all connected accounts'}
-        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setShowManualModal(true)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            <Key size={16} /> Token Connect
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleSyncAll}
+            disabled={syncing}
+          >
+            {syncing ? 'Syncing...' : 'Sync all connected accounts'}
+          </button>
+        </div>
       </div>
 
       {syncMsg && (
@@ -144,29 +317,27 @@ export default function IntegrationsPage() {
           style={{
             background: '#e7f7f0',
             color: '#11875d',
-            padding: '10px 16px',
+            padding: '12px 16px',
             borderRadius: '10px',
             marginBottom: '16px',
-            fontSize: '13px',
+            fontSize: '13.5px',
             fontWeight: '600',
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
           }}
         >
-          <CheckCircle2 size={16} />
+          <CheckCircle2 size={18} />
           <span>{syncMsg}</span>
         </div>
       )}
 
-      {/* 2. Developer Alert Banner */}
+      {/* Developer Banner */}
       <div className="dev-alert-banner">
-        <strong>Developer-friendly setup:</strong> all API URLs and versions are stored in{' '}
-        <code>js/api-config.js</code>. Every request, token header, timeout, error, and
-        client-workspace header is handled in <code>js/api-service.js</code>.
+        <strong>Meta Graph API Ready:</strong> OAuth endpoint <code>/api/v1/auth/facebook</code> uses App ID <code>1390717679611716</code> and exchanges for long-lived Page Access Tokens stored in MySQL.
       </div>
 
-      {/* 3. API Connections Grid (8 Cards total) */}
+      {/* API Connections Grid */}
       <div className="integration-grid mb-18">
         {connections.map((item) => (
           <div className="integration-card" key={item.id}>
@@ -187,9 +358,9 @@ export default function IntegrationsPage() {
               <button
                 type="button"
                 className="btn-outline-dark"
-                onClick={() => handleConnectToggle(item.id)}
+                onClick={() => handleConnectToggle(item)}
               >
-                {item.status === 'disconnected' || item.status === 'phase2' ? 'Connect' : 'Reconnect'}
+                {item.status === 'disconnected' || item.status === 'phase2' ? 'Connect Facebook' : 'Reconnect'}
               </button>
               <button
                 type="button"
@@ -204,94 +375,239 @@ export default function IntegrationsPage() {
         ))}
       </div>
 
-      {/* 4. Bottom Guides Section (2 Equal Columns Grid) */}
-      <div className="grid-equal mt-18" style={{ marginTop: '24px' }}>
-        <section className="panel">
+      {/* Connected Facebook Pages Listing Panel */}
+      {connectedFbPages.length > 0 && (
+        <div className="panel mt-18" style={{ marginBottom: '24px' }}>
           <div className="panel-header">
             <div className="panel-title">
-              <h3>Simple connection guide</h3>
-              <p>For marketing team members</p>
+              <h3>Connected Facebook Pages</h3>
+              <p>Active Facebook Pages with secure Page Access Tokens stored in backend database</p>
+            </div>
+            <span className="pill success">Active Connection</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', padding: '16px 0' }}>
+            {connectedFbPages.map((page) => (
+              <div key={page.id} style={{ border: '1px solid #e5e7eb', padding: '14px', borderRadius: '10px', background: '#f9fafb' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                  <div style={{ width: '36px', height: '36px', background: '#1877f2', color: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' }}>
+                    f
+                  </div>
+                  <div>
+                    <strong style={{ fontSize: '14px', display: 'block' }}>{page.account_name}</strong>
+                    <span style={{ fontSize: '11px', color: '#6b7280' }}>Page ID: {page.account_id}</span>
+                  </div>
+                </div>
+                <div style={{ fontSize: '12px', color: '#059669', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '6px' }}>
+                  <ShieldCheck size={14} /> Page Access Token Secured
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Page Selection Modal (OAuth) */}
+      {showModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh',
+            background: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+        >
+          <div
+            style={{
+              background: '#fff',
+              borderRadius: '16px',
+              maxWidth: '520px',
+              width: '90%',
+              padding: '24px',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ background: '#1877f2', color: '#fff', borderRadius: '50%', padding: '6px' }}>
+                  <Share2 size={20} />
+                </div>
+                <h3 style={{ margin: 0, fontSize: '18px' }}>Select Facebook Page</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <p style={{ fontSize: '13.5px', color: '#4b5563', marginBottom: '16px' }}>
+              The following Facebook Pages were retrieved from your Meta account. Choose the page you want to connect to this workspace for automatic post publishing:
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '240px', overflowY: 'auto', marginBottom: '20px' }}>
+              {fetchedPages.map((page) => (
+                <label
+                  key={page.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '12px 14px',
+                    borderRadius: '10px',
+                    border: selectedPageId === page.id ? '2px solid #1877f2' : '1px solid #e5e7eb',
+                    background: selectedPageId === page.id ? '#eff6ff' : '#fff',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <input
+                      type="radio"
+                      name="facebook_page_selection"
+                      value={page.id}
+                      checked={selectedPageId === page.id}
+                      onChange={() => setSelectedPageId(page.id)}
+                    />
+                    <div>
+                      <strong style={{ fontSize: '14px', display: 'block' }}>{page.name}</strong>
+                      <span style={{ fontSize: '11.5px', color: '#6b7280' }}>
+                        ID: {page.id} {page.category ? `• ${page.category}` : ''}
+                      </span>
+                    </div>
+                  </div>
+                  {selectedPageId === page.id && <CheckCircle2 size={18} color="#1877f2" />}
+                </label>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setShowModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleConfirmConnectPage}
+                disabled={connectingPage || !selectedPageId}
+              >
+                {connectingPage ? 'Connecting Page...' : 'Connect Selected Page'}
+              </button>
             </div>
           </div>
+        </div>
+      )}
 
-          <div className="guide-step-list">
-            <div className="guide-step-item">
-              <div className="guide-step-num">1</div>
-              <div className="guide-step-text">
-                <strong>Select the correct client</strong>
-                <p>Use the client selector at the top before connecting an account.</p>
+      {/* Manual Token Connect Modal */}
+      {showManualModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh',
+            background: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+        >
+          <div
+            style={{
+              background: '#fff',
+              borderRadius: '16px',
+              maxWidth: '520px',
+              width: '90%',
+              padding: '24px',
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Key size={20} color="#1877f2" />
+                <h3 style={{ margin: 0, fontSize: '18px' }}>Manual Page Token Connect</h3>
               </div>
+              <button
+                type="button"
+                onClick={() => setShowManualModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}
+              >
+                <X size={20} />
+              </button>
             </div>
 
-            <div className="guide-step-item">
-              <div className="guide-step-num">2</div>
-              <div className="guide-step-text">
-                <strong>Click Connect or Reconnect</strong>
-                <p>You will be taken to the platform's secure authorization page.</p>
-              </div>
-            </div>
+            <p style={{ fontSize: '13px', color: '#4b5563', marginBottom: '16px' }}>
+              Enter your Facebook Page ID and Page Access Token (from Graph API Explorer or Meta App Dashboard) to connect directly:
+            </p>
 
-            <div className="guide-step-item">
-              <div className="guide-step-num">3</div>
-              <div className="guide-step-text">
-                <strong>Choose the correct page or channel</strong>
-                <p>Only approve the business accounts required for this client.</p>
+            <form onSubmit={handleManualTokenSubmit}>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Facebook Page ID *</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="e.g. 1005544332211"
+                  value={manualPageId}
+                  onChange={(e) => setManualPageId(e.target.value)}
+                  required
+                />
               </div>
-            </div>
 
-            <div className="guide-step-item">
-              <div className="guide-step-num">4</div>
-              <div className="guide-step-text">
-                <strong>Return and click Test</strong>
-                <p>The dashboard confirms whether data can be read successfully.</p>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Facebook Page Name</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="e.g. My Business Page"
+                  value={manualPageName}
+                  onChange={(e) => setManualPageName(e.target.value)}
+                />
               </div>
-            </div>
+
+              <div style={{ marginBottom: '20px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Page Access Token (EAAM...) *</label>
+                <textarea
+                  className="textarea"
+                  rows={3}
+                  placeholder="Paste Page Access Token starting with EAA..."
+                  value={manualPageToken}
+                  onChange={(e) => setManualPageToken(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowManualModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={connectingPage}
+                >
+                  {connectingPage ? 'Saving Token...' : 'Save & Connect Page'}
+                </button>
+              </div>
+            </form>
           </div>
-        </section>
-
-        <section className="panel">
-          <div className="panel-header">
-            <div className="panel-title">
-              <h3>Technical handover notes</h3>
-              <p>Production implementation checklist</p>
-            </div>
-          </div>
-
-          <div className="guide-step-list">
-            <div className="guide-step-item">
-              <div className="guide-step-num">1</div>
-              <div className="guide-step-text">
-                <strong>Use backend OAuth callbacks</strong>
-                <p>Never store client secrets or refresh tokens in the browser.</p>
-              </div>
-            </div>
-
-            <div className="guide-step-item">
-              <div className="guide-step-num">2</div>
-              <div className="guide-step-text">
-                <strong>Use one tenant header</strong>
-                <p>Every API request carries the selected client workspace ID.</p>
-              </div>
-            </div>
-
-            <div className="guide-step-item">
-              <div className="guide-step-num">3</div>
-              <div className="guide-step-text">
-                <strong>Use scheduled sync jobs</strong>
-                <p>Run background server jobs and save normalized analytics data.</p>
-              </div>
-            </div>
-
-            <div className="guide-step-item">
-              <div className="guide-step-num">4</div>
-              <div className="guide-step-text">
-                <strong>Enable audit logging</strong>
-                <p>Record who published, changed a lead, or reconnected an account.</p>
-              </div>
-            </div>
-          </div>
-        </section>
-      </div>
+        </div>
+      )}
     </div>
   );
 }

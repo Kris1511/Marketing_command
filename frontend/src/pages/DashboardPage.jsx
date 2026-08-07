@@ -6,11 +6,13 @@ import {
   Eye,
   Zap,
   Globe,
-  Target,
-  Check,
   Plus,
   RefreshCw,
-  AlertTriangle
+  Share2,
+  FileText,
+  Clock,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 import {
   Chart as ChartJS,
@@ -34,104 +36,6 @@ ChartJS.register(
   Legend
 );
 
-const renderActivityIcon = (icon) => {
-  if (icon === '✓' || icon === 'check') return <Check size={16} />;
-  if (icon === '+' || icon === 'plus') return <Plus size={16} />;
-  if (icon === '↻' || icon === 'sync') return <RefreshCw size={16} />;
-  if (icon === '!' || icon === 'alert') return <AlertTriangle size={16} />;
-  return <Check size={16} />;
-};
-
-const CLIENT_OVERVIEW_DATA = {
-  'Aara Wellness': {
-    total_reach: '171,661',
-    reach_change: '+14.2%',
-    engagement_rate: '5.6%',
-    engagement_change: '+0.6%',
-    website_traffic: '18,420',
-    traffic_change: '+9.2%',
-    new_leads: 186,
-    leads_change: '+28',
-    channels: [
-      { key: 'IG', name: 'Instagram', label: 'Connected', value: '82.4K', change: '+18.2%', color: '#E1306C', bg: '#FDE8EF' },
-      { key: 'FB', name: 'Facebook Page', label: 'Connected', value: '46.1K', change: '+9.7%', color: '#1877F2', bg: '#E7F0FD' },
-      { key: 'GA', name: 'Google Analytics 4', label: 'Connected', value: '18.4K', change: '+8.0%', color: '#E37400', bg: '#FEF3E2' },
-    ],
-    funnel: { new_leads: 186, contacted: 142, qualified: 78, proposal_sent: 39, won: 23, conversion: '12.4%' },
-    priorities: [
-      { num: 1, title: 'Follow up 3 leads', sub: 'Due before 5:00 PM', btn: 'Open', target: '/leads' },
-      { num: 2, title: 'Approve tomorrow’s post', sub: 'Instagram • 10:30 AM', btn: 'Review', target: '/publishing' },
-      { num: 3, title: 'Reconnect YouTube', sub: 'Connection expires on Aug 8', btn: 'Fix', target: '/integrations' },
-    ],
-    activities: [
-      { icon: '✓', title: 'Instagram post published', sub: 'Aara Wellness • Morning yoga reel', time: '12 min', bg: '#dcfce7', color: '#16a34a' },
-      { icon: '+', title: 'New lead received', sub: 'Facebook Lead Ads • Priyanka R', time: '26 min', bg: '#dbeafe', color: '#1d4ed8' },
-      { icon: '↻', title: 'Google Analytics synced', sub: '18,420 website users updated', time: '1 hr', bg: '#e0f2fe', color: '#0369a1' },
-      { icon: '!', title: 'YouTube token needs attention', sub: 'Aara Wellness • Reconnect before Aug 8', time: '2 hr', bg: '#fef3c7', color: '#b45309' },
-    ],
-    trend: {
-      labels: ['Jul 6', 'Jul 10', 'Jul 14', 'Jul 18', 'Jul 22', 'Jul 26', 'Jul 30', 'Aug 3'],
-      reach: [62000, 69000, 66000, 76000, 81000, 86000, 93000, 104000],
-      engagement: [31000, 34000, 39000, 37000, 45000, 49000, 54000, 58000],
-    }
-  },
-  'Fast Logistics': {
-    total_reach: '84,200',
-    reach_change: '+8.4%',
-    engagement_rate: '6.1%',
-    engagement_change: '+1.2%',
-    website_traffic: '9,250',
-    traffic_change: '+12.7%',
-    new_leads: 104,
-    leads_change: '+14',
-    channels: [
-      { key: 'FB', name: 'Facebook Page', label: 'Connected', value: '38.2K', change: '+7.4%', color: '#1877F2', bg: '#E7F0FD' },
-      { key: 'YT', name: 'YouTube Channel', label: 'Connected', value: '31.6K', change: '+13.4%', color: '#FF0000', bg: '#FFE8E8' },
-      { key: 'GA', name: 'Google Analytics 4', label: 'Connected', value: '9.25K', change: '+12.7%', color: '#E37400', bg: '#FEF3E2' },
-    ],
-    funnel: { new_leads: 104, contacted: 78, qualified: 36, proposal_sent: 18, won: 10, conversion: '9.6%' },
-    priorities: [
-      { num: 1, title: 'Follow up 2 cargo leads', sub: 'Due before 4:00 PM', btn: 'Open', target: '/leads' },
-      { num: 2, title: 'Review YouTube explainer video', sub: 'YouTube • Scheduled Aug 8', btn: 'Review', target: '/publishing' },
-    ],
-    activities: [
-      { icon: '+', title: 'New lead received', sub: 'Website Form • Arun Kumar', time: '18 min', bg: '#dbeafe', color: '#1d4ed8' },
-      { icon: '↻', title: 'Google Analytics synced', sub: '9,250 website users updated', time: '45 min', bg: '#e0f2fe', color: '#0369a1' },
-      { icon: '!', title: 'YouTube token needs attention', sub: 'Fast Logistics • Reconnect before Aug 8', time: '2 hr', bg: '#fef3c7', color: '#b45309' },
-    ],
-    trend: {
-      labels: ['Jul 6', 'Jul 10', 'Jul 14', 'Jul 18', 'Jul 22', 'Jul 26', 'Jul 30', 'Aug 3'],
-      reach: [40000, 45000, 48000, 52000, 60000, 68000, 75000, 84200],
-      engagement: [18000, 21000, 24000, 28000, 32000, 35000, 38000, 41200],
-    }
-  }
-};
-
-const DEFAULT_ZERO_DATA = {
-  total_reach: '0',
-  reach_change: '+0%',
-  engagement_rate: '0%',
-  engagement_change: '+0%',
-  website_traffic: '0',
-  traffic_change: '+0%',
-  new_leads: 0,
-  leads_change: '+0',
-  channels: [],
-  funnel: { new_leads: 186, contacted: 142, qualified: 78, proposal_sent: 39, won: 23, conversion: '12.4%' },
-  priorities: [
-    { num: 1, title: 'Follow up new leads', sub: 'Due today', btn: 'Open', target: '/leads' },
-    { num: 2, title: 'Approve scheduled content', sub: 'Social media campaign', btn: 'Review', target: '/publishing' }
-  ],
-  activities: [
-    { icon: '✓', title: 'Campaign active', sub: 'Monitoring real-time performance', time: 'Just now', bg: '#dcfce7', color: '#16a34a' }
-  ],
-  trend: {
-    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-    reach: [12000, 19000, 15000, 22000, 28000, 24000, 31000],
-    engagement: [800, 1400, 1100, 1800, 2200, 1900, 2600],
-  }
-};
-
 export default function DashboardPage() {
   const navigate = useNavigate();
   const { selectedWorkspaceId, selectedWorkspace } = useWorkspace();
@@ -149,32 +53,27 @@ export default function DashboardPage() {
           setMetrics(res.data.data);
         }
       })
-      .catch((err) => console.error('Error loading metrics:', err))
+      .catch((err) => console.error('Error loading dashboard metrics:', err))
       .finally(() => setLoading(false));
   }, [selectedWorkspaceId]);
 
-  const clientName = selectedWorkspace?.name || metrics?.workspace_name || 'Aara Wellness';
-  const clientData = CLIENT_OVERVIEW_DATA[clientName] || DEFAULT_ZERO_DATA;
-
-  const totalReach = metrics?.total_reach || clientData.total_reach || '148,500';
-  const engagementRate = metrics?.engagement_rate || clientData.engagement_rate || '5.6%';
-  const websiteTraffic = metrics?.website_traffic || clientData.website_traffic || '18,420';
-  const newLeads = metrics?.new_leads ?? clientData.new_leads ?? 342;
-  const funnel = clientData.funnel || DEFAULT_ZERO_DATA.funnel;
+  const clientName = selectedWorkspace?.name || metrics?.workspace_name || 'Redmind Technologies';
+  const connectedPage = metrics?.connected_page;
+  const recentPosts = metrics?.recent_posts || [];
 
   const chartData = {
-    labels: metrics?.trend_data?.labels || clientData.trend.labels,
+    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
     datasets: [
       {
         label: 'Reach',
-        data: metrics?.trend_data?.reach || clientData.trend.reach,
+        data: [14200, 19500, 15800, 22400, 28100, 24500, 31200],
         borderColor: '#2457e6',
         backgroundColor: '#2457e6',
         tension: 0.35,
       },
       {
         label: 'Engagement',
-        data: metrics?.trend_data?.engagement || clientData.trend.engagement,
+        data: [1200, 1850, 1400, 2100, 2600, 2200, 2900],
         borderColor: '#7b92c9',
         backgroundColor: '#7b92c9',
         tension: 0.35,
@@ -190,217 +89,177 @@ export default function DashboardPage() {
     },
   };
 
-  const defaultChannels = [
-    { name: 'Facebook Page', meta: 'Connected • 1.2k Followers', value: '45.2k', change: '+12%', logo: 'FB' },
-    { name: 'Instagram Profile', meta: 'Connected • 8.4k Followers', value: '89.1k', change: '+24%', logo: 'IG' },
-    { name: 'Google Analytics 4', meta: 'Active Stream', value: '12.4k', change: '+8%', logo: 'GA' },
-  ];
-
-  const activeChannels = metrics?.channels || (clientData.channels.length > 0 ? clientData.channels : defaultChannels);
-
   return (
     <div>
       {/* Welcome Banner */}
       <div className="welcome-panel">
         <div className="welcome-copy">
-          <h2>
-            {clientName ? `${clientName} Overview` : 'Welcome to Marketing Command'}
-          </h2>
+          <h2>{clientName} Operations Dashboard</h2>
           <p>
-            Currently viewing performance data, connected platforms, and CRM leads for <strong>{clientName}</strong>.
+            Connected Meta Facebook Pages, publishing history, and performance metrics for <strong>{clientName}</strong>.
           </p>
         </div>
         <div className="welcome-actions">
-          <button type="button" className="btn btn-outline-white" onClick={() => navigate('/reports')}>View report</button>
+          <button type="button" className="btn btn-outline-white" onClick={() => navigate('/reports')}>
+            View Analytics Report
+          </button>
           <button type="button" className="btn btn-white" onClick={() => navigate('/publishing')} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-            <Plus size={16} /> Create content
+            <Plus size={16} /> Create Content
           </button>
         </div>
       </div>
 
-      <div className="metric-grid" style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
+      {/* Metrics Row */}
+      <div className="metric-grid" style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s', marginBottom: '24px' }}>
         <div className="metric-card">
           <div className="metric-top">
-            <span className="metric-label">Total reach</span>
-            <div className="metric-icon"><Eye size={20} /></div>
+            <span className="metric-label">Total Posts</span>
+            <div className="metric-icon"><FileText size={20} /></div>
           </div>
-          <div className="metric-value">{totalReach}</div>
+          <div className="metric-value">{metrics?.total_posts ?? 0}</div>
           <div className="metric-foot">
-            <span className="trend-up">{metrics?.reach_change || clientData.reach_change}</span> vs previous period
+            <span className="trend-up">+{metrics?.posts_this_month ?? 0}</span> this month
           </div>
         </div>
 
         <div className="metric-card">
           <div className="metric-top">
-            <span className="metric-label">Engagement</span>
-            <div className="metric-icon"><Zap size={20} /></div>
+            <span className="metric-label">Published Today</span>
+            <div className="metric-icon"><CheckCircle2 size={20} color="#16a34a" /></div>
           </div>
-          <div className="metric-value">{engagementRate}</div>
+          <div className="metric-value">{metrics?.published_today ?? 0}</div>
           <div className="metric-foot">
-            <span className="trend-up">{metrics?.engagement_change || clientData.engagement_change}</span> vs previous period
+            <span>Real-time status</span>
           </div>
         </div>
 
         <div className="metric-card">
           <div className="metric-top">
-            <span className="metric-label">Website traffic</span>
-            <div className="metric-icon"><Globe size={20} /></div>
+            <span className="metric-label">Scheduled Posts</span>
+            <div className="metric-icon"><Clock size={20} color="#d97706" /></div>
           </div>
-          <div className="metric-value">{websiteTraffic}</div>
+          <div className="metric-value">{metrics?.scheduled_count ?? 0}</div>
           <div className="metric-foot">
-            <span className="trend-up">{metrics?.traffic_change || clientData.traffic_change}</span> vs previous period
+            <span>Pending queue</span>
           </div>
         </div>
 
         <div className="metric-card">
           <div className="metric-top">
-            <span className="metric-label">Leads generated</span>
-            <div className="metric-icon"><Target size={20} /></div>
+            <span className="metric-label">Facebook Followers</span>
+            <div className="metric-icon"><Share2 size={20} color="#1877f2" /></div>
           </div>
-          <div className="metric-value">{newLeads}</div>
+          <div className="metric-value">{metrics?.followers_count ? metrics.followers_count.toLocaleString() : (connectedPage ? 'Active' : '0')}</div>
           <div className="metric-foot">
-            <span className="trend-up">{metrics?.leads_change || clientData.leads_change}</span> vs previous period
+            <span className="trend-up">Meta Graph API</span>
           </div>
         </div>
       </div>
 
-      <div className="grid-2" style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
-        <section className="panel">
+      {/* Main Grid Section */}
+      <div className="grid-main-side mb-18">
+        {/* Performance Trend Chart */}
+        <div className="panel">
           <div className="panel-header">
             <div className="panel-title">
-              <h3>Performance trend</h3>
+              <h3>Performance Trend</h3>
               <p>Reach and engagement for {clientName}</p>
             </div>
-            <div className="panel-actions">
-              <select className="select" style={{ width: '145px' }} aria-label="Performance date range">
-                <option value="30">Last 30 days</option>
-                <option value="7">Last 7 days</option>
-                <option value="90">Last 90 days</option>
-              </select>
-            </div>
+            <select className="input" style={{ width: 'auto', padding: '6px 12px', fontSize: '13px' }}>
+              <option>Last 30 days</option>
+              <option>Last 7 days</option>
+            </select>
           </div>
-          <div className="chart-legend">
-            <span className="legend-item"><span className="legend-line"></span>Reach</span>
-            <span className="legend-item"><span className="legend-line secondary"></span>Engagement</span>
-          </div>
-          <div className="chart-wrap">
+
+          <div style={{ height: '260px', position: 'relative' }}>
             <Line data={chartData} options={chartOptions} />
           </div>
-        </section>
+        </div>
 
-        <section className="panel">
+        {/* Connected Channels Panel */}
+        <div className="panel">
           <div className="panel-header">
             <div className="panel-title">
-              <h3>Connected channels</h3>
-              <p>Only channels enabled for {clientName}</p>
+              <h3>Connected Channels</h3>
+              <p>Active Meta Facebook Pages</p>
             </div>
-            <button type="button" className="link-button" onClick={() => navigate('/integrations')}>Manage</button>
+            <button className="btn-link" onClick={() => navigate('/integrations')}>Manage</button>
           </div>
+
           <div className="channel-list">
-            {activeChannels.map((ch, idx) => (
-              <div className="channel-row" key={idx}>
-                <div className="channel-logo" style={ch.bg ? { background: ch.bg, color: ch.color, fontWeight: 800 } : {}}>
-                  {ch.logo || ch.key || ch.name?.slice(0, 2).toUpperCase()}
+            {connectedPage ? (
+              <div className="channel-item">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  {connectedPage.profile_picture_url ? (
+                    <img
+                      src={connectedPage.profile_picture_url}
+                      alt={connectedPage.page_name}
+                      style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }}
+                    />
+                  ) : (
+                    <div className="channel-logo" style={{ background: '#1877f2', color: '#fff' }}>f</div>
+                  )}
+                  <div>
+                    <h5 style={{ margin: 0, fontSize: '14.5px' }}>{connectedPage.page_name}</h5>
+                    <span style={{ fontSize: '12px', color: '#059669', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <CheckCircle2 size={13} /> Token Active • ID: {connectedPage.page_id}
+                    </span>
+                  </div>
                 </div>
-                <div>
-                  <div className="channel-name">{ch.name}</div>
-                  <div className="channel-meta">{ch.meta || ch.label || 'Connected'}</div>
-                </div>
-                <div className="channel-value">
-                  <strong>{ch.value}</strong>
-                  <small style={{ color: '#11875d' }}>{ch.change}</small>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontWeight: '700', fontSize: '14px' }}>
+                    {connectedPage.followers_count ? connectedPage.followers_count.toLocaleString() : 'Connected'}
+                  </div>
+                  <span style={{ fontSize: '11px', color: '#6b7280' }}>Followers</span>
                 </div>
               </div>
-            ))}
+            ) : (
+              <div style={{ padding: '20px', textAlign: 'center', background: '#f9fafb', borderRadius: '10px' }}>
+                <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '12px' }}>No Facebook Page connected for this workspace.</p>
+                <button type="button" className="btn btn-primary" onClick={() => navigate('/integrations')}>
+                  Connect Facebook Page
+                </button>
+              </div>
+            )}
           </div>
-        </section>
+        </div>
       </div>
 
-      {/* Grid 3: Lead Funnel, Today's Priorities, Recent Activity */}
-      <div className="grid-3">
-        <section className="panel">
-          <div className="panel-header">
-            <div className="panel-title">
-              <h3>Lead funnel</h3>
-              <p>From enquiry to conversion</p>
-            </div>
-            <span className="pill success">{funnel.conversion || '12.4%'} conversion</span>
+      {/* Recent Posts Feed */}
+      <div className="panel">
+        <div className="panel-header">
+          <div className="panel-title">
+            <h3>Recent Publishing History</h3>
+            <p>Latest Facebook posts created in this workspace</p>
           </div>
-          <div className="funnel">
-            <div className="funnel-row">
-              <span>New Leads</span>
-              <div className="progress"><span style={{ width: funnel.new_leads > 0 ? '100%' : '0%' }}></span></div>
-              <strong>{funnel.new_leads}</strong>
-            </div>
-            <div className="funnel-row">
-              <span>Contacted</span>
-              <div className="progress"><span style={{ width: funnel.new_leads > 0 ? '76%' : '0%' }}></span></div>
-              <strong>{funnel.contacted}</strong>
-            </div>
-            <div className="funnel-row">
-              <span>Qualified</span>
-              <div className="progress"><span style={{ width: funnel.new_leads > 0 ? '42%' : '0%' }}></span></div>
-              <strong>{funnel.qualified}</strong>
-            </div>
-            <div className="funnel-row">
-              <span>Proposal Sent</span>
-              <div className="progress"><span style={{ width: funnel.new_leads > 0 ? '21%' : '0%' }}></span></div>
-              <strong>{funnel.proposal_sent}</strong>
-            </div>
-            <div className="funnel-row">
-              <span>Won</span>
-              <div className="progress"><span style={{ width: funnel.new_leads > 0 ? '12%' : '0%' }}></span></div>
-              <strong>{funnel.won}</strong>
-            </div>
-          </div>
-        </section>
+          <button className="btn-link" onClick={() => navigate('/publishing')}>View All Posts</button>
+        </div>
 
-        <section className="panel">
-          <div className="panel-header">
-            <div className="panel-title">
-              <h3>Today’s priorities</h3>
-              <p>Recommended next actions</p>
-            </div>
+        {recentPosts.length === 0 ? (
+          <div style={{ padding: '24px', textAlign: 'center', color: '#6b7280' }}>
+            No recent posts found for this workspace. Click "Create Content" above to publish your first post!
           </div>
-          <div className="activity-list">
-            {(clientData.priorities.length > 0 ? clientData.priorities : DEFAULT_ZERO_DATA.priorities).map((item) => (
-              <div className="activity-item" key={item.title}>
-                <div className="activity-icon" style={{ background: '#eaf0ff', color: '#2457e6' }}>{item.num}</div>
-                <div className="activity-text">
-                  <strong>{item.title}</strong>
-                  <span>{item.sub}</span>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
+            {recentPosts.map((post) => (
+              <div key={post.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', background: '#f9fafb', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+                <div>
+                  <strong style={{ fontSize: '14px', display: 'block', color: '#111827' }}>
+                    {post.content ? (post.content.length > 70 ? post.content.substring(0, 70) + '...' : post.content) : 'Untitled Post'}
+                  </strong>
+                  <span style={{ fontSize: '11.5px', color: '#6b7280' }}>
+                    Type: {post.post_type} • Created: {new Date(post.created_at).toLocaleString()}
+                  </span>
                 </div>
-                <button type="button" className="btn btn-sm btn-secondary" onClick={() => navigate(item.target)}>{item.btn}</button>
+                <div>
+                  <span className={`pill ${post.status === 'published' ? 'success' : post.status === 'scheduled' ? 'warning' : 'neutral'}`}>
+                    {post.status.toUpperCase()}
+                  </span>
+                </div>
               </div>
             ))}
           </div>
-        </section>
-
-        <section className="panel">
-          <div className="panel-header">
-            <div className="panel-title">
-              <h3>Recent activity</h3>
-              <p>Latest actions across the workspace</p>
-            </div>
-            <button type="button" className="link-button" onClick={() => navigate('/notifications')}>
-              View all
-            </button>
-          </div>
-          <div className="activity-list">
-            {(clientData.activities.length > 0 ? clientData.activities : DEFAULT_ZERO_DATA.activities).map((act) => (
-              <div className="activity-item" key={act.title}>
-                <div className="activity-icon" style={{ background: act.bg, color: act.color }}>
-                  {renderActivityIcon(act.icon)}
-                </div>
-                <div className="activity-text">
-                  <strong>{act.title}</strong>
-                  <span>{act.sub}</span>
-                </div>
-                <span className="activity-time">{act.time}</span>
-              </div>
-            ))}
-          </div>
-        </section>
+        )}
       </div>
     </div>
   );
