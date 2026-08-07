@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { CheckCircle2, AlertCircle, Layers, X, ShieldCheck, Share2, Key } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Layers, X, ShieldCheck, Share2, Key, RefreshCw, Trash2, Video } from 'lucide-react';
+import axiosInstance from '../api/axiosInstance';
 
 const initialConnections = [
   {
@@ -26,11 +27,11 @@ const initialConnections = [
     id: 3,
     name: 'YouTube Channels',
     code: 'YT',
-    subtitle: 'Phase 1 integration',
-    status: 'attention',
-    statusText: '• Attention',
-    timeAgo: '2 hr ago',
-    canTest: true,
+    subtitle: 'YouTube Data API v3',
+    status: 'disconnected',
+    statusText: '• Not connected',
+    timeAgo: 'No data',
+    canTest: false,
   },
   {
     id: 4,
@@ -89,23 +90,79 @@ export default function IntegrationsPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
   
-  // Facebook Page Selection Modal state (OAuth)
+  // Facebook State
   const [showModal, setShowModal] = useState(false);
   const [fetchedPages, setFetchedPages] = useState([]);
   const [selectedPageId, setSelectedPageId] = useState('');
-
-  // Manual Page Connection Modal state
   const [showManualModal, setShowManualModal] = useState(false);
   const [manualPageId, setManualPageId] = useState('');
   const [manualPageName, setManualPageName] = useState('');
   const [manualPageToken, setManualPageToken] = useState('');
-
   const [connectingPage, setConnectingPage] = useState(false);
   const [connectedFbPages, setConnectedFbPages] = useState([]);
 
+  // YouTube Channel State
+  const [youtubeChannel, setYoutubeChannel] = useState(null);
+  const [youtubeLoading, setYoutubeLoading] = useState(true);
+
   useEffect(() => {
     fetchConnectedFacebookPages();
+    fetchYouTubeStatus();
+
+    // Check URL parameters for YouTube OAuth return
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get('youtube') === 'success') {
+      setSyncMsg('YouTube channel connected successfully!');
+      fetchYouTubeStatus();
+    } else if (searchParams.get('youtube') === 'error') {
+      alert('Failed to connect YouTube channel. Please check your Google OAuth permissions.');
+    }
   }, []);
+
+  const fetchYouTubeStatus = async () => {
+    setYoutubeLoading(true);
+    try {
+      const res = await fetch('http://localhost:8000/api/youtube/status');
+      const json = await res.json();
+      if (json.success && json.connected && json.data) {
+        setYoutubeChannel(json.data);
+        setConnections((prev) =>
+          prev.map((c) => {
+            if (c.name.includes('YouTube')) {
+              return {
+                ...c,
+                status: 'connected',
+                statusText: `• Connected (${json.data.channel_name})`,
+                timeAgo: 'Live API',
+                canTest: true,
+              };
+            }
+            return c;
+          })
+        );
+      } else {
+        setYoutubeChannel(null);
+        setConnections((prev) =>
+          prev.map((c) => {
+            if (c.name.includes('YouTube')) {
+              return {
+                ...c,
+                status: 'disconnected',
+                statusText: '• Not connected',
+                timeAgo: 'No data',
+                canTest: false,
+              };
+            }
+            return c;
+          })
+        );
+      }
+    } catch (err) {
+      console.error('Error fetching YouTube status:', err);
+    } finally {
+      setYoutubeLoading(false);
+    }
+  };
 
   const fetchConnectedFacebookPages = async () => {
     try {
@@ -139,16 +196,22 @@ export default function IntegrationsPage() {
       if (event.data?.type === 'FACEBOOK_PAGES_FETCHED') {
         const pages = event.data.pages || [];
         if (pages.length === 0) {
-          alert('No Facebook Pages were returned by Meta. Reason: Either your Facebook Account has no Pages, or you opted out of selecting a Page during login, or your Facebook Account is not listed as a Tester/Admin in the Meta Developer Dashboard.\n\nYou can also click "Manual Token Connect" to connect using a Page Access Token directly.');
+          alert('No Facebook Pages were returned by Meta. Reason: Either your Facebook Account has no Pages, or you opted out of selecting a Page during login.');
           return;
         }
-
         setFetchedPages(pages);
         setSelectedPageId(pages[0].id);
         setShowModal(true);
         setSyncMsg(`OAuth success! Please select which Facebook Page to connect.`);
       } else if (event.data?.type === 'FACEBOOK_OAUTH_ERROR') {
         alert(`Facebook connection error: ${event.data.error || 'Failed to authenticate'}`);
+      } else if (event.data?.type === 'YOUTUBE_OAUTH_RESULT') {
+        if (event.data.success) {
+          setSyncMsg(`YouTube Connected: ${event.data.connection?.channel_name || 'Channel active'}`);
+          fetchYouTubeStatus();
+        } else {
+          alert(`YouTube connection error: ${event.data.message}`);
+        }
       }
     };
 
@@ -156,9 +219,17 @@ export default function IntegrationsPage() {
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
-  const handleSyncAll = () => {
+  const handleSyncAll = async () => {
     setSyncing(true);
     setSyncMsg('Syncing all connected accounts...');
+    if (youtubeChannel) {
+      try {
+        await fetch('http://localhost:8000/api/youtube/channel');
+        await fetchYouTubeStatus();
+      } catch (e) {
+        console.error(e);
+      }
+    }
     setTimeout(() => {
       setSyncing(false);
       setSyncMsg('All connected accounts synced successfully!');
@@ -166,7 +237,53 @@ export default function IntegrationsPage() {
     }, 1200);
   };
 
+  const handleConnectYouTube = () => {
+    const width = 600;
+    const height = 700;
+    const left = (window.innerWidth - width) / 2;
+    const top = (window.innerHeight - height) / 2;
+
+    const popup = window.open(
+      'http://localhost:8000/api/youtube/connect',
+      'GoogleYouTubeOAuth',
+      `width=${width},height=${height},top=${top},left=${left},scrollbars=yes,status=yes`
+    );
+
+    if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+      window.location.href = 'http://localhost:8000/api/youtube/connect';
+    } else {
+      setSyncMsg('Connecting to Google OAuth... Please complete login in the pop-up.');
+    }
+  };
+
+  const handleDisconnectYouTube = async () => {
+    if (!window.confirm('Are you sure you want to disconnect your YouTube channel?')) return;
+    try {
+      const res = await fetch('http://localhost:8000/api/youtube/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const json = await res.json();
+      if (json.success) {
+        setSyncMsg('YouTube channel disconnected.');
+        setYoutubeChannel(null);
+        fetchYouTubeStatus();
+      }
+    } catch (err) {
+      alert('Error disconnecting YouTube channel.');
+    }
+  };
+
   const handleConnectToggle = (item) => {
+    if (item.name.includes('YouTube')) {
+      if (youtubeChannel) {
+        handleDisconnectYouTube();
+      } else {
+        handleConnectYouTube();
+      }
+      return;
+    }
+
     if (item.name.includes('Facebook') || item.name.includes('Instagram')) {
       const popup = window.open(
         'http://localhost:8000/api/v1/auth/facebook?workspace_id=1',
@@ -201,16 +318,11 @@ export default function IntegrationsPage() {
   const handleConfirmConnectPage = async () => {
     const pageToConnect = fetchedPages.find((p) => p.id === selectedPageId);
     if (!pageToConnect) return;
-
     setConnectingPage(true);
-
     try {
       const res = await fetch('http://localhost:8000/api/v1/facebook/connect-page', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify({
           workspace_id: 1,
           page_id: pageToConnect.id,
@@ -218,9 +330,7 @@ export default function IntegrationsPage() {
           page_access_token: pageToConnect.access_token,
         }),
       });
-
       const json = await res.json();
-
       if (res.ok && json.success) {
         setShowModal(false);
         setSyncMsg(`Facebook Page "${pageToConnect.name}" successfully connected!`);
@@ -229,7 +339,6 @@ export default function IntegrationsPage() {
         alert(json.message || 'Failed to connect page');
       }
     } catch (err) {
-      console.error('Error connecting page:', err);
       alert('Network error connecting page to backend.');
     } finally {
       setConnectingPage(false);
@@ -242,16 +351,11 @@ export default function IntegrationsPage() {
       alert('Please enter both Page ID and Page Access Token.');
       return;
     }
-
     setConnectingPage(true);
-
     try {
       const res = await fetch('http://localhost:8000/api/v1/facebook/connect-page', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify({
           workspace_id: 1,
           page_id: manualPageId.trim(),
@@ -259,9 +363,7 @@ export default function IntegrationsPage() {
           page_access_token: manualPageToken.trim(),
         }),
       });
-
       const json = await res.json();
-
       if (res.ok && json.success) {
         setShowManualModal(false);
         setManualPageId('');
@@ -273,7 +375,6 @@ export default function IntegrationsPage() {
         alert(json.message || 'Failed to connect page');
       }
     } catch (err) {
-      console.error('Error connecting manual page:', err);
       alert('Network error saving page token.');
     } finally {
       setConnectingPage(false);
@@ -281,7 +382,11 @@ export default function IntegrationsPage() {
   };
 
   const handleTestConnection = (name) => {
-    alert(`Testing API connection for ${name}... Connection verified successfully!`);
+    if (name.includes('YouTube') && youtubeChannel) {
+      alert(`YouTube API Connected!\nChannel: ${youtubeChannel.channel_name}\nSubscribers: ${youtubeChannel.subscriber_count.toLocaleString()}\nTotal Videos: ${youtubeChannel.video_count.toLocaleString()}\nTotal Views: ${youtubeChannel.view_count.toLocaleString()}`);
+    } else {
+      alert(`Testing API connection for ${name}... Connection verified successfully!`);
+    }
   };
 
   return (
@@ -289,8 +394,8 @@ export default function IntegrationsPage() {
       {/* Header */}
       <div className="section-head">
         <div>
-          <h2>API connections</h2>
-          <p>Connect Meta Facebook Pages, test API endpoints, and monitor platform status.</p>
+          <h2>API Connections</h2>
+          <p>Connect Google YouTube Channels, Meta Facebook Pages, and manage integration platforms.</p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
@@ -332,17 +437,132 @@ export default function IntegrationsPage() {
         </div>
       )}
 
-      {/* Developer Banner */}
-      <div className="dev-alert-banner">
-        <strong>Meta Graph API Ready:</strong> OAuth endpoint <code>/api/v1/auth/facebook</code> uses App ID <code>1390717679611716</code> and exchanges for long-lived Page Access Tokens stored in MySQL.
+      {/* Developer Alert Banner */}
+      <div className="dev-alert-banner" style={{ background: '#fffbeb', borderColor: '#fef3c7', color: '#92400e' }}>
+        <strong>YouTube Data API v3 Active:</strong> Google OAuth 2.0 Client ID <code>80913470656-0ahb9td2sm5oo9lj4oi3eqnj14v4b2oa.apps.googleusercontent.com</code> securely manages tokens in Laravel MySQL.
       </div>
 
-      {/* API Connections Grid */}
+      {/* Dedicated YouTube Integration Display Panel */}
+      <div className="panel mb-18" style={{ background: '#fff', borderRadius: '14px', border: '1px solid #e5e7eb', padding: '24px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', borderBottom: '1px solid #f3f4f6', paddingBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ width: '44px', height: '44px', background: '#ff0000', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
+              <Video size={26} />
+            </div>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>YouTube Integration</h3>
+              <p style={{ margin: 0, fontSize: '13px', color: '#6b7280' }}>Google OAuth 2.0 & YouTube Data API v3</p>
+            </div>
+          </div>
+          <div>
+            {youtubeChannel ? (
+              <span className="pill success" style={{ fontSize: '13px', padding: '6px 14px' }}>
+                Status: Connected
+              </span>
+            ) : (
+              <span className="pill neutral" style={{ fontSize: '13px', padding: '6px 14px' }}>
+                Status: Not Connected
+              </span>
+            )}
+          </div>
+        </div>
+
+        {youtubeLoading ? (
+          <div style={{ padding: '20px', textAlign: 'center', color: '#6b7280' }}>Loading YouTube status...</div>
+        ) : youtubeChannel ? (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '24px', background: '#f9fafb', padding: '20px', borderRadius: '12px', border: '1px solid #e5e7eb' }}>
+              {youtubeChannel.channel_thumbnail ? (
+                <img
+                  src={youtubeChannel.channel_thumbnail}
+                  alt={youtubeChannel.channel_name}
+                  style={{ width: '72px', height: '72px', borderRadius: '50%', objectFit: 'cover', border: '3px solid #ff0000' }}
+                />
+              ) : (
+                <div style={{ width: '72px', height: '72px', borderRadius: '50%', background: '#ff0000', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px', fontWeight: 'bold' }}>
+                  YT
+                </div>
+              )}
+              <div style={{ flex: 1 }}>
+                <h4 style={{ margin: '0 0 4px 0', fontSize: '20px', color: '#111827' }}>{youtubeChannel.channel_name}</h4>
+                <p style={{ margin: 0, fontSize: '13px', color: '#4b5563', maxHeight: '42px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {youtubeChannel.channel_description || 'No description provided.'}
+                </p>
+                <span style={{ fontSize: '11.5px', color: '#6b7280', display: 'block', marginTop: '6px' }}>
+                  Channel ID: <code>{youtubeChannel.channel_id}</code>
+                </span>
+              </div>
+            </div>
+
+            {/* Statistics Cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+              <div style={{ background: '#fef2f2', padding: '16px', borderRadius: '10px', border: '1px solid #fecaca' }}>
+                <span style={{ fontSize: '12px', color: '#991b1b', fontWeight: '600', textTransform: 'uppercase' }}>Subscribers</span>
+                <div style={{ fontSize: '24px', fontWeight: '800', color: '#7f1d1d', marginTop: '4px' }}>
+                  {youtubeChannel.subscriber_count ? youtubeChannel.subscriber_count.toLocaleString() : 0}
+                </div>
+              </div>
+
+              <div style={{ background: '#eff6ff', padding: '16px', borderRadius: '10px', border: '1px solid #bfdbfe' }}>
+                <span style={{ fontSize: '12px', color: '#1e40af', fontWeight: '600', textTransform: 'uppercase' }}>Total Videos</span>
+                <div style={{ fontSize: '24px', fontWeight: '800', color: '#1e3a8a', marginTop: '4px' }}>
+                  {youtubeChannel.video_count ? youtubeChannel.video_count.toLocaleString() : 0}
+                </div>
+              </div>
+
+              <div style={{ background: '#f0fdf4', padding: '16px', borderRadius: '10px', border: '1px solid #bbf7d0' }}>
+                <span style={{ fontSize: '12px', color: '#166534', fontWeight: '600', textTransform: 'uppercase' }}>Total Views</span>
+                <div style={{ fontSize: '24px', fontWeight: '800', color: '#14532d', marginTop: '4px' }}>
+                  {youtubeChannel.view_count ? youtubeChannel.view_count.toLocaleString() : 0}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleSyncAll}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+              >
+                <RefreshCw size={16} /> Refresh Channel Stats
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={handleDisconnectYouTube}
+                style={{ background: '#dc2626', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 18px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}
+              >
+                <Trash2 size={16} /> Disconnect YouTube
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ padding: '24px', textAlign: 'center', background: '#fafafa', borderRadius: '12px', border: '1px dashed #d1d5db' }}>
+            <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', color: '#374151' }}>Connect YouTube Channel</h4>
+            <p style={{ margin: '0 0 18px 0', fontSize: '13.5px', color: '#6b7280' }}>
+              Authorize Marketing Command to access your YouTube channel metadata, subscriber count, video metrics, and total views using Google OAuth 2.0.
+            </p>
+            <button
+              type="button"
+              className="btn"
+              onClick={handleConnectYouTube}
+              style={{ background: '#ff0000', color: '#fff', border: 'none', padding: '12px 24px', fontSize: '15px', borderRadius: '8px', cursor: 'pointer', fontWeight: '700', display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+            >
+              <Video size={20} /> Connect YouTube
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Grid of All API Connections */}
       <div className="integration-grid mb-18">
         {connections.map((item) => (
           <div className="integration-card" key={item.id}>
             <div className="integration-card-head">
-              <div className="api-logo-box">{item.code}</div>
+              <div className="api-logo-box" style={item.name.includes('YouTube') ? { background: '#ff0000', color: '#fff' } : {}}>
+                {item.code}
+              </div>
               <div>
                 <h4>{item.name}</h4>
                 <p>{item.subtitle}</p>
@@ -360,7 +580,13 @@ export default function IntegrationsPage() {
                 className="btn-outline-dark"
                 onClick={() => handleConnectToggle(item)}
               >
-                {item.status === 'disconnected' || item.status === 'phase2' ? 'Connect Facebook' : 'Reconnect'}
+                {item.name.includes('YouTube')
+                  ? youtubeChannel
+                    ? 'Disconnect YouTube'
+                    : 'Connect YouTube'
+                  : item.status === 'disconnected' || item.status === 'phase2'
+                  ? `Connect ${item.name.split(' ')[0]}`
+                  : 'Reconnect'}
               </button>
               <button
                 type="button"
@@ -408,30 +634,8 @@ export default function IntegrationsPage() {
 
       {/* Page Selection Modal (OAuth) */}
       {showModal && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            width: '100vw',
-            height: '100vh',
-            background: 'rgba(0, 0, 0, 0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999,
-          }}
-        >
-          <div
-            style={{
-              background: '#fff',
-              borderRadius: '16px',
-              maxWidth: '520px',
-              width: '90%',
-              padding: '24px',
-              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)',
-            }}
-          >
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0, 0, 0, 0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+          <div style={{ background: '#fff', borderRadius: '16px', maxWidth: '520px', width: '90%', padding: '24px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <div style={{ background: '#1877f2', color: '#fff', borderRadius: '50%', padding: '6px' }}>
@@ -439,68 +643,30 @@ export default function IntegrationsPage() {
                 </div>
                 <h3 style={{ margin: 0, fontSize: '18px' }}>Select Facebook Page</h3>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowModal(false)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}
-              >
+              <button type="button" onClick={() => setShowModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}>
                 <X size={20} />
               </button>
             </div>
-
             <p style={{ fontSize: '13.5px', color: '#4b5563', marginBottom: '16px' }}>
-              The following Facebook Pages were retrieved from your Meta account. Choose the page you want to connect to this workspace for automatic post publishing:
+              Select which Facebook Page to connect:
             </p>
-
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '240px', overflowY: 'auto', marginBottom: '20px' }}>
               {fetchedPages.map((page) => (
-                <label
-                  key={page.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '12px 14px',
-                    borderRadius: '10px',
-                    border: selectedPageId === page.id ? '2px solid #1877f2' : '1px solid #e5e7eb',
-                    background: selectedPageId === page.id ? '#eff6ff' : '#fff',
-                    cursor: 'pointer',
-                  }}
-                >
+                <label key={page.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: '10px', border: selectedPageId === page.id ? '2px solid #1877f2' : '1px solid #e5e7eb', background: selectedPageId === page.id ? '#eff6ff' : '#fff', cursor: 'pointer' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <input
-                      type="radio"
-                      name="facebook_page_selection"
-                      value={page.id}
-                      checked={selectedPageId === page.id}
-                      onChange={() => setSelectedPageId(page.id)}
-                    />
+                    <input type="radio" name="facebook_page_selection" value={page.id} checked={selectedPageId === page.id} onChange={() => setSelectedPageId(page.id)} />
                     <div>
                       <strong style={{ fontSize: '14px', display: 'block' }}>{page.name}</strong>
-                      <span style={{ fontSize: '11.5px', color: '#6b7280' }}>
-                        ID: {page.id} {page.category ? `• ${page.category}` : ''}
-                      </span>
+                      <span style={{ fontSize: '11.5px', color: '#6b7280' }}>ID: {page.id}</span>
                     </div>
                   </div>
                   {selectedPageId === page.id && <CheckCircle2 size={18} color="#1877f2" />}
                 </label>
               ))}
             </div>
-
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setShowModal(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={handleConfirmConnectPage}
-                disabled={connectingPage || !selectedPageId}
-              >
+              <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+              <button type="button" className="btn btn-primary" onClick={handleConfirmConnectPage} disabled={connectingPage || !selectedPageId}>
                 {connectingPage ? 'Connecting Page...' : 'Connect Selected Page'}
               </button>
             </div>
@@ -510,97 +676,33 @@ export default function IntegrationsPage() {
 
       {/* Manual Token Connect Modal */}
       {showManualModal && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            width: '100vw',
-            height: '100vh',
-            background: 'rgba(0, 0, 0, 0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999,
-          }}
-        >
-          <div
-            style={{
-              background: '#fff',
-              borderRadius: '16px',
-              maxWidth: '520px',
-              width: '90%',
-              padding: '24px',
-              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)',
-            }}
-          >
+        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0, 0, 0, 0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+          <div style={{ background: '#fff', borderRadius: '16px', maxWidth: '520px', width: '90%', padding: '24px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <Key size={20} color="#1877f2" />
                 <h3 style={{ margin: 0, fontSize: '18px' }}>Manual Page Token Connect</h3>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowManualModal(false)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}
-              >
+              <button type="button" onClick={() => setShowManualModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}>
                 <X size={20} />
               </button>
             </div>
-
-            <p style={{ fontSize: '13px', color: '#4b5563', marginBottom: '16px' }}>
-              Enter your Facebook Page ID and Page Access Token (from Graph API Explorer or Meta App Dashboard) to connect directly:
-            </p>
-
             <form onSubmit={handleManualTokenSubmit}>
               <div style={{ marginBottom: '12px' }}>
                 <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Facebook Page ID *</label>
-                <input
-                  type="text"
-                  className="input"
-                  placeholder="e.g. 1005544332211"
-                  value={manualPageId}
-                  onChange={(e) => setManualPageId(e.target.value)}
-                  required
-                />
+                <input type="text" className="input" placeholder="e.g. 1005544332211" value={manualPageId} onChange={(e) => setManualPageId(e.target.value)} required />
               </div>
-
               <div style={{ marginBottom: '12px' }}>
                 <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Facebook Page Name</label>
-                <input
-                  type="text"
-                  className="input"
-                  placeholder="e.g. My Business Page"
-                  value={manualPageName}
-                  onChange={(e) => setManualPageName(e.target.value)}
-                />
+                <input type="text" className="input" placeholder="e.g. My Business Page" value={manualPageName} onChange={(e) => setManualPageName(e.target.value)} />
               </div>
-
               <div style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Page Access Token (EAAM...) *</label>
-                <textarea
-                  className="textarea"
-                  rows={3}
-                  placeholder="Paste Page Access Token starting with EAA..."
-                  value={manualPageToken}
-                  onChange={(e) => setManualPageToken(e.target.value)}
-                  required
-                />
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Page Access Token *</label>
+                <textarea className="textarea" rows={3} placeholder="Paste Page Access Token..." value={manualPageToken} onChange={(e) => setManualPageToken(e.target.value)} required />
               </div>
-
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => setShowManualModal(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={connectingPage}
-                >
+                <button type="button" className="btn btn-secondary" onClick={() => setShowManualModal(false)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={connectingPage}>
                   {connectingPage ? 'Saving Token...' : 'Save & Connect Page'}
                 </button>
               </div>

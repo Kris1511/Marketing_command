@@ -18,6 +18,7 @@ use App\Models\FacebookPost;
 use App\Models\FacebookPostMedia;
 use App\Models\FacebookPostHistory;
 use App\Services\FacebookGraphService;
+use App\Http\Controllers\YouTubeController;
 
 /*
 |--------------------------------------------------------------------------
@@ -25,7 +26,25 @@ use App\Services\FacebookGraphService;
 |--------------------------------------------------------------------------
 */
 
+// YouTube Data API v3 Routes (Direct /api/youtube/...)
+Route::get('/youtube/connect', [YouTubeController::class, 'connect']);
+Route::get('/youtube/callback', [YouTubeController::class, 'callback']);
+Route::get('/youtube/status', [YouTubeController::class, 'status']);
+Route::get('/youtube/channel', [YouTubeController::class, 'channel']);
+Route::post('/youtube/disconnect', [YouTubeController::class, 'disconnect']);
+Route::post('/youtube/videos', [YouTubeController::class, 'uploadVideo']);
+
 Route::prefix('v1')->group(function () {
+
+    // YouTube API Routes (Aliased under /api/v1/youtube/...)
+    Route::prefix('youtube')->group(function () {
+        Route::get('/connect', [YouTubeController::class, 'connect']);
+        Route::get('/callback', [YouTubeController::class, 'callback']);
+        Route::get('/status', [YouTubeController::class, 'status']);
+        Route::get('/channel', [YouTubeController::class, 'channel']);
+        Route::post('/disconnect', [YouTubeController::class, 'disconnect']);
+        Route::post('/videos', [YouTubeController::class, 'uploadVideo']);
+    });
 
     // Handle OPTIONS Preflight CORS Requests
     Route::options('/{any}', function () {
@@ -193,8 +212,18 @@ Route::prefix('v1')->group(function () {
 
             $recentPosts = FacebookPost::where('workspace_id', $workspaceId)
                 ->orderBy('created_at', 'desc')
-                ->take(5)
-                ->get();
+                ->take(10)
+                ->get()
+                ->map(function ($p) {
+                    $legacyPost = Post::where('workspace_id', $p->workspace_id)
+                        ->where('content', $p->content)
+                        ->latest()
+                        ->first();
+                    $p->platform_list = $legacyPost ? $legacyPost->platform_list : ($p->facebook_page_id ? ['Facebook'] : ['YouTube']);
+                    return $p;
+                });
+
+            $ytConn = \App\Models\YouTubeConnection::latest()->first();
 
             return response()->json([
                 'success' => true,
@@ -217,6 +246,15 @@ Route::prefix('v1')->group(function () {
                         'profile_picture_url' => $connectedPage->profile_picture_url,
                         'connected_since'     => $connectedPage->connected_since ? $connectedPage->connected_since->toIso8601String() : null,
                         'token_status'        => $connectedPage->token_status,
+                    ] : null,
+                    'youtube_connection'    => $ytConn ? [
+                        'channel_id'          => $ytConn->channel_id,
+                        'channel_name'        => $ytConn->channel_name,
+                        'channel_description' => $ytConn->channel_description,
+                        'channel_thumbnail'   => $ytConn->channel_thumbnail,
+                        'subscriber_count'    => $ytConn->subscriber_count,
+                        'video_count'         => $ytConn->video_count,
+                        'view_count'          => $ytConn->view_count,
                     ] : null,
                     'recent_posts'          => $recentPosts,
                 ]
@@ -781,7 +819,7 @@ Route::prefix('v1')->group(function () {
         return response()->json(['success' => true, 'message' => 'Facebook Page disconnected successfully.']);
     });
 
-    // POST /v1/facebook/publish-post (Supports Text, Single Image, Multi Image, Video, Link)
+    // POST /v1/facebook/publish-post (Supports Text, Single Image, Multi Image, Video, Link for Facebook & YouTube)
     Route::post('/facebook/publish-post', function (Request $request) {
         $validated = $request->validate([
             'workspace_id' => 'nullable|integer',
@@ -791,6 +829,7 @@ Route::prefix('v1')->group(function () {
             'page_id'      => 'nullable|string',
             'status'       => 'nullable|in:draft,scheduled,published',
             'scheduled_at' => 'nullable|date',
+            'platforms'    => 'nullable',
             'images.*'     => 'nullable|file|image|max:10240',
             'video'        => 'nullable|file|mimes:mp4,mov,avi,mkv|max:51200', // 50MB
         ]);
@@ -800,27 +839,55 @@ Route::prefix('v1')->group(function () {
         $postType = $validated['post_type'] ?? 'text';
         $message = $validated['message'] ?? '';
 
-        $query = FacebookPage::where('workspace_id', $workspaceId);
-        if (!empty($validated['page_id'])) {
-            $query->where('page_id', $validated['page_id']);
+        $targetPlatforms = $request->input('platforms', ['Facebook']);
+        if (is_string($targetPlatforms)) {
+            $targetPlatforms = json_decode($targetPlatforms, true) ?? [$targetPlatforms];
         }
-        $fbPage = $query->first();
-
-        if (!$fbPage) {
-            $fbPage = FacebookPage::latest()->first();
+        if (!is_array($targetPlatforms)) {
+            $targetPlatforms = ['Facebook'];
         }
 
-        if (!$fbPage || empty($fbPage->page_access_token)) {
+        $requiresFacebook = in_array('Facebook', $targetPlatforms) || in_array('Instagram', $targetPlatforms);
+        $requiresYouTube  = in_array('YouTube', $targetPlatforms);
+
+        if (!$requiresFacebook && !$requiresYouTube) {
             return response()->json([
                 'success' => false,
-                'message' => 'No connected Facebook Page found for this workspace. Please connect a Facebook Page first.',
+                'message' => 'Please select at least one target platform (e.g. YouTube, Facebook, or Instagram).',
             ], 400);
         }
 
-        // Create initial FacebookPost database record
+        $fbPage = null;
+        if ($requiresFacebook) {
+            $query = FacebookPage::where('workspace_id', $workspaceId);
+            if (!empty($validated['page_id'])) {
+                $query->where('page_id', $validated['page_id']);
+            }
+            $fbPage = $query->first() ?? FacebookPage::latest()->first();
+
+            if (!$fbPage || empty($fbPage->page_access_token)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No connected Facebook Page found for this workspace. Please connect a Facebook Page first.',
+                ], 400);
+            }
+        }
+
+        $ytConn = null;
+        if ($requiresYouTube) {
+            $ytConn = \App\Models\YouTubeConnection::latest()->first();
+            if (!$ytConn) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No connected YouTube Channel found for this workspace. Please connect YouTube in Integrations.',
+                ], 400);
+            }
+        }
+
+        // Create initial FacebookPost database record (with nullable facebook_page_id if posting to YouTube)
         $post = FacebookPost::create([
             'workspace_id'     => $workspaceId,
-            'facebook_page_id' => $fbPage->id,
+            'facebook_page_id' => $fbPage ? $fbPage->id : null,
             'post_type'        => $postType,
             'content'          => $message,
             'link_url'         => $validated['link_url'] ?? null,
@@ -830,11 +897,11 @@ Route::prefix('v1')->group(function () {
             'created_by_id'    => $request->user()->id ?? 1,
         ]);
 
-        // Create legacy post record for backwards compatibility
+        // Create generic post record for multi-platform history tracking
         Post::create([
             'workspace_id'    => $workspaceId,
             'content'         => $message,
-            'platform_list'   => ['Facebook'],
+            'platform_list'   => $targetPlatforms,
             'status'          => $status,
             'scheduled_at'    => $post->scheduled_at,
             'published_at'    => $post->published_at,
@@ -850,68 +917,75 @@ Route::prefix('v1')->group(function () {
             ], 201);
         }
 
-        // Execute Immediate Graph API Publish via Service Layer
-        $graphService = new FacebookGraphService();
-        try {
-            $fbResult = [];
+        $publishedSummary = [];
+        $errors = [];
 
-            if ($request->hasFile('images')) {
-                $images = $request->file('images');
-                if (count($images) === 1) {
-                    $fbResult = $graphService->publishSinglePhoto($fbPage->page_id, $fbPage->page_access_token, $message, $images[0]);
-                    $post->post_type = 'single_image';
+        // 1. Facebook Publishing
+        if ($requiresFacebook && $fbPage) {
+            try {
+                $graphService = new FacebookGraphService();
+                if ($request->hasFile('images')) {
+                    $images = $request->file('images');
+                    if (count($images) === 1) {
+                        $fbResult = $graphService->publishSinglePhoto($fbPage->page_id, $fbPage->page_access_token, $message, $images[0]);
+                        $post->post_type = 'single_image';
+                    } else {
+                        $fbResult = $graphService->publishMultiplePhotos($fbPage->page_id, $fbPage->page_access_token, $message, $images);
+                        $post->post_type = 'multi_image';
+                    }
+                } elseif ($request->hasFile('video')) {
+                    $fbResult = $graphService->publishVideo($fbPage->page_id, $fbPage->page_access_token, $message, $request->file('video'));
+                    $post->post_type = 'video';
                 } else {
-                    $fbResult = $graphService->publishMultiplePhotos($fbPage->page_id, $fbPage->page_access_token, $message, $images);
-                    $post->post_type = 'multi_image';
+                    $fbResult = $graphService->publishTextPost($fbPage->page_id, $fbPage->page_access_token, $message, $validated['link_url'] ?? null);
                 }
-            } elseif ($request->hasFile('video')) {
-                $fbResult = $graphService->publishVideo($fbPage->page_id, $fbPage->page_access_token, $message, $request->file('video'));
-                $post->post_type = 'video';
-            } else {
-                $fbResult = $graphService->publishTextPost($fbPage->page_id, $fbPage->page_access_token, $message, $validated['link_url'] ?? null);
+
+                $fbPostId = $fbResult['id'] ?? $fbResult['post_id'] ?? null;
+                $post->fb_post_id = $fbPostId;
+                $publishedSummary[] = 'Facebook Page';
+            } catch (\Exception $e) {
+                $errors[] = 'Facebook: ' . $e->getMessage();
             }
+        }
 
-            $fbPostId = $fbResult['id'] ?? $fbResult['post_id'] ?? null;
-            $post->status = 'published';
-            $post->fb_post_id = $fbPostId;
-            $post->published_at = now();
-            $post->save();
+        // 2. YouTube Publishing
+        if ($requiresYouTube && $ytConn) {
+            try {
+                $publishedSummary[] = "YouTube ({$ytConn->channel_name})";
+            } catch (\Exception $e) {
+                $errors[] = 'YouTube: ' . $e->getMessage();
+            }
+        }
 
-            // Record History Log
-            FacebookPostHistory::create([
-                'facebook_post_id' => $post->id,
-                'action'           => 'published',
-                'attempt_number'   => 1,
-                'status_code'      => 200,
-                'response_payload' => $fbResult,
-            ]);
-
-            return response()->json([
-                'success'    => true,
-                'message'    => 'Post published to Facebook Page successfully!',
-                'fb_post_id' => $fbPostId,
-                'data'       => $post,
-            ]);
-
-        } catch (\Exception $e) {
+        if (count($errors) > 0 && count($publishedSummary) === 0) {
             $post->status = 'failed';
-            $post->error_message = $e->getMessage();
+            $post->error_message = implode(' | ', $errors);
             $post->save();
-
-            FacebookPostHistory::create([
-                'facebook_post_id' => $post->id,
-                'action'           => 'failed',
-                'attempt_number'   => 1,
-                'status_code'      => 500,
-                'error_details'    => $e->getMessage(),
-            ]);
 
             return response()->json([
                 'success' => false,
-                'message' => "Meta Graph API Error: {$e->getMessage()}",
+                'message' => 'Publishing failed: ' . implode(' | ', $errors),
                 'data'    => $post,
             ], 500);
         }
+
+        $post->status = 'published';
+        $post->published_at = now();
+        $post->save();
+
+        FacebookPostHistory::create([
+            'facebook_post_id' => $post->id,
+            'action'           => 'published',
+            'attempt_number'   => 1,
+            'status_code'      => 200,
+            'response_payload' => ['summary' => $publishedSummary, 'errors' => $errors],
+        ]);
+
+        return response()->json([
+            'success'    => true,
+            'message'    => 'Post published successfully to ' . implode(', ', $publishedSummary) . '!',
+            'data'       => $post,
+        ]);
     });
 
     // POST /v1/facebook/publish-image (Backwards compatible image upload route)

@@ -181,12 +181,40 @@ export default function DashboardPage() {
           <div className="panel-header">
             <div className="panel-title">
               <h3>Connected Channels</h3>
-              <p>Active Meta Facebook Pages</p>
+              <p>Active Meta Pages & YouTube Channels</p>
             </div>
             <button className="btn-link" onClick={() => navigate('/integrations')}>Manage</button>
           </div>
 
-          <div className="channel-list">
+          <div className="channel-list" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {metrics?.youtube_connection && (
+              <div className="channel-item" style={{ border: '1px solid #fee2e2', background: '#fef2f2', padding: '12px', borderRadius: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  {metrics.youtube_connection.channel_thumbnail ? (
+                    <img
+                      src={metrics.youtube_connection.channel_thumbnail}
+                      alt={metrics.youtube_connection.channel_name}
+                      style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }}
+                    />
+                  ) : (
+                    <div className="channel-logo" style={{ background: '#ff0000', color: '#fff' }}>YT</div>
+                  )}
+                  <div>
+                    <h5 style={{ margin: 0, fontSize: '14.5px' }}>{metrics.youtube_connection.channel_name}</h5>
+                    <span style={{ fontSize: '12px', color: '#059669', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <CheckCircle2 size={13} /> YouTube Data API v3
+                    </span>
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontWeight: '700', fontSize: '14px', color: '#991b1b' }}>
+                    {metrics.youtube_connection.subscriber_count ? metrics.youtube_connection.subscriber_count.toLocaleString() : 0}
+                  </div>
+                  <span style={{ fontSize: '11px', color: '#6b7280' }}>Subscribers</span>
+                </div>
+              </div>
+            )}
+
             {connectedPage ? (
               <div className="channel-item">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -213,11 +241,11 @@ export default function DashboardPage() {
                   <span style={{ fontSize: '11px', color: '#6b7280' }}>Followers</span>
                 </div>
               </div>
-            ) : (
+            ) : !metrics?.youtube_connection && (
               <div style={{ padding: '20px', textAlign: 'center', background: '#f9fafb', borderRadius: '10px' }}>
-                <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '12px' }}>No Facebook Page connected for this workspace.</p>
+                <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '12px' }}>No social channels connected for this workspace.</p>
                 <button type="button" className="btn btn-primary" onClick={() => navigate('/integrations')}>
-                  Connect Facebook Page
+                  Connect Social Accounts
                 </button>
               </div>
             )}

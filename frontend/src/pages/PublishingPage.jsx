@@ -48,6 +48,7 @@ export default function PublishingPage() {
   const [scheduledPosts, setScheduledPosts] = useState([]);
   const [draftPosts, setDraftPosts] = useState([]);
   const [connectedPage, setConnectedPage] = useState(null);
+  const [connectedYouTube, setConnectedYouTube] = useState(null);
 
   useEffect(() => {
     fetchPageAndData();
@@ -55,12 +56,24 @@ export default function PublishingPage() {
 
   const fetchPageAndData = async () => {
     try {
-      // Fetch Connected Page
+      // Fetch Connected FB Page
       const pageRes = await axiosInstance.get('/facebook/pages', { params: { workspace_id: selectedWorkspaceId } });
       if (pageRes.data.success && pageRes.data.data.length > 0) {
         setConnectedPage(pageRes.data.data[0]);
       } else {
         setConnectedPage(null);
+      }
+
+      // Fetch Connected YouTube Channel
+      try {
+        const ytRes = await axiosInstance.get('/youtube/status');
+        if (ytRes.data.success && ytRes.data.connected && ytRes.data.data) {
+          setConnectedYouTube(ytRes.data.data);
+        } else {
+          setConnectedYouTube(null);
+        }
+      } catch (e) {
+        setConnectedYouTube(null);
       }
 
       // Fetch Drafts
@@ -97,6 +110,12 @@ export default function PublishingPage() {
   const handleSubmit = async (overrideStatus = null) => {
     const targetStatus = overrideStatus || (publishType === 'now' ? 'published' : publishType === 'draft' ? 'draft' : 'scheduled');
 
+    const selectedPlatformsList = Object.keys(platforms).filter((key) => platforms[key]);
+    if (selectedPlatformsList.length === 0) {
+      setStatusMsg({ type: 'error', text: 'Please select at least one platform to publish to (e.g. YouTube, Facebook, Instagram).' });
+      return;
+    }
+
     if (!postCaption.trim() && !selectedFiles.length) {
       setStatusMsg({ type: 'error', text: 'Please enter a post caption or select media.' });
       return;
@@ -104,6 +123,19 @@ export default function PublishingPage() {
 
     if (targetStatus === 'scheduled' && !scheduleAt) {
       setStatusMsg({ type: 'error', text: 'Please select a valid date and time for scheduling.' });
+      return;
+    }
+
+    const requiresFB = selectedPlatformsList.includes('Facebook') || selectedPlatformsList.includes('Instagram');
+    const requiresYT = selectedPlatformsList.includes('YouTube');
+
+    if (requiresFB && !connectedPage && selectedPlatformsList.length === 1) {
+      setStatusMsg({ type: 'error', text: 'No connected Facebook Page found for this workspace. Please connect a Facebook Page first in Integrations.' });
+      return;
+    }
+
+    if (requiresYT && !connectedYouTube && selectedPlatformsList.length === 1) {
+      setStatusMsg({ type: 'error', text: 'No connected YouTube Channel found for this workspace. Please connect YouTube first in Integrations.' });
       return;
     }
 
@@ -118,6 +150,10 @@ export default function PublishingPage() {
       formData.append('message', fullMessage);
       formData.append('status', targetStatus);
       if (scheduleAt) formData.append('scheduled_at', scheduleAt);
+
+      selectedPlatformsList.forEach((p) => {
+        formData.append('platforms[]', p);
+      });
 
       if (selectedFiles.length === 1 && selectedFiles[0].type.startsWith('video/')) {
         formData.append('video', selectedFiles[0]);
@@ -463,7 +499,11 @@ export default function PublishingPage() {
             <span
               className="pill"
               style={{ cursor: 'pointer' }}
-              onClick={() => setPreviewPlatform(previewPlatform === 'Instagram' ? 'Facebook' : 'Instagram')}
+              onClick={() =>
+                setPreviewPlatform((prev) =>
+                  prev === 'Facebook' ? 'Instagram' : prev === 'Instagram' ? 'YouTube' : 'Facebook'
+                )
+              }
             >
               {previewPlatform}
             </span>
@@ -473,13 +513,29 @@ export default function PublishingPage() {
             <div className="preview-top"></div>
             <div className="preview-body">
               <div className="preview-profile">
-                <div className="initial" style={{ background: '#1877f2', color: '#fff' }}>{clientInitials}</div>
+                <div
+                  className="initial"
+                  style={{
+                    background: previewPlatform === 'YouTube' ? '#ff0000' : '#1877f2',
+                    color: '#fff',
+                  }}
+                >
+                  {previewPlatform === 'YouTube'
+                    ? (connectedYouTube ? connectedYouTube.channel_name.substring(0, 2).toUpperCase() : 'YT')
+                    : clientInitials}
+                </div>
                 <div>
                   <strong style={{ fontSize: '12px' }}>
-                    {pageDisplayName.toLowerCase().replace(/\s+/g, '_')}
+                    {previewPlatform === 'YouTube'
+                      ? (connectedYouTube ? connectedYouTube.channel_name : 'YouTube Channel')
+                      : pageDisplayName.toLowerCase().replace(/\s+/g, '_')}
                   </strong>
                   <div className="muted" style={{ fontSize: '10px' }}>
-                    {previewPlatform === 'Instagram' ? 'Sponsored' : 'Just now • Public'}
+                    {previewPlatform === 'YouTube'
+                      ? (connectedYouTube ? `${connectedYouTube.subscriber_count ? connectedYouTube.subscriber_count.toLocaleString() : 0} subscribers` : 'YouTube Channel')
+                      : previewPlatform === 'Instagram'
+                      ? 'Sponsored'
+                      : 'Just now • Public'}
                   </div>
                 </div>
               </div>
@@ -577,7 +633,7 @@ export default function PublishingPage() {
         <div className="panel-header">
           <div className="panel-title">
             <h3>Published & scheduled posts history</h3>
-            <p>Recent Facebook posts stored in backend database</p>
+            <p>Recent social media posts stored in backend database</p>
           </div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={fetchPageAndData}>
             Refresh List
@@ -611,7 +667,11 @@ export default function PublishingPage() {
                       </strong>
                     </td>
                     <td style={{ padding: '10px 14px' }}>
-                      <span className="pill info">Facebook</span>
+                      <span className={`pill ${post.platform_list?.includes('YouTube') || (!post.facebook_page_id && !post.platform_list) ? 'warning' : 'info'}`}>
+                        {post.platform_list
+                          ? (Array.isArray(post.platform_list) ? post.platform_list.join(', ') : post.platform_list)
+                          : (post.facebook_page_id ? 'Facebook' : 'YouTube')}
+                      </span>
                     </td>
                     <td style={{ padding: '10px 14px' }}>
                       <span className={`pill ${post.status === 'published' ? 'success' : post.status === 'scheduled' ? 'warning' : 'neutral'}`}>
