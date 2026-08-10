@@ -47,9 +47,11 @@ class YouTubeService
         $this->client->setClientSecret($clientSecret);
         $this->client->setRedirectUri($redirectUri);
 
-        // Requested OAuth Scope - simplified to youtube.readonly only for initial verification
+        // Requested OAuth Scope - include youtube.upload and youtube master scope to allow video publishing
         $this->client->setScopes([
             'https://www.googleapis.com/auth/youtube.readonly',
+            'https://www.googleapis.com/auth/youtube.upload',
+            'https://www.googleapis.com/auth/youtube',
         ]);
 
         $this->client->setAccessType('offline');
@@ -199,5 +201,62 @@ class YouTubeService
             ['channel_id' => $channelData['channel_id']],
             $updateData
         );
+    }
+
+    /**
+     * Upload a video to YouTube using chunked/resumable media upload.
+     */
+    public function uploadVideo(YouTubeConnection $connection, string $videoPath, string $title, string $description, string $privacyStatus = 'public'): array
+    {
+        $connection = $this->refreshAccessTokenIfNeeded($connection);
+        $this->client->setAccessToken($connection->access_token);
+
+        $youtube = new GoogleYouTube($this->client);
+
+        $video = new \Google\Service\YouTube\Video();
+
+        $snippet = new \Google\Service\YouTube\VideoSnippet();
+        $snippet->setTitle($title);
+        $snippet->setDescription($description);
+        $video->setSnippet($snippet);
+
+        $status = new \Google\Service\YouTube\VideoStatus();
+        $status->setPrivacyStatus($privacyStatus);
+        $video->setStatus($status);
+
+        // Defer execution of query to execute resumable upload manually
+        $this->client->setDefer(true);
+        $insertRequest = $youtube->videos->insert('status,snippet', $video);
+
+        $chunkSizeBytes = 1 * 1024 * 1024; // 1MB chunks
+        $media = new \Google\Http\MediaFileUpload(
+            $this->client,
+            $insertRequest,
+            'video/*',
+            null,
+            true,
+            $chunkSizeBytes
+        );
+        $media->setFileSize(filesize($videoPath));
+
+        $statusResult = false;
+        $handle = fopen($videoPath, 'rb');
+        while (!$statusResult && !feof($handle)) {
+            $chunk = fread($handle, $chunkSizeBytes);
+            $statusResult = $media->nextChunk($chunk);
+        }
+        fclose($handle);
+
+        // Reset defer status
+        $this->client->setDefer(false);
+
+        if ($statusResult instanceof \Google\Service\YouTube\Video) {
+            return [
+                'success' => true,
+                'id' => $statusResult->getId(),
+            ];
+        }
+
+        throw new Exception("YouTube upload failed or did not return video info.");
     }
 }

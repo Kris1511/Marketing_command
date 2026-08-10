@@ -19,6 +19,7 @@ use App\Models\FacebookPostMedia;
 use App\Models\FacebookPostHistory;
 use App\Services\FacebookGraphService;
 use App\Http\Controllers\YouTubeController;
+use App\Http\Controllers\TwitterController;
 
 /*
 |--------------------------------------------------------------------------
@@ -34,6 +35,12 @@ Route::get('/youtube/channel', [YouTubeController::class, 'channel']);
 Route::post('/youtube/disconnect', [YouTubeController::class, 'disconnect']);
 Route::post('/youtube/videos', [YouTubeController::class, 'uploadVideo']);
 
+// Twitter API Routes (Direct /api/twitter/...)
+Route::get('/twitter/connect', [TwitterController::class, 'connect']);
+Route::get('/twitter/callback', [TwitterController::class, 'callback'])->name('twitter.callback');
+Route::get('/twitter/status', [TwitterController::class, 'status']);
+Route::post('/twitter/disconnect', [TwitterController::class, 'disconnect']);
+
 Route::prefix('v1')->group(function () {
 
     // YouTube API Routes (Aliased under /api/v1/youtube/...)
@@ -44,6 +51,14 @@ Route::prefix('v1')->group(function () {
         Route::get('/channel', [YouTubeController::class, 'channel']);
         Route::post('/disconnect', [YouTubeController::class, 'disconnect']);
         Route::post('/videos', [YouTubeController::class, 'uploadVideo']);
+    });
+
+    // Twitter API Routes (Aliased under /api/v1/twitter/...)
+    Route::prefix('twitter')->group(function () {
+        Route::get('/connect', [TwitterController::class, 'connect']);
+        Route::get('/callback', [TwitterController::class, 'callback']);
+        Route::get('/status', [TwitterController::class, 'status']);
+        Route::post('/disconnect', [TwitterController::class, 'disconnect']);
     });
 
     // Handle OPTIONS Preflight CORS Requests
@@ -849,11 +864,12 @@ Route::prefix('v1')->group(function () {
 
         $requiresFacebook = in_array('Facebook', $targetPlatforms) || in_array('Instagram', $targetPlatforms);
         $requiresYouTube  = in_array('YouTube', $targetPlatforms);
+        $requiresTwitter  = in_array('X', $targetPlatforms) || in_array('Twitter', $targetPlatforms);
 
-        if (!$requiresFacebook && !$requiresYouTube) {
+        if (!$requiresFacebook && !$requiresYouTube && !$requiresTwitter) {
             return response()->json([
                 'success' => false,
-                'message' => 'Please select at least one target platform (e.g. YouTube, Facebook, or Instagram).',
+                'message' => 'Please select at least one target platform (e.g. YouTube, Facebook, Instagram, or X/Twitter).',
             ], 400);
         }
 
@@ -884,7 +900,25 @@ Route::prefix('v1')->group(function () {
             }
         }
 
-        // Create initial FacebookPost database record (with nullable facebook_page_id if posting to YouTube)
+        $twitterConn = null;
+        if ($requiresTwitter) {
+            $twitterConn = \App\Models\Integration::where('workspace_id', $workspaceId)
+                ->where('platform', 'twitter')
+                ->where('is_connected', true)
+                ->first()
+                ?? \App\Models\Integration::where('platform', 'twitter')
+                ->where('is_connected', true)
+                ->latest()
+                ->first();
+            if (!$twitterConn) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No connected X (Twitter) account found for this workspace. Please connect X in Integrations.',
+                ], 400);
+            }
+        }
+
+        // Create initial FacebookPost database record (with nullable facebook_page_id if posting to YouTube/Twitter)
         $post = FacebookPost::create([
             'workspace_id'     => $workspaceId,
             'facebook_page_id' => $fbPage ? $fbPage->id : null,
@@ -951,9 +985,40 @@ Route::prefix('v1')->group(function () {
         // 2. YouTube Publishing
         if ($requiresYouTube && $ytConn) {
             try {
-                $publishedSummary[] = "YouTube ({$ytConn->channel_name})";
+                if ($request->hasFile('video')) {
+                    $videoFile = $request->file('video');
+                    $ytService = resolve(\App\Services\YouTubeService::class);
+                    $title = !empty($message) ? mb_substr($message, 0, 60) : 'Uploaded Video';
+                    
+                    $ytResult = $ytService->uploadVideo(
+                        $ytConn,
+                        $videoFile->getRealPath(),
+                        $title,
+                        $message,
+                        'public'
+                    );
+                    $publishedSummary[] = "YouTube ({$ytConn->channel_name})";
+                } else {
+                    throw new \Exception('YouTube requires a video file to be uploaded.');
+                }
             } catch (\Exception $e) {
                 $errors[] = 'YouTube: ' . $e->getMessage();
+            }
+        }
+
+        // 3. X/Twitter Publishing
+        if ($requiresTwitter && $twitterConn) {
+            try {
+                $twitterService = resolve(\App\Services\TwitterService::class);
+                $tweetText = $message;
+                if (!empty($validated['link_url'])) {
+                    $tweetText .= "\n" . $validated['link_url'];
+                }
+                
+                $tweetResult = $twitterService->publishTweet($twitterConn, $tweetText);
+                $publishedSummary[] = "X/Twitter ({$twitterConn->account_name})";
+            } catch (\Exception $e) {
+                $errors[] = 'X/Twitter: ' . $e->getMessage();
             }
         }
 

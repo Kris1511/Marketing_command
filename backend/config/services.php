@@ -47,4 +47,10 @@ return [
         'redirect_uri'  => env('GOOGLE_REDIRECT_URI', env('YOUTUBE_REDIRECT_URI', 'http://localhost:8000/api/youtube/callback')),
     ],
 
+    'twitter' => [
+        'client_id'     => env('TWITTER_CLIENT_ID'),
+        'client_secret' => env('TWITTER_CLIENT_SECRET'),
+        'redirect'      => env('TWITTER_REDIRECT_URI', 'http://localhost:8000/api/twitter/callback'),
+    ],
+
 ];
