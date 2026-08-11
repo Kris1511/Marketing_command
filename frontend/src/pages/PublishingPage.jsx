@@ -49,6 +49,10 @@ export default function PublishingPage() {
   const [draftPosts, setDraftPosts] = useState([]);
   const [connectedPage, setConnectedPage] = useState(null);
   const [connectedYouTube, setConnectedYouTube] = useState(null);
+  const [connectedTwitter, setConnectedTwitter] = useState(null);
+
+  const totalLength = postCaption.length + (postHashtags ? postHashtags.length + 2 : 0);
+  const isOverTwitterLimit = platforms.X && totalLength > 280;
 
   useEffect(() => {
     fetchPageAndData();
@@ -76,6 +80,18 @@ export default function PublishingPage() {
         setConnectedYouTube(null);
       }
 
+      // Fetch Connected X (Twitter) Profile
+      try {
+        const twitterRes = await axiosInstance.get('/twitter/status', { params: { workspace_id: selectedWorkspaceId } });
+        if (twitterRes.data.success && twitterRes.data.connected && twitterRes.data.data) {
+          setConnectedTwitter(twitterRes.data.data);
+        } else {
+          setConnectedTwitter(null);
+        }
+      } catch (e) {
+        setConnectedTwitter(null);
+      }
+
       // Fetch Drafts
       const draftsRes = await axiosInstance.get('/drafts', { params: { workspace_id: selectedWorkspaceId } });
       if (draftsRes.data.success) setDraftPosts(draftsRes.data.data);
@@ -95,7 +111,7 @@ export default function PublishingPage() {
   };
 
   const handlePlatformToggle = (key) => {
-    if (key === 'LinkedIn' || key === 'X') return;
+    if (key === 'LinkedIn') return;
     setPlatforms((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
@@ -129,6 +145,7 @@ export default function PublishingPage() {
     const requiresFB = selectedPlatformsList.includes('Facebook');
     const requiresIG = selectedPlatformsList.includes('Instagram');
     const requiresYT = selectedPlatformsList.includes('YouTube');
+    const requiresTwitter = selectedPlatformsList.includes('X');
 
     if (requiresFB && !connectedPage && selectedPlatformsList.length === 1) {
       setStatusMsg({ type: 'error', text: 'No connected Facebook Page found for this workspace. Please connect a Facebook Page first in Integrations.' });
@@ -142,6 +159,16 @@ export default function PublishingPage() {
 
     if (requiresYT && !connectedYouTube && selectedPlatformsList.length === 1) {
       setStatusMsg({ type: 'error', text: 'No connected YouTube Channel found for this workspace. Please connect YouTube first in Integrations.' });
+      return;
+    }
+
+    if (requiresTwitter && !connectedTwitter && selectedPlatformsList.length === 1) {
+      setStatusMsg({ type: 'error', text: 'No connected X (Twitter) account found for this workspace. Please connect X first in Integrations.' });
+      return;
+    }
+
+    if (requiresTwitter && totalLength > 280) {
+      setStatusMsg({ type: 'error', text: `Your post exceeds X (Twitter)'s 280-character limit (${totalLength} characters). Please shorten your post.` });
       return;
     }
 
@@ -338,10 +365,20 @@ export default function PublishingPage() {
                 <label className="check-card" style={{ opacity: 0.6 }}>
                   <input type="checkbox" disabled checked={false} /> LinkedIn <small>(Phase 2)</small>
                 </label>
-                <label className="check-card" style={{ opacity: 0.6 }}>
-                  <input type="checkbox" disabled checked={false} /> X <small>(Phase 2)</small>
+                <label className="check-card" style={!connectedTwitter ? { border: '1px dashed #cbd5e1' } : {}}>
+                  <input
+                    type="checkbox"
+                    checked={platforms.X}
+                    onChange={() => handlePlatformToggle('X')}
+                  />{' '}
+                  X / Twitter {!connectedTwitter && <small style={{ color: '#b45309' }}>(Not Connected)</small>}
                 </label>
               </div>
+              {platforms.X && !connectedTwitter && (
+                <div style={{ marginTop: '8px', color: '#b45309', fontSize: '12px', fontWeight: '500' }}>
+                  ⚠️ X / Twitter is selected but not connected. <a href="/integrations" style={{ color: '#2563eb', textDecoration: 'underline' }}>Connect X now in Integrations</a> to enable publishing.
+                </div>
+              )}
             </div>
 
             {/* Internal content title */}
@@ -363,9 +400,18 @@ export default function PublishingPage() {
 
             {/* Caption / post message */}
             <div className="form-field full">
-              <label htmlFor="postCaption" className="form-label">
-                Caption / post message
-              </label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }} className="flex justify-between items-center">
+                <label htmlFor="postCaption" className="form-label mb-0" style={{ marginBottom: 0 }}>
+                  Caption / post message
+                </label>
+                <span style={{
+                  fontSize: '11px',
+                  fontWeight: '600',
+                  color: isOverTwitterLimit ? '#dc2626' : (totalLength > 240 ? '#d97706' : '#64748b')
+                }}>
+                  {platforms.X ? `${totalLength} / 280 chars` : `${postCaption.length} chars`}
+                </span>
+              </div>
               <textarea
                 id="postCaption"
                 className="textarea"
@@ -374,6 +420,11 @@ export default function PublishingPage() {
                 onChange={(e) => setPostCaption(e.target.value)}
                 placeholder="Write the message customers should see"
               />
+              {isOverTwitterLimit && (
+                <div style={{ color: '#dc2626', fontSize: '11.5px', marginTop: '4px', fontWeight: '500' }}>
+                  ⚠️ Exceeds X (Twitter)'s 280-character limit. Please shorten the caption or hashtags.
+                </div>
+              )}
             </div>
 
             {/* Hashtags & CTA */}
@@ -506,9 +557,12 @@ export default function PublishingPage() {
               className="pill"
               style={{ cursor: 'pointer' }}
               onClick={() =>
-                setPreviewPlatform((prev) =>
-                  prev === 'Facebook' ? 'Instagram' : prev === 'Instagram' ? 'YouTube' : 'Facebook'
-                )
+                setPreviewPlatform((prev) => {
+                  if (prev === 'Facebook') return 'Instagram';
+                  if (prev === 'Instagram') return 'YouTube';
+                  if (prev === 'YouTube') return 'X';
+                  return 'Facebook';
+                })
               }
             >
               {previewPlatform}
@@ -522,18 +576,22 @@ export default function PublishingPage() {
                 <div
                   className="initial"
                   style={{
-                    background: previewPlatform === 'YouTube' ? '#ff0000' : '#1877f2',
+                    background: previewPlatform === 'YouTube' ? '#ff0000' : previewPlatform === 'X' ? '#000000' : '#1877f2',
                     color: '#fff',
                   }}
                 >
                   {previewPlatform === 'YouTube'
                     ? (connectedYouTube ? connectedYouTube.channel_name.substring(0, 2).toUpperCase() : 'YT')
+                    : previewPlatform === 'X'
+                    ? (connectedTwitter ? connectedTwitter.account_name.substring(0, 3).toUpperCase() : 'X')
                     : clientInitials}
                 </div>
                 <div>
                   <strong style={{ fontSize: '12px' }}>
                     {previewPlatform === 'YouTube'
                       ? (connectedYouTube ? connectedYouTube.channel_name : 'YouTube Channel')
+                      : previewPlatform === 'X'
+                      ? (connectedTwitter ? connectedTwitter.account_name : 'X Account')
                       : pageDisplayName.toLowerCase().replace(/\s+/g, '_')}
                   </strong>
                   <div className="muted" style={{ fontSize: '10px' }}>
@@ -541,6 +599,8 @@ export default function PublishingPage() {
                       ? (connectedYouTube ? `${connectedYouTube.subscriber_count ? connectedYouTube.subscriber_count.toLocaleString() : 0} subscribers` : 'YouTube Channel')
                       : previewPlatform === 'Instagram'
                       ? 'Sponsored'
+                      : previewPlatform === 'X'
+                      ? 'Just now • X.com'
                       : 'Just now • Public'}
                   </div>
                 </div>

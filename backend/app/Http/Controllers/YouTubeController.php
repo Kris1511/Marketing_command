@@ -212,10 +212,45 @@ class YouTubeController extends Controller
      */
     public function uploadVideo(Request $request)
     {
-        return response()->json([
-            'success' => false,
-            'message' => 'YouTube video upload endpoint prepared. Video upload functionality can be fully enabled when needed.',
-        ], 501);
+        $request->validate([
+            'video' => 'required|file|mimes:mp4,mov,avi,mkv|max:51200',
+            'title' => 'nullable|string|max:100',
+            'description' => 'nullable|string',
+        ]);
+
+        $connection = YouTubeConnection::latest()->first();
+        if (!$connection) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No connected YouTube Channel found. Please connect first.',
+            ], 400);
+        }
+
+        try {
+            $videoFile = $request->file('video');
+            $title = $request->input('title', 'Uploaded Video');
+            $description = $request->input('description', '');
+
+            $result = $this->youtubeService->uploadVideo(
+                $connection,
+                $videoFile->getRealPath(),
+                $title,
+                $description,
+                'public'
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Video uploaded to YouTube successfully!',
+                'video_id' => $result['id'],
+            ]);
+        } catch (Exception $e) {
+            Log::error('YouTube uploadVideo endpoint error', ['error' => $e->getMessage()]);
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**

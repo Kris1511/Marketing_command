@@ -2,20 +2,88 @@ import React, { useState, useEffect } from 'react';
 import { CheckCircle2, AlertCircle, Layers, X, ShieldCheck, Share2, Key, RefreshCw, Trash2, Video } from 'lucide-react';
 import axiosInstance from '../api/axiosInstance';
 
-import { useWorkspace } from '../context/WorkspaceContext';
-
-function formatRelativeTime(iso) {
-  if (!iso) return 'No data';
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'Just now';
-  if (mins < 60) return `${mins} min ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs} hr${hrs > 1 ? 's' : ''} ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days} day${days > 1 ? 's' : ''} ago`;
-}
-
+const initialConnections = [
+  {
+    id: 1,
+    name: 'Facebook Pages',
+    code: 'f',
+    subtitle: 'Phase 1 integration',
+    status: 'disconnected',
+    statusText: '• Not connected',
+    timeAgo: 'No data',
+    canTest: false,
+  },
+  {
+    id: 2,
+    name: 'Instagram Business',
+    code: 'IG',
+    subtitle: 'Phase 1 integration',
+    status: 'disconnected',
+    statusText: '• Not connected',
+    timeAgo: 'No data',
+    canTest: false,
+  },
+  {
+    id: 3,
+    name: 'YouTube Channels',
+    code: 'YT',
+    subtitle: 'YouTube Data API v3',
+    status: 'disconnected',
+    statusText: '• Not connected',
+    timeAgo: 'No data',
+    canTest: false,
+  },
+  {
+    id: 4,
+    name: 'Google Analytics',
+    code: 'GA',
+    subtitle: 'Phase 1 integration',
+    status: 'connected',
+    statusText: '• Connected',
+    timeAgo: '18 min ago',
+    canTest: true,
+  },
+  {
+    id: 5,
+    name: 'Search Console',
+    code: 'SC',
+    subtitle: 'Phase 1 integration',
+    status: 'connected',
+    statusText: '• Connected',
+    timeAgo: '24 min ago',
+    canTest: true,
+  },
+  {
+    id: 6,
+    name: 'Google Business Profile',
+    code: 'GB',
+    subtitle: 'Phase 1 integration',
+    status: 'disconnected',
+    statusText: '• Not connected',
+    timeAgo: 'No data',
+    canTest: false,
+  },
+  {
+    id: 7,
+    name: 'LinkedIn Pages',
+    code: 'in',
+    subtitle: 'Phase 2 integration',
+    status: 'connected',
+    statusText: '• Connected',
+    timeAgo: 'Just now',
+    canTest: true,
+  },
+  {
+    id: 8,
+    name: 'X / Twitter',
+    code: 'X',
+    subtitle: 'Phase 2 integration',
+    status: 'connected',
+    statusText: '• Connected',
+    timeAgo: 'Just now',
+    canTest: true,
+  },
+];
 
 export default function IntegrationsPage() {
   const { selectedWorkspaceId } = useWorkspace();
@@ -39,34 +107,13 @@ export default function IntegrationsPage() {
   const [youtubeChannel, setYoutubeChannel] = useState(null);
   const [youtubeLoading, setYoutubeLoading] = useState(true);
 
-  const fetchIntegrationsStatus = async () => {
-    try {
-      const res = await axiosInstance.get('/integrations/status', { params: { workspace_id: selectedWorkspaceId } });
-      if (res.data.success) {
-        const formatted = res.data.data.map((item, idx) => ({
-          id: idx + 1,
-          key: item.key,
-          name: item.name,
-          code: item.code,
-          subtitle: `Phase ${item.phase} integration`,
-          status: item.status,
-          statusText: item.status === 'connected' ? `• Connected ${item.account_name ? `(${item.account_name})` : ''}` : '• Not connected',
-          timeAgo: formatRelativeTime(item.last_sync),
-          canTest: item.status === 'connected',
-        }));
-        setConnections(formatted);
-      }
-    } catch (err) {
-      console.error('Failed to load integration statuses:', err);
-    }
-  };
-
   useEffect(() => {
     fetchIntegrationsStatus();
     fetchConnectedFacebookPages();
     fetchYouTubeStatus();
+    fetchTwitterStatus();
 
-    // Check URL parameters for YouTube OAuth return
+    // Check URL parameters for OAuth returns
     const searchParams = new URLSearchParams(window.location.search);
     if (searchParams.get('youtube') === 'success') {
       setSyncMsg('YouTube channel connected successfully!');
@@ -74,7 +121,7 @@ export default function IntegrationsPage() {
     } else if (searchParams.get('youtube') === 'error') {
       alert('Failed to connect YouTube channel. Please check your Google OAuth permissions.');
     }
-  }, [selectedWorkspaceId]);
+  }, []);
 
   const fetchYouTubeStatus = async () => {
     setYoutubeLoading(true);
@@ -118,6 +165,51 @@ export default function IntegrationsPage() {
       console.error('Error fetching YouTube status:', err);
     } finally {
       setYoutubeLoading(false);
+    }
+  };
+
+  const fetchTwitterStatus = async () => {
+    setTwitterLoading(true);
+    try {
+      const res = await fetch('http://localhost:8000/api/twitter/status?workspace_id=1');
+      const json = await res.json();
+      if (json.success && json.connected && json.data) {
+        setTwitterConnection(json.data);
+        setConnections((prev) =>
+          prev.map((c) => {
+            if (c.name.includes('X / Twitter')) {
+              return {
+                ...c,
+                status: 'connected',
+                statusText: `• Connected (${json.data.account_name})`,
+                timeAgo: 'Live API',
+                canTest: true,
+              };
+            }
+            return c;
+          })
+        );
+      } else {
+        setTwitterConnection(null);
+        setConnections((prev) =>
+          prev.map((c) => {
+            if (c.name.includes('X / Twitter')) {
+              return {
+                ...c,
+                status: 'disconnected',
+                statusText: '• Not connected',
+                timeAgo: 'No data',
+                canTest: false,
+              };
+            }
+            return c;
+          })
+        );
+      }
+    } catch (err) {
+      console.error('Error fetching Twitter status:', err);
+    } finally {
+      setTwitterLoading(false);
     }
   };
 
@@ -172,6 +264,13 @@ export default function IntegrationsPage() {
         } else {
           alert(`YouTube connection error: ${event.data.message}`);
         }
+      } else if (event.data?.type === 'TWITTER_OAUTH_RESULT') {
+        if (event.data.success) {
+          setSyncMsg(`X (Twitter) Connected: ${event.data.connection?.account_name || 'Profile active'}`);
+          fetchTwitterStatus();
+        } else {
+          alert(`X (Twitter) connection error: ${event.data.message}`);
+        }
       }
     };
 
@@ -186,6 +285,13 @@ export default function IntegrationsPage() {
       try {
         await fetch('http://localhost:8000/api/youtube/channel');
         await fetchYouTubeStatus();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    if (twitterConnection) {
+      try {
+        await fetchTwitterStatus();
       } catch (e) {
         console.error(e);
       }
@@ -234,12 +340,59 @@ export default function IntegrationsPage() {
     }
   };
 
+  const handleConnectTwitter = () => {
+    const width = 600;
+    const height = 700;
+    const left = (window.innerWidth - width) / 2;
+    const top = (window.innerHeight - height) / 2;
+
+    const popup = window.open(
+      'http://localhost:8000/api/twitter/connect?workspace_id=1',
+      'TwitterOAuth',
+      `width=${width},height=${height},top=${top},left=${left},scrollbars=yes,status=yes`
+    );
+
+    if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+      window.location.href = 'http://localhost:8000/api/twitter/connect?workspace_id=1';
+    } else {
+      setSyncMsg('Connecting to X (Twitter) OAuth... Please complete login in the pop-up.');
+    }
+  };
+
+  const handleDisconnectTwitter = async () => {
+    if (!window.confirm('Are you sure you want to disconnect your X (Twitter) account?')) return;
+    try {
+      const res = await fetch('http://localhost:8000/api/twitter/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_id: 1 })
+      });
+      const json = await res.json();
+      if (json.success) {
+        setSyncMsg('X (Twitter) disconnected.');
+        setTwitterConnection(null);
+        fetchTwitterStatus();
+      }
+    } catch (err) {
+      alert('Error disconnecting X (Twitter) account.');
+    }
+  };
+
   const handleConnectToggle = (item) => {
     if (item.name.includes('YouTube')) {
       if (youtubeChannel) {
         handleDisconnectYouTube();
       } else {
         handleConnectYouTube();
+      }
+      return;
+    }
+
+    if (item.name.includes('X / Twitter') || item.code === 'X') {
+      if (twitterConnection) {
+        handleDisconnectTwitter();
+      } else {
+        handleConnectTwitter();
       }
       return;
     }
@@ -349,6 +502,8 @@ export default function IntegrationsPage() {
   const handleTestConnection = (name) => {
     if (name.includes('YouTube') && youtubeChannel) {
       alert(`YouTube API Connected!\nChannel: ${youtubeChannel.channel_name}\nSubscribers: ${youtubeChannel.subscriber_count.toLocaleString()}\nTotal Videos: ${youtubeChannel.video_count.toLocaleString()}\nTotal Views: ${youtubeChannel.view_count.toLocaleString()}`);
+    } else if (name.includes('X / Twitter') && twitterConnection) {
+      alert(`X (Twitter) API Connected!\nAccount: ${twitterConnection.account_name}\nConnection Status: ${twitterConnection.connection_status}\nSynced: ${new Date(twitterConnection.last_sync_at).toLocaleString()}`);
     } else {
       alert(`Testing API connection for ${name}... Connection verified successfully!`);
     }
@@ -520,12 +675,104 @@ export default function IntegrationsPage() {
         )}
       </div>
 
+      {/* Dedicated X / Twitter Integration Display Panel */}
+      <div className="panel mb-18" style={{ background: '#fff', borderRadius: '14px', border: '1px solid #e5e7eb', padding: '24px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', borderBottom: '1px solid #f3f4f6', paddingBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ width: '44px', height: '44px', background: '#000000', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '20px' }}>
+              X
+            </div>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>X (Twitter) Integration</h3>
+              <p style={{ margin: 0, fontSize: '13px', color: '#6b7280' }}>Twitter API v2 & OAuth 2.0 PKCE</p>
+            </div>
+          </div>
+          <div>
+            {twitterConnection ? (
+              <span className="pill success" style={{ fontSize: '13px', padding: '6px 14px' }}>
+                Status: Connected ({twitterConnection.account_name})
+              </span>
+            ) : (
+              <span className="pill neutral" style={{ fontSize: '13px', padding: '6px 14px' }}>
+                Status: Not Connected
+              </span>
+            )}
+          </div>
+        </div>
+
+        {twitterLoading ? (
+          <div style={{ padding: '20px', textAlign: 'center', color: '#6b7280' }}>Loading X (Twitter) status...</div>
+        ) : twitterConnection ? (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '24px', background: '#f9fafb', padding: '20px', borderRadius: '12px', border: '1px solid #e5e7eb' }}>
+              <div style={{ width: '72px', height: '72px', borderRadius: '50%', background: '#000000', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px', fontWeight: 'bold' }}>
+                X
+              </div>
+              <div style={{ flex: 1 }}>
+                <h4 style={{ margin: '0 0 4px 0', fontSize: '20px', color: '#111827' }}>{twitterConnection.account_name}</h4>
+                <p style={{ margin: 0, fontSize: '13px', color: '#4b5563' }}>
+                  Connection Status: <strong style={{ color: '#059669', textTransform: 'capitalize' }}>{twitterConnection.connection_status || 'Connected'}</strong>
+                </p>
+                <span style={{ fontSize: '11.5px', color: '#6b7280', display: 'block', marginTop: '6px' }}>
+                  Twitter Account ID: <code>{twitterConnection.account_id}</code> | Last Synced: {twitterConnection.last_sync_at ? new Date(twitterConnection.last_sync_at).toLocaleString() : 'Just now'}
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => handleTestConnection('X / Twitter')}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+              >
+                <ShieldCheck size={16} /> Test X Connection
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleSyncAll}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+              >
+                <RefreshCw size={16} /> Refresh X Status
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={handleDisconnectTwitter}
+                style={{ background: '#dc2626', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 18px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}
+              >
+                <Trash2 size={16} /> Disconnect X
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ padding: '24px', textAlign: 'center', background: '#fafafa', borderRadius: '12px', border: '1px dashed #d1d5db' }}>
+            <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', color: '#374151' }}>Connect X (Twitter) Account</h4>
+            <p style={{ margin: '0 0 18px 0', fontSize: '13.5px', color: '#6b7280' }}>
+              Authorize Marketing Command to post tweets, manage media publishing, and retrieve metrics using Twitter API v2 and OAuth 2.0 PKCE.
+            </p>
+            <button
+              type="button"
+              className="btn"
+              onClick={handleConnectTwitter}
+              style={{ background: '#000000', color: '#fff', border: 'none', padding: '12px 24px', fontSize: '15px', borderRadius: '8px', cursor: 'pointer', fontWeight: '700', display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+            >
+              <Share2 size={20} /> Connect X (Twitter)
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Grid of All API Connections */}
       <div className="integration-grid mb-18">
         {connections.map((item) => (
           <div className="integration-card" key={item.id}>
             <div className="integration-card-head">
-              <div className="api-logo-box" style={item.name.includes('YouTube') ? { background: '#ff0000', color: '#fff' } : {}}>
+              <div className="api-logo-box" style={
+                item.name.includes('YouTube') ? { background: '#ff0000', color: '#fff' } :
+                item.code === 'X' ? { background: '#000000', color: '#fff' } : {}
+              }>
                 {item.code}
               </div>
               <div>
@@ -549,6 +796,10 @@ export default function IntegrationsPage() {
                   ? youtubeChannel
                     ? 'Disconnect YouTube'
                     : 'Connect YouTube'
+                  : item.code === 'X'
+                  ? twitterConnection
+                    ? 'Disconnect X'
+                    : 'Connect X'
                   : item.status === 'disconnected' || item.status === 'phase2'
                   ? `Connect ${item.name.split(' ')[0]}`
                   : 'Reconnect'}

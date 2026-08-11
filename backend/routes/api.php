@@ -20,69 +20,6 @@ use App\Models\FacebookPostHistory;
 use App\Services\FacebookGraphService;
 use App\Http\Controllers\YouTubeController;
 
-if (!function_exists('getOrCreateWorkspaceId')) {
-    function getOrCreateWorkspaceId($requestedId = 1) {
-        if (!empty($requestedId) && Workspace::where('id', $requestedId)->exists()) {
-            return (int)$requestedId;
-        }
-
-        $firstWorkspace = Workspace::first();
-        if ($firstWorkspace) {
-            return $firstWorkspace->id;
-        }
-
-        // No workspaces exist — create a default user and workspace with generic names
-        $user = User::first() ?? User::create([
-            'name' => 'Admin',
-            'email' => 'admin@marketingcommand.com',
-            'password' => Hash::make('password'),
-            'role' => 'admin',
-            'is_active' => true,
-        ]);
-
-        $newWorkspace = Workspace::create([
-            'name' => 'Default Workspace',
-            'industry' => 'General',
-            'primary_contact' => $user->name,
-            'primary_contact_email' => $user->email,
-            'budget' => 0,
-            'status' => 'active',
-            'owner_id' => $user->id,
-        ]);
-
-        return $newWorkspace->id;
-    }
-}
-
-/**
- * Helper: Create a notification record in the DB.
- * Types: lead_assigned, post_published, campaign_milestone, integration_error, team_invite, lead_converted, report_ready
- */
-if (!function_exists('createNotification')) {
-    function createNotification(int $workspaceId, string $type, string $title, string $message, ?string $relatedEntity = null): void {
-        try {
-            // Find any user who owns or belongs to this workspace
-            $workspace = Workspace::find($workspaceId);
-            $userId = $workspace?->owner_id ?? User::first()?->id ?? 1;
-            \Illuminate\Support\Facades\DB::table('notifications')->insert([
-                'user_id'        => $userId,
-                'workspace_id'   => $workspaceId,
-                'type'           => $type,
-                'title'          => $title,
-                'message'        => $message,
-                'related_entity' => $relatedEntity,
-                'is_read'        => false,
-                'read_at'        => null,
-                'created_at'     => now(),
-                'updated_at'     => now(),
-            ]);
-        } catch (\Exception $e) {
-            // Never throw from notification helper — just log
-            \Illuminate\Support\Facades\Log::warning('createNotification failed: ' . $e->getMessage());
-        }
-    }
-}
-
 /*
 |--------------------------------------------------------------------------
 | API Routes - Digital Marketing Dashboard (Connected to MySQL)
@@ -95,13 +32,7 @@ Route::get('/youtube/callback', [YouTubeController::class, 'callback']);
 Route::get('/youtube/status', [YouTubeController::class, 'status']);
 Route::get('/youtube/channel', [YouTubeController::class, 'channel']);
 Route::post('/youtube/disconnect', [YouTubeController::class, 'disconnect']);
-// Direct OAuth Callback Aliases (/api/auth/...)
-Route::get('/auth/facebook/callback', function (Request $request) {
-    return redirect()->to('/api/v1/auth/facebook/callback?' . http_build_query($request->all()));
-});
-Route::get('/auth/instagram/callback', function (Request $request) {
-    return redirect()->to('/api/v1/auth/facebook/callback?' . http_build_query($request->all()));
-});
+Route::post('/youtube/videos', [YouTubeController::class, 'uploadVideo']);
 
 Route::prefix('v1')->group(function () {
 
@@ -113,6 +44,14 @@ Route::prefix('v1')->group(function () {
         Route::get('/channel', [YouTubeController::class, 'channel']);
         Route::post('/disconnect', [YouTubeController::class, 'disconnect']);
         Route::post('/videos', [YouTubeController::class, 'uploadVideo']);
+    });
+
+    // Twitter API Routes (Aliased under /api/v1/twitter/...)
+    Route::prefix('twitter')->group(function () {
+        Route::get('/connect', [TwitterController::class, 'connect']);
+        Route::get('/callback', [TwitterController::class, 'callback']);
+        Route::get('/status', [TwitterController::class, 'status']);
+        Route::post('/disconnect', [TwitterController::class, 'disconnect']);
     });
 
     // Handle OPTIONS Preflight CORS Requests
@@ -1713,14 +1652,13 @@ Route::prefix('v1')->group(function () {
             $targetPlatforms = ['Facebook'];
         }
 
-        $requiresFacebook  = in_array('Facebook', $targetPlatforms);
-        $requiresInstagram = in_array('Instagram', $targetPlatforms);
-        $requiresYouTube   = in_array('YouTube', $targetPlatforms);
+        $requiresFacebook = in_array('Facebook', $targetPlatforms) || in_array('Instagram', $targetPlatforms);
+        $requiresYouTube  = in_array('YouTube', $targetPlatforms);
 
-        if (!$requiresFacebook && !$requiresInstagram && !$requiresYouTube) {
+        if (!$requiresFacebook && !$requiresYouTube) {
             return response()->json([
                 'success' => false,
-                'message' => 'Please select at least one target platform (e.g. YouTube, Facebook, or Instagram).',
+                'message' => 'Please select at least one target platform (e.g. YouTube, Facebook, Instagram, or X/Twitter).',
             ], 400);
         }
 
@@ -1773,7 +1711,25 @@ Route::prefix('v1')->group(function () {
             }
         }
 
-        // Create initial FacebookPost database record (with nullable facebook_page_id if posting to YouTube)
+        $twitterConn = null;
+        if ($requiresTwitter) {
+            $twitterConn = \App\Models\Integration::where('workspace_id', $workspaceId)
+                ->where('platform', 'twitter')
+                ->where('is_connected', true)
+                ->first()
+                ?? \App\Models\Integration::where('platform', 'twitter')
+                ->where('is_connected', true)
+                ->latest()
+                ->first();
+            if (!$twitterConn) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No connected X (Twitter) account found for this workspace. Please connect X in Integrations.',
+                ], 400);
+            }
+        }
+
+        // Create initial FacebookPost database record (with nullable facebook_page_id if posting to YouTube/Twitter)
         $post = FacebookPost::create([
             'workspace_id'     => $workspaceId,
             'facebook_page_id' => $fbPage ? $fbPage->id : null,
@@ -1868,9 +1824,40 @@ Route::prefix('v1')->group(function () {
         // 3. YouTube Publishing
         if ($requiresYouTube && $ytConn) {
             try {
-                $publishedSummary[] = "YouTube ({$ytConn->channel_name})";
+                if ($request->hasFile('video')) {
+                    $videoFile = $request->file('video');
+                    $ytService = resolve(\App\Services\YouTubeService::class);
+                    $title = !empty($message) ? mb_substr($message, 0, 60) : 'Uploaded Video';
+                    
+                    $ytResult = $ytService->uploadVideo(
+                        $ytConn,
+                        $videoFile->getRealPath(),
+                        $title,
+                        $message,
+                        'public'
+                    );
+                    $publishedSummary[] = "YouTube ({$ytConn->channel_name})";
+                } else {
+                    throw new \Exception('YouTube requires a video file to be uploaded.');
+                }
             } catch (\Exception $e) {
                 $errors[] = 'YouTube: ' . $e->getMessage();
+            }
+        }
+
+        // 3. X/Twitter Publishing
+        if ($requiresTwitter && $twitterConn) {
+            try {
+                $twitterService = resolve(\App\Services\TwitterService::class);
+                $tweetText = $message;
+                if (!empty($validated['link_url'])) {
+                    $tweetText .= "\n" . $validated['link_url'];
+                }
+                
+                $tweetResult = $twitterService->publishTweet($twitterConn, $tweetText);
+                $publishedSummary[] = "X/Twitter ({$twitterConn->account_name})";
+            } catch (\Exception $e) {
+                $errors[] = 'X/Twitter: ' . $e->getMessage();
             }
         }
 
