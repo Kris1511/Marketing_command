@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axiosInstance from '../api/axiosInstance';
 import { useNavigate } from 'react-router-dom';
+import { useWorkspace } from '../context/WorkspaceContext';
 import {
   CheckCircle2,
   Search,
@@ -23,24 +24,45 @@ const renderNotificationIcon = (iconStr, statusType, category) => {
   return <Bell size={18} />;
 };
 
+function formatRelativeTime(iso) {
+  if (!iso) return '';
+  // Check if already human string
+  if (typeof iso === 'string' && (iso.includes('ago') || iso.includes('Yesterday') || iso.includes('Now'))) return iso;
+  const diff = Date.now() - new Date(iso).getTime();
+  if (isNaN(diff)) return iso;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hr${hrs > 1 ? 's' : ''} ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days} day${days > 1 ? 's' : ''} ago`;
+}
+
 export default function NotificationsPage() {
   const navigate = useNavigate();
+  const { selectedWorkspaceId } = useWorkspace();
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterTab, setFilterTab] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
+    setLoading(true);
     axiosInstance
-      .get('/notifications')
+      .get('/notifications', { params: { workspace_id: selectedWorkspaceId } })
       .then((res) => {
         if (res.data.success) {
-          setNotifications(res.data.data);
+          const formatted = (res.data.data || []).map(n => ({
+            ...n,
+            timeAgo: formatRelativeTime(n.created_at),
+          }));
+          setNotifications(formatted);
         }
       })
       .catch((err) => console.error('Error fetching notifications:', err))
       .finally(() => setLoading(false));
-  }, []);
+  }, [selectedWorkspaceId]);
 
   const handleMarkAllRead = () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));

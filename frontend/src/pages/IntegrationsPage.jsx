@@ -2,99 +2,33 @@ import React, { useState, useEffect } from 'react';
 import { CheckCircle2, AlertCircle, Layers, X, ShieldCheck, Share2, Key, RefreshCw, Trash2, Video } from 'lucide-react';
 import axiosInstance from '../api/axiosInstance';
 
-const initialConnections = [
-  {
-    id: 1,
-    name: 'Facebook Pages',
-    code: 'f',
-    subtitle: 'Phase 1 integration',
-    status: 'disconnected',
-    statusText: '• Not connected',
-    timeAgo: 'No data',
-    canTest: false,
-  },
-  {
-    id: 2,
-    name: 'Instagram Business',
-    code: 'IG',
-    subtitle: 'Phase 1 integration',
-    status: 'disconnected',
-    statusText: '• Not connected',
-    timeAgo: 'No data',
-    canTest: false,
-  },
-  {
-    id: 3,
-    name: 'YouTube Channels',
-    code: 'YT',
-    subtitle: 'YouTube Data API v3',
-    status: 'disconnected',
-    statusText: '• Not connected',
-    timeAgo: 'No data',
-    canTest: false,
-  },
-  {
-    id: 4,
-    name: 'Google Analytics',
-    code: 'GA',
-    subtitle: 'Phase 1 integration',
-    status: 'connected',
-    statusText: '• Connected',
-    timeAgo: '18 min ago',
-    canTest: true,
-  },
-  {
-    id: 5,
-    name: 'Search Console',
-    code: 'SC',
-    subtitle: 'Phase 1 integration',
-    status: 'connected',
-    statusText: '• Connected',
-    timeAgo: '24 min ago',
-    canTest: true,
-  },
-  {
-    id: 6,
-    name: 'Google Business Profile',
-    code: 'GB',
-    subtitle: 'Phase 1 integration',
-    status: 'disconnected',
-    statusText: '• Not connected',
-    timeAgo: 'No data',
-    canTest: false,
-  },
-  {
-    id: 7,
-    name: 'LinkedIn Pages',
-    code: 'in',
-    subtitle: 'Phase 2 integration',
-    status: 'connected',
-    statusText: '• Connected',
-    timeAgo: 'Just now',
-    canTest: true,
-  },
-  {
-    id: 8,
-    name: 'X / Twitter',
-    code: 'X',
-    subtitle: 'Phase 2 integration',
-    status: 'connected',
-    statusText: '• Connected',
-    timeAgo: 'Just now',
-    canTest: true,
-  },
-];
+import { useWorkspace } from '../context/WorkspaceContext';
+
+function formatRelativeTime(iso) {
+  if (!iso) return 'No data';
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hr${hrs > 1 ? 's' : ''} ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days} day${days > 1 ? 's' : ''} ago`;
+}
+
 
 export default function IntegrationsPage() {
-  const [connections, setConnections] = useState(initialConnections);
+  const { selectedWorkspaceId } = useWorkspace();
+  const [connections, setConnections] = useState([]);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
   
   // Facebook State
   const [showModal, setShowModal] = useState(false);
+  const [showManualModal, setShowManualModal] = useState(false);
   const [fetchedPages, setFetchedPages] = useState([]);
   const [selectedPageId, setSelectedPageId] = useState('');
-  const [showManualModal, setShowManualModal] = useState(false);
+  const [manualPlatform, setManualPlatform] = useState('facebook');
   const [manualPageId, setManualPageId] = useState('');
   const [manualPageName, setManualPageName] = useState('');
   const [manualPageToken, setManualPageToken] = useState('');
@@ -105,7 +39,30 @@ export default function IntegrationsPage() {
   const [youtubeChannel, setYoutubeChannel] = useState(null);
   const [youtubeLoading, setYoutubeLoading] = useState(true);
 
+  const fetchIntegrationsStatus = async () => {
+    try {
+      const res = await axiosInstance.get('/integrations/status', { params: { workspace_id: selectedWorkspaceId } });
+      if (res.data.success) {
+        const formatted = res.data.data.map((item, idx) => ({
+          id: idx + 1,
+          key: item.key,
+          name: item.name,
+          code: item.code,
+          subtitle: `Phase ${item.phase} integration`,
+          status: item.status,
+          statusText: item.status === 'connected' ? `• Connected ${item.account_name ? `(${item.account_name})` : ''}` : '• Not connected',
+          timeAgo: formatRelativeTime(item.last_sync),
+          canTest: item.status === 'connected',
+        }));
+        setConnections(formatted);
+      }
+    } catch (err) {
+      console.error('Failed to load integration statuses:', err);
+    }
+  };
+
   useEffect(() => {
+    fetchIntegrationsStatus();
     fetchConnectedFacebookPages();
     fetchYouTubeStatus();
 
@@ -117,7 +74,7 @@ export default function IntegrationsPage() {
     } else if (searchParams.get('youtube') === 'error') {
       alert('Failed to connect YouTube channel. Please check your Google OAuth permissions.');
     }
-  }, []);
+  }, [selectedWorkspaceId]);
 
   const fetchYouTubeStatus = async () => {
     setYoutubeLoading(true);
@@ -166,7 +123,8 @@ export default function IntegrationsPage() {
 
   const fetchConnectedFacebookPages = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/v1/facebook/pages?workspace_id=1');
+      const wsId = selectedWorkspaceId || 1;
+      const res = await fetch(`http://localhost:8000/api/v1/facebook/pages?workspace_id=${wsId}`);
       const json = await res.json();
       if (json.success && json.data.length > 0) {
         setConnectedFbPages(json.data);
@@ -185,6 +143,8 @@ export default function IntegrationsPage() {
             return c;
           })
         );
+      } else {
+        setConnectedFbPages([]);
       }
     } catch (err) {
       console.error('Failed to fetch connected Facebook pages:', err);
@@ -285,8 +245,9 @@ export default function IntegrationsPage() {
     }
 
     if (item.name.includes('Facebook') || item.name.includes('Instagram')) {
+      const wsId = selectedWorkspaceId || 1;
       const popup = window.open(
-        'http://localhost:8000/api/v1/auth/facebook?workspace_id=1',
+        `http://localhost:8000/api/v1/auth/facebook?workspace_id=${wsId}`,
         'MetaOAuthPopup',
         'width=650,height=750,scrollbars=yes'
       );
@@ -320,14 +281,17 @@ export default function IntegrationsPage() {
     if (!pageToConnect) return;
     setConnectingPage(true);
     try {
+      const wsId = selectedWorkspaceId || 1;
+      const igId = pageToConnect.instagram_business_account?.id || null;
       const res = await fetch('http://localhost:8000/api/v1/facebook/connect-page', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify({
-          workspace_id: 1,
+          workspace_id: wsId,
           page_id: pageToConnect.id,
           page_name: pageToConnect.name,
           page_access_token: pageToConnect.access_token,
+          instagram_account_id: igId,
         }),
       });
       const json = await res.json();
@@ -348,34 +312,35 @@ export default function IntegrationsPage() {
   const handleManualTokenSubmit = async (e) => {
     e.preventDefault();
     if (!manualPageId || !manualPageToken) {
-      alert('Please enter both Page ID and Page Access Token.');
+      alert('Please enter both Account ID and Access Token.');
       return;
     }
     setConnectingPage(true);
     try {
-      const res = await fetch('http://localhost:8000/api/v1/facebook/connect-page', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({
-          workspace_id: 1,
-          page_id: manualPageId.trim(),
-          page_name: manualPageName.trim() || `Page (${manualPageId.trim()})`,
-          page_access_token: manualPageToken.trim(),
-        }),
-      });
-      const json = await res.json();
-      if (res.ok && json.success) {
+      const endpoint = manualPlatform === 'instagram' ? '/instagram/connect' : '/facebook/connect-page';
+      const bodyPayload = manualPlatform === 'instagram' ? {
+        workspace_id: selectedWorkspaceId || 1,
+        instagram_account_id: manualPageId.trim(),
+        account_name: manualPageName.trim(),
+        access_token: manualPageToken.trim(),
+      } : {
+        workspace_id: selectedWorkspaceId || 1,
+        page_id: manualPageId.trim(),
+        page_name: manualPageName.trim() || `Page (${manualPageId.trim()})`,
+        page_access_token: manualPageToken.trim(),
+      };
+
+      const res = await axiosInstance.post(endpoint, bodyPayload);
+      if (res.data.success) {
         setShowManualModal(false);
-        setManualPageId('');
-        setManualPageName('');
-        setManualPageToken('');
-        setSyncMsg(`Facebook Page Token successfully saved!`);
+        setSyncMsg(`${manualPlatform === 'instagram' ? 'Instagram' : 'Facebook'} account connected successfully!`);
+        fetchIntegrationsStatus();
         fetchConnectedFacebookPages();
       } else {
-        alert(json.message || 'Failed to connect page');
+        alert(res.data.message || 'Failed to connect');
       }
     } catch (err) {
-      alert('Network error saving page token.');
+      alert(err.response?.data?.message || 'Error connecting account to backend.');
     } finally {
       setConnectingPage(false);
     }
@@ -689,16 +654,25 @@ export default function IntegrationsPage() {
             </div>
             <form onSubmit={handleManualTokenSubmit}>
               <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Facebook Page ID *</label>
-                <input type="text" className="input" placeholder="e.g. 1005544332211" value={manualPageId} onChange={(e) => setManualPageId(e.target.value)} required />
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Platform</label>
+                <select className="select" value={manualPlatform} onChange={(e) => setManualPlatform(e.target.value)}>
+                  <option value="facebook">Facebook Page</option>
+                  <option value="instagram">Instagram Business Account</option>
+                </select>
               </div>
               <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Facebook Page Name</label>
-                <input type="text" className="input" placeholder="e.g. My Business Page" value={manualPageName} onChange={(e) => setManualPageName(e.target.value)} />
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                  {manualPlatform === 'instagram' ? 'Instagram Account ID *' : 'Facebook Page ID *'}
+                </label>
+                <input type="text" className="input" placeholder={manualPlatform === 'instagram' ? 'e.g. 17841444164917900' : 'e.g. 1005544332211'} value={manualPageId} onChange={(e) => setManualPageId(e.target.value)} required />
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Account / Page Name</label>
+                <input type="text" className="input" placeholder="e.g. My Business Handle / Page" value={manualPageName} onChange={(e) => setManualPageName(e.target.value)} />
               </div>
               <div style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Page Access Token *</label>
-                <textarea className="textarea" rows={3} placeholder="Paste Page Access Token..." value={manualPageToken} onChange={(e) => setManualPageToken(e.target.value)} required />
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Access Token *</label>
+                <textarea className="textarea" rows={3} placeholder="Paste Access Token..." value={manualPageToken} onChange={(e) => setManualPageToken(e.target.value)} required />
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setShowManualModal(false)}>Cancel</button>

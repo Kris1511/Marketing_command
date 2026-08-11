@@ -51,18 +51,18 @@ export default function ReportsPage() {
   }, [selectedWorkspaceId, period]);
 
   const chartData = {
-    labels: analytics?.trend?.labels || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    labels: analytics?.trend?.labels || [],
     datasets: [
       {
         label: 'Impressions / Reach',
-        data: analytics?.trend?.reach || [14200, 19500, 15800, 22400, 28100, 24500, 31200],
+        data: analytics?.trend?.reach || [],
         borderColor: '#1877f2',
         backgroundColor: '#1877f2',
         tension: 0.35,
       },
       {
         label: 'Post Engagements',
-        data: analytics?.trend?.engagement || [1200, 1850, 1400, 2100, 2600, 2200, 2900],
+        data: analytics?.trend?.engagement || [],
         borderColor: '#10b981',
         backgroundColor: '#10b981',
         tension: 0.35,
@@ -131,9 +131,9 @@ export default function ReportsPage() {
             <span className="metric-label">Page Impressions</span>
             <div className="metric-icon"><Eye size={20} color="#1877f2" /></div>
           </div>
-          <div className="metric-value">{analytics?.impressions ? analytics.impressions.toLocaleString() : '182,961'}</div>
+          <div className="metric-value">{analytics?.impressions ? analytics.impressions.toLocaleString() : 0}</div>
           <div className="metric-foot">
-            <span className="trend-up">+14.2%</span> vs last period
+            Real Meta Graph API Data
           </div>
         </div>
 
@@ -142,9 +142,9 @@ export default function ReportsPage() {
             <span className="metric-label">Post Engagements</span>
             <div className="metric-icon"><Heart size={20} color="#10b981" /></div>
           </div>
-          <div className="metric-value">{analytics?.engagement ? analytics.engagement.toLocaleString() : '14,200'}</div>
+          <div className="metric-value">{analytics?.engagement ? analytics.engagement.toLocaleString() : 0}</div>
           <div className="metric-foot">
-            <span className="trend-up">+8.6%</span> vs last period
+            Real Meta Graph API Data
           </div>
         </div>
 
@@ -153,9 +153,9 @@ export default function ReportsPage() {
             <span className="metric-label">Total Page Followers</span>
             <div className="metric-icon"><UserPlus size={20} color="#8b5cf6" /></div>
           </div>
-          <div className="metric-value">{analytics?.followers ? analytics.followers.toLocaleString() : '45,200'}</div>
+          <div className="metric-value">{analytics?.followers ? analytics.followers.toLocaleString() : 0}</div>
           <div className="metric-foot">
-            <span className="trend-up">+12.0%</span> fan growth
+            Real Meta Graph API Data
           </div>
         </div>
       </div>
