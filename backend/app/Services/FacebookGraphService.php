@@ -740,192 +740,268 @@ class FacebookGraphService
      * Logs the RAW Meta API response before any processing.
      * Does NOT swallow or convert permission/API errors into 0.
      */
-    public function getFacebookFeedPostMetrics(string $pageId, string $accessToken): array
+    public function getFacebookFeedPostMetrics(string $pageId, string $accessToken, int $days = 30, bool $forceRefresh = false): array
     {
-        $publishedPostsEndpoint = "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/published_posts";
+        $cacheKey = "fb_feed_metrics_{$pageId}_{$days}";
+        if ($forceRefresh) {
+            \Illuminate\Support\Facades\Cache::forget($cacheKey);
+        }
+        return \Illuminate\Support\Facades\Cache::remember($cacheKey, 300, function () use ($pageId, $accessToken, $days) {
+            $publishedPostsEndpoint = "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/published_posts";
+            $since = strtotime("-{$days} days midnight UTC");
+            $until = time();
 
-        \Illuminate\Support\Facades\Log::info("[FACEBOOK API CALL] getFacebookFeedPostMetrics request", [
-            'page_id'     => $pageId,
-            'endpoint'    => $publishedPostsEndpoint,
-            'api_version' => $this->apiVersion,
-        ]);
-
-        $response = $this->client()->timeout(10)->get($publishedPostsEndpoint, [
-            'fields'       => 'id,message,created_time,shares,likes.summary(true),comments.summary(true)',
-            'limit'        => 25,
-            'access_token' => $accessToken,
-        ]);
-
-        // LOG RAW META RESPONSE BEFORE ANY PROCESSING
-        \Illuminate\Support\Facades\Log::info("[FACEBOOK API RAW RESPONSE] getFacebookFeedPostMetrics", [
-            'page_id'      => $pageId,
-            'status'       => $response->status(),
-            'raw_response' => $response->json() ?? $response->body(),
-        ]);
-
-        if (!$response->successful()) {
-            $errorObj = $response->json('error') ?? [];
-            $code     = $errorObj['code'] ?? $response->status();
-            $message  = $errorObj['message'] ?? 'Meta API error';
-
-            \Illuminate\Support\Facades\Log::warning("[FACEBOOK API ERROR] getFacebookFeedPostMetrics failed", [
-                'page_id'    => $pageId,
-                'error_code' => $code,
-                'message'    => $message,
+            \Illuminate\Support\Facades\Log::info("[FACEBOOK API CALL] getFacebookFeedPostMetrics request", [
+                'page_id'     => $pageId,
+                'endpoint'    => $publishedPostsEndpoint,
+                'api_version' => $this->apiVersion,
+                'days'        => $days,
+                'since'       => date('Y-m-d H:i:s', $since),
+                'until'       => date('Y-m-d H:i:s', $until),
             ]);
 
-            return [
-                'success'            => false,
-                'error_code'         => $code,
-                'error_msg'          => $message,
-                'views'              => null,
-                'likes'              => null,
-                'comments'           => null,
-                'shares'             => null,
-                'views_supported'    => false,
-                'likes_supported'    => false,
-                'comments_supported' => false,
-                'shares_supported'   => false,
-            ];
-        }
-
-        $postsData = $response->json('data') ?? [];
-        $totalLikes    = 0;
-        $totalComments = 0;
-        $totalShares   = 0;
-        $totalViews    = 0;
-        $viewsSupported = false;
-
-        foreach ($postsData as $p) {
-            $totalLikes    += (int)($p['likes']['summary']['total_count'] ?? 0);
-            $totalComments += (int)($p['comments']['summary']['total_count'] ?? 0);
-            $totalShares   += (int)($p['shares']['count'] ?? 0);
-        }
-
-        try {
-            $pageViewsRes = $this->client()->timeout(5)->get("{$this->baseUrl}/{$this->apiVersion}/{$pageId}/insights", [
-                'metric'       => 'page_posts_impressions_organic',
-                'period'       => 'day',
+            $response = $this->client()->timeout(10)->get($publishedPostsEndpoint, [
+                'fields'       => 'id,message,created_time,shares,likes.summary(true),comments.summary(true)',
+                'limit'        => 25,
                 'access_token' => $accessToken,
             ]);
-            if ($pageViewsRes->successful() && !empty($pageViewsRes->json('data'))) {
-                $viewsSupported = true;
-                $totalViews = 0;
-                foreach ($pageViewsRes->json('data.0.values') ?? [] as $v) {
-                    $totalViews += (int)($v['value'] ?? 0);
-                }
-            } else {
-                $pvRes = $this->client()->timeout(5)->get("{$this->baseUrl}/{$this->apiVersion}/{$pageId}/insights", [
-                    'metric'       => 'page_views_total',
+
+            // LOG RAW META RESPONSE BEFORE ANY PROCESSING
+            \Illuminate\Support\Facades\Log::info("[FACEBOOK API RAW RESPONSE] getFacebookFeedPostMetrics", [
+                'page_id'      => $pageId,
+                'status'       => $response->status(),
+                'raw_response' => $response->json() ?? $response->body(),
+            ]);
+
+            if (!$response->successful()) {
+                $errorObj = $response->json('error') ?? [];
+                $code     = $errorObj['code'] ?? $response->status();
+                $message  = $errorObj['message'] ?? 'Meta API error';
+
+                \Illuminate\Support\Facades\Log::warning("[FACEBOOK API ERROR] getFacebookFeedPostMetrics failed", [
+                    'page_id'    => $pageId,
+                    'error_code' => $code,
+                    'message'    => $message,
+                ]);
+
+                return [
+                    'success'            => false,
+                    'error_code'         => $code,
+                    'error_msg'          => $message,
+                    'views'              => null,
+                    'likes'              => null,
+                    'comments'           => null,
+                    'shares'             => null,
+                    'views_supported'    => false,
+                    'likes_supported'    => false,
+                    'comments_supported' => false,
+                    'shares_supported'   => false,
+                ];
+            }
+
+            $postsData = $response->json('data') ?? [];
+            $totalLikes    = 0;
+            $totalComments = 0;
+            $totalShares   = 0;
+            $totalViews    = 0;
+            $viewsSupported = false;
+
+            foreach ($postsData as $p) {
+                $totalLikes    += (int)($p['likes']['summary']['total_count'] ?? 0);
+                $totalComments += (int)($p['comments']['summary']['total_count'] ?? 0);
+                $totalShares   += (int)($p['shares']['count'] ?? 0);
+            }
+
+            try {
+                $insightsEndpoint = "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/insights";
+                $requestedMetric  = 'page_posts_impressions_organic';
+
+                $pageViewsRes = $this->client()->timeout(5)->get($insightsEndpoint, [
+                    'metric'       => $requestedMetric,
                     'period'       => 'day',
+                    'since'        => $since,
+                    'until'        => $until,
                     'access_token' => $accessToken,
                 ]);
-                if ($pvRes->successful()) {
+
+                \Illuminate\Support\Facades\Log::info("[FACEBOOK VIEWS API RESPONSE]", [
+                    'page_id'          => $pageId,
+                    'endpoint'         => $insightsEndpoint,
+                    'requested_metric' => $requestedMetric,
+                    'since'            => date('Y-m-d H:i:s', $since),
+                    'until'            => date('Y-m-d H:i:s', $until),
+                    'status'           => $pageViewsRes->status(),
+                    'raw_response'     => $pageViewsRes->json(),
+                ]);
+
+                if ($pageViewsRes->successful() && !empty($pageViewsRes->json('data'))) {
                     $viewsSupported = true;
-                    foreach ($pvRes->json('data.0.values') ?? [] as $v) {
+                    $totalViews = 0;
+                    foreach ($pageViewsRes->json('data.0.values') ?? [] as $v) {
                         $totalViews += (int)($v['value'] ?? 0);
                     }
+                } else {
+                    $requestedMetric = 'page_views_total';
+                    $pvRes = $this->client()->timeout(5)->get($insightsEndpoint, [
+                        'metric'       => $requestedMetric,
+                        'period'       => 'day',
+                        'since'        => $since,
+                        'until'        => $until,
+                        'access_token' => $accessToken,
+                    ]);
+                    if ($pvRes->successful() && !empty($pvRes->json('data'))) {
+                        $viewsSupported = true;
+                        $totalViews = 0;
+                        foreach ($pvRes->json('data.0.values') ?? [] as $v) {
+                            $totalViews += (int)($v['value'] ?? 0);
+                        }
+                    }
                 }
-            }
-        } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::warning("[FACEBOOK VIEWS API ERROR] " . $e->getMessage());
-        }
 
-        return [
-            'success'            => true,
-            'views'              => $viewsSupported ? $totalViews : null,
-            'likes'              => $totalLikes,
-            'comments'           => $totalComments,
-            'shares'             => $totalShares,
-            'views_supported'    => $viewsSupported,
-            'likes_supported'    => true,
-            'comments_supported' => true,
-            'shares_supported'   => true,
-        ];
+                \Illuminate\Support\Facades\Log::info("[FACEBOOK VIEWS FINAL CALCULATED]", [
+                    'page_id'          => $pageId,
+                    'metric_used'      => $requestedMetric,
+                    'calculated_views' => $totalViews,
+                    'views_supported'  => $viewsSupported,
+                ]);
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::warning("[FACEBOOK VIEWS API ERROR] " . $e->getMessage());
+            }
+
+            return [
+                'success'            => true,
+                'views'              => $viewsSupported ? $totalViews : null,
+                'likes'              => $totalLikes,
+                'comments'           => $totalComments,
+                'shares'             => $totalShares,
+                'views_supported'    => $viewsSupported,
+                'likes_supported'    => true,
+                'comments_supported' => true,
+                'shares_supported'   => true,
+            ];
+        });
     }
 
     /**
      * Fetch Instagram Media List with real likes, comments, and media insights.
      */
-    public function getInstagramMediaList(string $accessToken, int $limit = 25): array
+    public function getInstagramMediaList(string $accessToken, int $limit = 50, bool $forceRefresh = false): array
     {
-        $isIgToken = str_starts_with($accessToken, 'IGAA');
-        $baseUrl   = $isIgToken ? 'https://graph.instagram.com/v23.0' : "{$this->baseUrl}/{$this->apiVersion}";
-        $url       = "{$baseUrl}/me/media";
-
-        $response = $this->client()->get($url, [
-            'fields'       => 'id,caption,media_type,media_url,permalink,timestamp,like_count,comments_count',
-            'limit'        => $limit,
-            'access_token' => $accessToken,
-        ]);
-
-        if (!$response->successful()) {
-            \Illuminate\Support\Facades\Log::warning("[Instagram API Error] getInstagramMediaList", [
-                'status' => $response->status(),
-                'error'  => $response->json('error') ?? $response->body(),
-            ]);
-            return [];
+        $cacheKey = "ig_media_list_" . md5($accessToken) . "_{$limit}";
+        if ($forceRefresh) {
+            \Illuminate\Support\Facades\Cache::forget($cacheKey);
         }
+        return \Illuminate\Support\Facades\Cache::remember($cacheKey, 300, function () use ($accessToken, $limit) {
+            $isIgToken = str_starts_with($accessToken, 'IGAA');
+            $baseUrl   = $isIgToken ? 'https://graph.instagram.com/v23.0' : "{$this->baseUrl}/{$this->apiVersion}";
+            $url       = "{$baseUrl}/me/media";
 
-        $mediaItems = [];
-        foreach ($response->json('data') ?? [] as $item) {
-            $mId   = $item['id'];
-            $likes = (int)($item['like_count'] ?? 0);
-            $comments = (int)($item['comments_count'] ?? 0);
-            $views = 0;
-            $reach = 0;
-            $shares = 0;
-            $saved  = 0;
-            $interactions = $likes + $comments;
-
-            // Fetch Media Insights for shares, views, saved, reach & interactions
             try {
-                $insightsRes = $this->client()->timeout(3)->get("{$baseUrl}/{$mId}/insights", [
-                    'metric'       => 'shares,views,saved,reach,total_interactions',
+                $response = $this->client()->timeout(15)->get($url, [
+                    'fields'       => 'id,caption,media_type,media_url,permalink,timestamp,like_count,comments_count',
+                    'limit'        => $limit,
                     'access_token' => $accessToken,
                 ]);
-                if ($insightsRes->successful()) {
-                    foreach ($insightsRes->json('data') ?? [] as $metric) {
-                        $n = $metric['name'] ?? '';
-                        $v = (int)($metric['values'][0]['value'] ?? 0);
-                        if ($n === 'reach') $reach = $v;
-                        if ($n === 'shares') $shares = $v;
-                        if ($n === 'views') $views = $v;
-                        if ($n === 'saved') $saved = $v;
-                        if ($n === 'total_interactions') $interactions = max($interactions, $v);
-                    }
+
+                if (!$response->successful()) {
+                    \Illuminate\Support\Facades\Log::warning("[Instagram API Error] getInstagramMediaList", [
+                        'status' => $response->status(),
+                        'error'  => $response->json('error') ?? $response->body(),
+                    ]);
+                    return [];
                 }
-            } catch (\Exception $e) {}
 
-            \Illuminate\Support\Facades\Log::info("[Instagram Trace] Media ID {$mId}", [
-                'endpoint'      => "{$baseUrl}/{$mId}/insights",
-                'like_count'    => $likes,
-                'comments_count'=> $comments,
-                'shares'        => $shares,
-                'views'         => $views,
-                'saved'         => $saved,
-                'reach'         => $reach,
-                'interactions'  => $interactions,
-            ]);
+                $items = $response->json('data') ?? [];
+                if (empty($items)) {
+                    return [];
+                }
 
-            $mediaItems[] = [
-                'id'                 => $mId,
-                'caption'            => $item['caption'] ?? '',
-                'media_type'         => $item['media_type'] ?? 'IMAGE',
-                'media_url'          => $item['media_url'] ?? '',
-                'permalink'          => $item['permalink'] ?? '',
-                'timestamp'          => $item['timestamp'] ?? null,
-                'like_count'         => $likes,
-                'comments_count'     => $comments,
-                'shares_count'       => $shares,
-                'views_count'        => $views,
-                'saved_count'        => $saved,
-                'reach'              => $reach,
-                'total_interactions' => $interactions,
-            ];
-        }
+                // Concurrently fetch insights for all media items using Http::pool()
+                // Metric MUST NOT include 'impressions' for image posts in v23.0 to prevent API errors.
+                $poolResponses = \Illuminate\Support\Facades\Http::pool(function (\Illuminate\Http\Client\Pool $pool) use ($items, $baseUrl, $accessToken) {
+                    return array_map(function ($item) use ($pool, $baseUrl, $accessToken) {
+                        return $pool->as($item['id'])->withoutVerifying()->timeout(10)->get("{$baseUrl}/{$item['id']}/insights", [
+                            'metric'       => 'shares,views,saved,reach,total_interactions',
+                            'access_token' => $accessToken,
+                        ]);
+                    }, $items);
+                });
 
-        return $mediaItems;
+                $mediaItems = [];
+                $totalViews = 0;
+                $totalShares = 0;
+
+                foreach ($items as $item) {
+                    $mId   = $item['id'];
+                    $likes = (int)($item['like_count'] ?? 0);
+                    $comments = (int)($item['comments_count'] ?? 0);
+                    $views = 0;
+                    $reach = 0;
+                    $shares = 0;
+                    $saved  = 0;
+                    $interactions = $likes + $comments;
+
+                    $insightsRes = $poolResponses[$mId] ?? null;
+                    if ($insightsRes && $insightsRes instanceof \Illuminate\Http\Client\Response && $insightsRes->successful()) {
+                        foreach ($insightsRes->json('data') ?? [] as $metric) {
+                            $n = $metric['name'] ?? '';
+                            $v = (int)($metric['values'][0]['value'] ?? 0);
+                            if ($n === 'reach') $reach = $v;
+                            if ($n === 'shares' || str_contains($n, 'share')) $shares = max($shares, $v);
+                            if ($n === 'views') $views = $v;
+                            if ($n === 'saved') $saved = $v;
+                            if ($n === 'total_interactions') $interactions = max($interactions, $v);
+                        }
+                    } else {
+                        $errMessage = 'Unknown error';
+                        $status = 'FAILED';
+                        if ($insightsRes instanceof \Illuminate\Http\Client\Response) {
+                            $errMessage = $insightsRes->json('error.message') ?? $insightsRes->body();
+                            $status = $insightsRes->status();
+                        } elseif ($insightsRes instanceof \Throwable) {
+                            $errMessage = $insightsRes->getMessage();
+                            $status = 'EXCEPTION/TIMEOUT';
+                        }
+                        \Illuminate\Support\Facades\Log::warning("[Instagram Media Insight Failed]", [
+                            'media_id'   => $mId,
+                            'media_type' => $item['media_type'] ?? 'IMAGE',
+                            'status'     => $status,
+                            'error'      => $errMessage,
+                        ]);
+                    }
+
+                    $totalViews += $views;
+                    $totalShares += $shares;
+
+                    $mediaItems[] = [
+                        'id'                 => $mId,
+                        'caption'            => $item['caption'] ?? '',
+                        'media_type'         => $item['media_type'] ?? 'IMAGE',
+                        'media_url'          => $item['media_url'] ?? '',
+                        'permalink'          => $item['permalink'] ?? '',
+                        'timestamp'          => $item['timestamp'] ?? null,
+                        'like_count'         => $likes,
+                        'comments_count'     => $comments,
+                        'shares_count'       => $shares,
+                        'views_count'        => $views,
+                        'saved_count'        => $saved,
+                        'reach'              => $reach,
+                        'total_interactions' => $interactions,
+                    ];
+                }
+
+                \Illuminate\Support\Facades\Log::info("[Instagram Media Metrics Calculated]", [
+                    'items_count'  => count($mediaItems),
+                    'total_views'  => $totalViews,
+                    'total_shares' => $totalShares,
+                ]);
+
+                return $mediaItems;
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::warning("[Instagram API Exception] getInstagramMediaList: " . $e->getMessage());
+                return [];
+            }
+        });
     }
 
     /**

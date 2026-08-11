@@ -61,12 +61,15 @@ export default function DashboardPage() {
   const [customEndDate, setCustomEndDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [error, setError] = useState('');
 
-  const fetchAll = useCallback(async () => {
+  const fetchAll = useCallback(async (forceRefresh = false) => {
     if (!selectedWorkspaceId) return;
     setLoading(true);
     setError('');
     try {
       const overviewParams = { workspace_id: selectedWorkspaceId, days: trendDays === 'custom' ? 30 : trendDays };
+      if (forceRefresh === true) {
+        overviewParams.force_refresh = 1;
+      }
       const trendParams = { workspace_id: selectedWorkspaceId };
 
       if (trendDays === 'custom') {
@@ -196,7 +199,7 @@ export default function DashboardPage() {
           <button
             type="button"
             className="btn btn-outline-white"
-            onClick={fetchAll}
+            onClick={() => fetchAll(true)}
             disabled={loading}
             style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
           >
@@ -348,7 +351,7 @@ export default function DashboardPage() {
                 <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', padding: '8px 14px', display: 'flex', gap: '14px', alignItems: 'center' }}>
                   <span style={{ fontWeight: '700', fontSize: '12px', color: '#1d4ed8' }}>FB</span>
                   <div style={{ textAlign: 'center', minWidth: '45px' }}>
-                    <span style={{ fontSize: '10px', color: '#64748b', fontWeight: '600', display: 'block' }} title="Organic Post Impressions">IMPRESSIONS</span>
+                    <span style={{ fontSize: '10px', color: '#64748b', fontWeight: '600', display: 'block' }}>VIEWS</span>
                     {overview?.facebook_metrics?.views_supported === false ? (
                       <span style={{ fontSize: '10px', color: '#94a3b8', fontStyle: 'italic' }}>N/A (Req. Perm)</span>
                     ) : (

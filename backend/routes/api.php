@@ -22,9 +22,52 @@ use App\Http\Controllers\YouTubeController;
 
 /*
 |--------------------------------------------------------------------------
+| Global Helper Functions for Workspace Resolution & Notifications
+|--------------------------------------------------------------------------
+*/
+if (!function_exists('getOrCreateWorkspaceId')) {
+    function getOrCreateWorkspaceId($workspaceId = null): int {
+        if ($workspaceId && is_numeric($workspaceId)) {
+            $ws = \App\Models\Workspace::find((int)$workspaceId);
+            if ($ws) return $ws->id;
+        }
+        $first = \App\Models\Workspace::first();
+        if ($first) return $first->id;
+        $created = \App\Models\Workspace::create([
+            'name'   => 'Default Workspace',
+            'slug'   => 'default-workspace',
+            'status' => 'active',
+        ]);
+        return $created->id;
+    }
+}
+
+if (!function_exists('createNotification')) {
+    function createNotification($workspaceId, string $type, string $title, string $message, ?string $channel = null): void {
+        try {
+            $wsId = getOrCreateWorkspaceId($workspaceId);
+            \Illuminate\Support\Facades\DB::table('notifications')->insert([
+                'workspace_id' => $wsId,
+                'type'         => $type,
+                'title'        => $title,
+                'message'      => $message,
+                'is_read'      => false,
+                'created_at'   => now(),
+                'updated_at'   => now(),
+            ]);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning("[createNotification error] " . $e->getMessage());
+        }
+    }
+}
+
+/*
+|--------------------------------------------------------------------------
 | API Routes - Digital Marketing Dashboard (Connected to MySQL)
 |--------------------------------------------------------------------------
 */
+
+// YouTube Data API v3 Routes (Direct /api/youtube/...)
 
 // YouTube Data API v3 Routes (Direct /api/youtube/...)
 Route::get('/youtube/connect', [YouTubeController::class, 'connect']);
@@ -513,8 +556,9 @@ Route::prefix('v1')->group(function () {
 
         // ── Dashboard Overview — Real Data ────────────────────────────────────────
         Route::get('/dashboard/overview', function (Request $request) {
-            $workspaceId = $request->query('workspace_id', null);
-            $days        = (int)$request->query('days', 30);
+            $workspaceId  = $request->query('workspace_id', null);
+            $days         = (int)$request->query('days', 30);
+            $forceRefresh = $request->boolean('force_refresh') || $request->boolean('refresh') || $request->has('force_refresh');
             if (!$workspaceId) {
                 $first = Workspace::first();
                 $workspaceId = $first ? $first->id : 1;
@@ -617,6 +661,9 @@ Route::prefix('v1')->group(function () {
             $igInteg = \App\Models\Integration::where('workspace_id', $workspaceId)
                 ->where('platform', 'instagram')
                 ->where('is_connected', true)
+                ->first()
+                ?? \App\Models\Integration::where('platform', 'instagram')
+                ->where('is_connected', true)
                 ->first();
             
             $igAccountInsights = ['reach' => 0, 'accounts_engaged' => 0, 'total_interactions' => 0, 'likes' => 0, 'comments' => 0];
@@ -626,7 +673,7 @@ Route::prefix('v1')->group(function () {
                 try {
                     $graphService = $graphService ?? new FacebookGraphService();
                     $igAccountInsights = $graphService->getInstagramAccountInsights($igInteg->refresh_token, $days);
-                    $igMediaItems = $graphService->getInstagramMediaList($igInteg->refresh_token, 25);
+                    $igMediaItems = $graphService->getInstagramMediaList($igInteg->refresh_token, 50, $forceRefresh);
                 } catch (\Exception $e) {
                     \Illuminate\Support\Facades\Log::warning("Instagram Overview fetch error: " . $e->getMessage());
                 }
@@ -691,6 +738,19 @@ Route::prefix('v1')->group(function () {
             $otherIntegrations = \App\Models\Integration::where('workspace_id', $workspaceId)
                 ->where('is_connected', true)
                 ->get();
+            foreach ($otherIntegrations as $oi) {
+                $pName = ucfirst($oi->platform);
+                if (strtolower($oi->platform) === 'twitter') $pName = 'X / Twitter';
+                if (strtolower($oi->platform) === 'facebook') $pName = 'Facebook';
+                if (strtolower($oi->platform) === 'instagram') $pName = 'Instagram';
+                $connectedChannelsList[] = [
+                    'name'      => $pName,
+                    'code'      => strtoupper(substr($oi->platform, 0, 2)),
+                    'status'    => 'connected',
+                    'followers' => $oi->followers_count ?? 0,
+                    'last_sync' => $oi->updated_at ? $oi->updated_at->toIso8601String() : null,
+                ];
+            }
             // Facebook Feed Post Metrics (direct Meta Graph API query)
             $hasConnectedFb = ($fbPage && !empty($fbPage->page_access_token));
             $fbFeedMetrics  = [
@@ -708,7 +768,7 @@ Route::prefix('v1')->group(function () {
             if ($hasConnectedFb) {
                 try {
                     $graphService = $graphService ?? new FacebookGraphService();
-                    $fbFeedMetrics = $graphService->getFacebookFeedPostMetrics($fbPage->page_id, $fbPage->page_access_token);
+                    $fbFeedMetrics = $graphService->getFacebookFeedPostMetrics($fbPage->page_id, $fbPage->page_access_token, $days, $forceRefresh);
                 } catch (\Exception $e) {
                     \Illuminate\Support\Facades\Log::warning('[FACEBOOK METRICS] getFacebookFeedPostMetrics exception: ' . $e->getMessage());
                 }
@@ -895,6 +955,9 @@ Route::prefix('v1')->group(function () {
             $igInteg = \App\Models\Integration::where('workspace_id', $workspaceId)
                 ->where('platform', 'instagram')
                 ->where('is_connected', true)
+                ->first()
+                ?? \App\Models\Integration::where('platform', 'instagram')
+                ->where('is_connected', true)
                 ->first();
 
             if ($igInteg && !empty($igInteg->refresh_token)) {
@@ -1018,16 +1081,36 @@ Route::prefix('v1')->group(function () {
             $workspace = Workspace::findOrFail($id);
 
             $leadsCount  = Lead::where('workspace_id', $id)->count();
-            $fbPages     = FacebookPage::where('workspace_id', $id)->get();
-            $fbConnected = $fbPages->count();
-            $ytConnected = 0;
+            $fbPages = FacebookPage::where('workspace_id', $id)->get();
+            
+            $connectedPlatforms = [];
+            if ($fbPages->count() > 0) {
+                $connectedPlatforms['facebook'] = true;
+            }
             try {
                 if (\Illuminate\Support\Facades\Schema::hasTable('youtube_connections')) {
-                    $ytConnected = \App\Models\YouTubeConnection::count() > 0 ? 1 : 0;
+                    if (\App\Models\YouTubeConnection::where('is_connected', true)->exists()) {
+                        $connectedPlatforms['youtube'] = true;
+                    }
                 }
             } catch (\Throwable $e) {}
-            $otherConns  = \App\Models\Integration::where('workspace_id', $id)->where('is_connected', true)->count();
-            $channelCount = $fbConnected + $ytConnected + $otherConns;
+
+            $otherConns = \App\Models\Integration::where('workspace_id', $id)
+                ->where('is_connected', true)
+                ->get();
+            foreach ($otherConns as $integ) {
+                $p = strtolower($integ->platform);
+                $connectedPlatforms[$p] = true;
+            }
+
+            if (!isset($connectedPlatforms['instagram'])) {
+                $igFallback = \App\Models\Integration::where('platform', 'instagram')->where('is_connected', true)->first();
+                if ($igFallback) {
+                    $connectedPlatforms['instagram'] = true;
+                }
+            }
+
+            $channelCount = count($connectedPlatforms);
 
             $reach = $fbPages->sum('followers_count');
 
@@ -1652,10 +1735,12 @@ Route::prefix('v1')->group(function () {
             $targetPlatforms = ['Facebook'];
         }
 
-        $requiresFacebook = in_array('Facebook', $targetPlatforms) || in_array('Instagram', $targetPlatforms);
-        $requiresYouTube  = in_array('YouTube', $targetPlatforms);
+        $requiresFacebook  = in_array('Facebook', $targetPlatforms);
+        $requiresInstagram = in_array('Instagram', $targetPlatforms);
+        $requiresYouTube   = in_array('YouTube', $targetPlatforms);
+        $requiresTwitter   = in_array('Twitter', $targetPlatforms) || in_array('X / Twitter', $targetPlatforms) || in_array('X', $targetPlatforms);
 
-        if (!$requiresFacebook && !$requiresYouTube) {
+        if (!$requiresFacebook && !$requiresInstagram && !$requiresYouTube && !$requiresTwitter) {
             return response()->json([
                 'success' => false,
                 'message' => 'Please select at least one target platform (e.g. YouTube, Facebook, Instagram, or X/Twitter).',

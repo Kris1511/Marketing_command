@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { CheckCircle2, AlertCircle, Layers, X, ShieldCheck, Share2, Key, RefreshCw, Trash2, Video } from 'lucide-react';
 import axiosInstance from '../api/axiosInstance';
+import { useWorkspace } from '../context/WorkspaceContext';
 
 const initialConnections = [
   {
@@ -87,7 +88,7 @@ const initialConnections = [
 
 export default function IntegrationsPage() {
   const { selectedWorkspaceId } = useWorkspace();
-  const [connections, setConnections] = useState([]);
+  const [connections, setConnections] = useState(initialConnections);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
   
@@ -107,6 +108,43 @@ export default function IntegrationsPage() {
   const [youtubeChannel, setYoutubeChannel] = useState(null);
   const [youtubeLoading, setYoutubeLoading] = useState(true);
 
+  // X / Twitter State
+  const [twitterConnection, setTwitterConnection] = useState(null);
+  const [twitterLoading, setTwitterLoading] = useState(true);
+
+  const fetchIntegrationsStatus = async () => {
+    try {
+      const wsId = selectedWorkspaceId || 1;
+      const res = await axiosInstance.get(`/integrations/status?workspace_id=${wsId}`);
+      if (res.data?.success && Array.isArray(res.data?.data)) {
+        const statusMap = {};
+        res.data.data.forEach(item => {
+          statusMap[item.name] = item;
+          if (item.key) statusMap[item.key] = item;
+        });
+
+        setConnections((prev) => {
+          const list = prev && prev.length > 0 ? prev : initialConnections;
+          return list.map((c) => {
+            const match = statusMap[c.name] || statusMap[c.key] || statusMap[c.code];
+            if (match && match.status === 'connected') {
+              return {
+                ...c,
+                status: 'connected',
+                statusText: `• Connected (${match.account_name || 'Active'})`,
+                timeAgo: match.last_sync ? new Date(match.last_sync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Live API',
+                canTest: true,
+              };
+            }
+            return c;
+          });
+        });
+      }
+    } catch (err) {
+      console.error('Failed to fetch integrations status:', err);
+    }
+  };
+
   useEffect(() => {
     fetchIntegrationsStatus();
     fetchConnectedFacebookPages();
@@ -121,7 +159,7 @@ export default function IntegrationsPage() {
     } else if (searchParams.get('youtube') === 'error') {
       alert('Failed to connect YouTube channel. Please check your Google OAuth permissions.');
     }
-  }, []);
+  }, [selectedWorkspaceId]);
 
   const fetchYouTubeStatus = async () => {
     setYoutubeLoading(true);
