@@ -25,12 +25,12 @@ export default function PublishingPage() {
     X: false,
   });
 
-  const [postTitle, setPostTitle] = useState('August Wellness Offer');
-  const [postCaption, setPostCaption] = useState('Take a healthy break this August. Join our guided wellness programme and begin your journey with a free consultation.');
-  const [postHashtags, setPostHashtags] = useState('#Wellness #HealthyLiving #AaraWellness');
-  const [postCTA, setPostCTA] = useState('Learn More');
-  const [publishType, setPublishType] = useState('schedule'); // 'schedule', 'now', 'draft'
-  const [scheduleAt, setScheduleAt] = useState('2026-08-06T10:30');
+  const [postTitle, setPostTitle] = useState('');
+  const [postCaption, setPostCaption] = useState('');
+  const [postHashtags, setPostHashtags] = useState('');
+  const [postCTA, setPostCTA] = useState('');
+  const [publishType, setPublishType] = useState('now'); // 'schedule', 'now', 'draft'
+  const [scheduleAt, setScheduleAt] = useState(() => new Date(Date.now() + 3600000).toISOString().slice(0, 16));
 
   // Media states
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -142,12 +142,18 @@ export default function PublishingPage() {
       return;
     }
 
-    const requiresFB = selectedPlatformsList.includes('Facebook') || selectedPlatformsList.includes('Instagram');
+    const requiresFB = selectedPlatformsList.includes('Facebook');
+    const requiresIG = selectedPlatformsList.includes('Instagram');
     const requiresYT = selectedPlatformsList.includes('YouTube');
     const requiresTwitter = selectedPlatformsList.includes('X');
 
     if (requiresFB && !connectedPage && selectedPlatformsList.length === 1) {
       setStatusMsg({ type: 'error', text: 'No connected Facebook Page found for this workspace. Please connect a Facebook Page first in Integrations.' });
+      return;
+    }
+
+    if (requiresIG && selectedFiles.length === 0) {
+      setStatusMsg({ type: 'error', text: 'Instagram Graph API requires an image or video to create a post. Please attach media.' });
       return;
     }
 
@@ -269,8 +275,8 @@ export default function PublishingPage() {
     }
   };
 
-  const clientInitials = connectedPage ? connectedPage.account_name.substring(0, 2).toUpperCase() : (selectedWorkspace?.name ? selectedWorkspace.name.substring(0, 2).toUpperCase() : 'RM');
-  const pageDisplayName = connectedPage ? connectedPage.account_name : (selectedWorkspace?.name || 'Aara Wellness');
+  const clientInitials = connectedPage ? connectedPage.account_name.substring(0, 2).toUpperCase() : (selectedWorkspace?.name ? selectedWorkspace.name.substring(0, 2).toUpperCase() : 'WS');
+  const pageDisplayName = connectedPage ? connectedPage.account_name : (selectedWorkspace?.name || 'Workspace');
 
   return (
     <div>

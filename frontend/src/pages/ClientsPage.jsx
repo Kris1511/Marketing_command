@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axiosInstance from '../api/axiosInstance';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { Plus, Search, X, CheckCircle2 } from 'lucide-react';
 
 const CHANNELS = ['Instagram', 'Facebook', 'YouTube', 'Google Analytics', 'Search Console', 'Google Business'];
+
 
 const emptyForm = {
   name: '',
@@ -16,22 +17,9 @@ const emptyForm = {
   channels: [],
 };
 
-function getInitials(name) {
-  if (!name) return 'WS';
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) {
-    return name.slice(0, 2).toUpperCase();
-  }
-  return (parts[0][0] + parts[1][0]).toUpperCase();
-}
-
-const DEMO_CLIENT_METRICS = {
-  'Aara Wellness': { reach: '128.4K', leads: 186, channels: 4 },
-  'Fast Logistics': { reach: '84.2K', leads: 104, channels: 4 },
-};
 
 export default function ClientsPage() {
-  const { workspaces, setSelectedWorkspaceId, setActiveWorkspaceId, fetchWorkspaces, loadingWorkspaces } = useWorkspace();
+  const { workspaces, setSelectedWorkspaceId, fetchWorkspaces, loadingWorkspaces } = useWorkspace();
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -39,6 +27,8 @@ export default function ClientsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [workspaceMetrics, setWorkspaceMetrics] = useState({}); // keyed by workspace id
+  const [metricsLoading, setMetricsLoading] = useState(false);
 
   const openModal = () => {
     setForm(emptyForm);
@@ -51,6 +41,45 @@ export default function ClientsPage() {
     setShowModal(false);
     setError('');
   };
+
+  // Fetch real per-workspace metrics after workspaces load
+  useEffect(() => {
+    if (!workspaces || workspaces.length === 0) return;
+    setMetricsLoading(true);
+    Promise.allSettled(
+      workspaces.map(ws =>
+        axiosInstance.get(`/workspace/${ws.id}/metrics`)
+          .then(res => ({ id: ws.id, data: res.data.data }))
+          .catch(() => ({ id: ws.id, data: null }))
+      )
+    ).then(results => {
+      const map = {};
+      results.forEach(r => {
+        if (r.status === 'fulfilled' && r.value.data) {
+          map[r.value.id] = r.value.data;
+        }
+      });
+      setWorkspaceMetrics(map);
+    }).finally(() => setMetricsLoading(false));
+  }, [workspaces]);
+
+  // Helper: compute initials from workspace name
+  const getInitials = (name) => {
+    if (!name) return 'WS';
+    const parts = name.trim().split(/\s+/);
+    return parts.length === 1
+      ? name.slice(0, 2).toUpperCase()
+      : (parts[0][0] + parts[1][0]).toUpperCase();
+  };
+
+  // Helper: format numbers
+  const formatNum = (n) => {
+    if (!n && n !== 0) return '—';
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    return String(n);
+  };
+
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -103,8 +132,7 @@ export default function ClientsPage() {
   };
 
   const handleOpenWorkspace = (wsId) => {
-    const selectFunc = setSelectedWorkspaceId || setActiveWorkspaceId;
-    if (selectFunc) selectFunc(wsId);
+    setSelectedWorkspaceId(wsId);
     navigate('/');
   };
 
@@ -157,8 +185,10 @@ export default function ClientsPage() {
         </div>
         <div className="metric-card">
           <div className="metric-label">Connected accounts</div>
-          <div className="metric-value">13</div>
-          <div className="metric-foot">Across Phase 1 channels</div>
+          <div className="metric-value">
+            {Object.values(workspaceMetrics).reduce((acc, m) => acc + (m?.channels || 0), 0) || '—'}
+          </div>
+          <div className="metric-foot">Across all workspaces</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Setup pending</div>
@@ -198,10 +228,10 @@ export default function ClientsPage() {
           ) : (
             filteredWorkspaces.map((ws) => {
               const initials = getInitials(ws.name);
-              const demoM = DEMO_CLIENT_METRICS[ws.name] || { reach: '0', leads: 0, channels: 0 };
-              const reachVal = ws.reach_formatted || demoM.reach;
-              const leadsVal = ws.leads_count ?? demoM.leads;
-              const channelsVal = ws.channels_count ?? demoM.channels;
+              const m = workspaceMetrics[ws.id];
+              const reachVal = m ? formatNum(m.reach) : (metricsLoading ? '...' : '—');
+              const leadsVal = m ? m.leads : (metricsLoading ? '...' : 0);
+              const channelsVal = m ? m.channels : (metricsLoading ? '...' : 0);
 
               return (
                 <div className="client-card" key={ws.id} style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
@@ -222,21 +252,15 @@ export default function ClientsPage() {
 
                     <div className="client-card-metrics" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, margin: '14px 0' }}>
                       <div className="client-mini" style={{ background: '#f8fafc', padding: 8, borderRadius: 8, textAlign: 'center' }}>
-                        <strong style={{ display: 'block', fontSize: '0.9rem', color: '#0f172a' }}>
-                          {reachVal}
-                        </strong>
+                        <strong style={{ display: 'block', fontSize: '0.9rem', color: '#0f172a' }}>{reachVal}</strong>
                         <span style={{ fontSize: '0.7rem', color: '#64748b' }}>Reach</span>
                       </div>
                       <div className="client-mini" style={{ background: '#f8fafc', padding: 8, borderRadius: 8, textAlign: 'center' }}>
-                        <strong style={{ display: 'block', fontSize: '0.9rem', color: '#0f172a' }}>
-                          {leadsVal}
-                        </strong>
+                        <strong style={{ display: 'block', fontSize: '0.9rem', color: '#0f172a' }}>{leadsVal}</strong>
                         <span style={{ fontSize: '0.7rem', color: '#64748b' }}>Leads</span>
                       </div>
                       <div className="client-mini" style={{ background: '#f8fafc', padding: 8, borderRadius: 8, textAlign: 'center' }}>
-                        <strong style={{ display: 'block', fontSize: '0.9rem', color: '#0f172a' }}>
-                          {channelsVal}
-                        </strong>
+                        <strong style={{ display: 'block', fontSize: '0.9rem', color: '#0f172a' }}>{channelsVal}</strong>
                         <span style={{ fontSize: '0.7rem', color: '#64748b' }}>Channels</span>
                       </div>
                     </div>

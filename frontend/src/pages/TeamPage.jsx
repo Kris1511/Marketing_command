@@ -2,38 +2,6 @@ import React, { useEffect, useState } from 'react';
 import axiosInstance from '../api/axiosInstance';
 import { Plus, X } from 'lucide-react';
 
-const initialMembers = [
-  {
-    id: 1,
-    name: 'Priya S',
-    email: 'priya@redmind.example',
-    role: 'Administrator',
-    assigned_clients: 'All clients',
-    last_active: 'Now',
-    status: 'Active',
-    initials: 'PS',
-  },
-  {
-    id: 2,
-    name: 'Nisha V',
-    email: 'nisha@redmind.example',
-    role: 'Marketing Manager',
-    assigned_clients: 'Aara, I2 Studio',
-    last_active: '18 min ago',
-    status: 'Active',
-    initials: 'NV',
-  },
-  {
-    id: 3,
-    name: 'Kavin R',
-    email: 'kavin@redmind.example',
-    role: 'Executive',
-    assigned_clients: 'Fast Logistics, MM',
-    last_active: '1 hr ago',
-    status: 'Active',
-    initials: 'KV',
-  },
-];
 
 export default function TeamPage() {
   const [members, setMembers] = useState([]);
@@ -53,13 +21,13 @@ export default function TeamPage() {
     axiosInstance
       .get('/team')
       .then((res) => {
-        if (res.data.success && res.data.data && res.data.data.length > 0) {
+        if (res.data.success && res.data.data) {
           setMembers(res.data.data);
         } else {
-          setMembers(initialMembers);
+          setMembers([]);
         }
       })
-      .catch(() => setMembers(initialMembers))
+      .catch(() => setMembers([]))
       .finally(() => setLoading(false));
   };
 
@@ -84,32 +52,15 @@ export default function TeamPage() {
           assigned_clients: '',
         });
       })
-      .catch(() => {
-        const initials = formData.name
-          .split(' ')
-          .map((n) => n[0])
-          .join('')
-          .substring(0, 2)
-          .toUpperCase();
-        const newMember = {
-          id: Date.now(),
-          name: formData.name,
-          email: formData.email,
-          role: formData.role,
-          assigned_clients: formData.assigned_clients || 'Aara Wellness',
-          last_active: 'Just now',
-          status: 'Active',
-          initials,
-        };
-        setMembers((prev) => [...prev, newMember]);
-        setShowModal(false);
+      .catch((err) => {
+        alert(err.response?.data?.message || 'Failed to add team member');
       })
       .finally(() => setSubmitting(false));
   };
 
-  const adminCount = members.filter((m) => m.role === 'Administrator').length || 2;
-  const managerCount = members.filter((m) => m.role === 'Marketing Manager').length || 5;
-  const execCount = members.filter((m) => m.role === 'Executive').length || 8;
+  const adminCount = members.filter((m) => m.role === 'Administrator' || m.role_key === 'admin').length;
+  const managerCount = members.filter((m) => m.role === 'Marketing Manager' || m.role_key === 'manager').length;
+  const execCount = members.filter((m) => m.role === 'Executive' || m.role_key === 'executive').length;
 
   return (
     <div>

@@ -23,12 +23,26 @@ class FacebookPost extends Model
         'error_message',
         'retry_count',
         'created_by_id',
+        'likes_count',
+        'comments_count',
+        'shares_count',
+        'reactions_count',
+        'engagement_count',
+        'reach_count',
+        'last_synced_at',
     ];
 
     protected $casts = [
-        'scheduled_at' => 'datetime',
-        'published_at' => 'datetime',
-        'retry_count'   => 'integer',
+        'scheduled_at'     => 'datetime',
+        'published_at'     => 'datetime',
+        'last_synced_at'   => 'datetime',
+        'retry_count'      => 'integer',
+        'likes_count'      => 'integer',
+        'comments_count'   => 'integer',
+        'shares_count'     => 'integer',
+        'reactions_count'  => 'integer',
+        'engagement_count' => 'integer',
+        'reach_count'      => 'integer',
     ];
 
     public function workspace()

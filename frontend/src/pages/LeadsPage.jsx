@@ -1,37 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import axiosInstance from '../api/axiosInstance';
+import { useWorkspace } from '../context/WorkspaceContext';
 import { Plus, Search, X } from 'lucide-react';
 
-const initialDefaultLeads = [
-  {
-    id: 'lead-1',
-    name: 'Priyanka Raj',
-    phone: '+91 98765 22110',
-    email: 'priyanka@example.com',
-    source_display: 'Facebook Lead Ad',
-    campaign: 'Yoga Trial August',
-    owner: 'Nisha',
-    created_at: '2026-08-04',
-    status: 'qualified', // Stage: Qualified
-    initials: 'PR',
-  },
-  {
-    id: 'lead-2',
-    name: 'Divya S',
-    phone: '+91 97908 55120',
-    email: 'divya@example.com',
-    source_display: 'Manual Entry',
-    campaign: 'Yoga Membership',
-    owner: 'Nisha',
-    created_at: '2026-08-02',
-    status: 'contacted', // Stage: Contacted / Follow-Up
-    initials: 'DS',
-  },
-];
 
 export default function LeadsPage() {
+  const { selectedWorkspaceId } = useWorkspace();
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [stageFilter, setStageFilter] = useState('all');
   const [showModal, setShowModal] = useState(false);
@@ -44,40 +21,48 @@ export default function LeadsPage() {
     email: '',
     source: 'Manual Entry',
     campaign_name: '',
-    assigned_to: 'Nisha',
+    assigned_to: '',
     notes: '',
   });
 
   const fetchLeads = () => {
     setLoading(true);
+    setLoadError('');
     axiosInstance
-      .get('/leads')
+      .get('/leads', { params: selectedWorkspaceId ? { workspace_id: selectedWorkspaceId } : {} })
       .then((res) => {
-        if (res.data.success && res.data.data && res.data.data.length > 0) {
+        if (res.data.success && res.data.data) {
           const formatted = res.data.data.map((l) => ({
             id: l.id,
             name: l.name,
-            phone: l.phone || '+91 98765 00000',
+            phone: l.phone || '',
             email: l.email,
-            source_display: l.source === 'facebook_lead_ad' ? 'Facebook Lead Ad' : (l.source === 'google_lead_form' ? 'Google Ads' : 'Manual Entry'),
-            campaign: l.campaign?.name || 'Yoga Campaign',
-            owner: 'Nisha',
-            created_at: l.created_at ? l.created_at.substring(0, 10) : '2026-08-04',
+            source_display: l.source === 'facebook_lead_ad' ? 'Facebook Lead Ad'
+                          : l.source === 'google_lead_form' ? 'Google Ads'
+                          : l.source === 'website_form' ? 'Website Form'
+                          : l.source === 'manual_entry' ? 'Manual Entry'
+                          : l.source || 'Manual Entry',
+            campaign: l.campaign?.name || '',
+            owner: l.assigned_to?.name || '',
+            created_at: l.created_at ? l.created_at.substring(0, 10) : '',
             status: l.status || 'new',
-            initials: l.name.split(' ').map((n) => n[0]).join('').substring(0, 2).toUpperCase(),
+            initials: (l.name || '?').split(' ').map((n) => n[0] || '').join('').substring(0, 2).toUpperCase(),
           }));
           setLeads(formatted);
         } else {
-          setLeads(initialDefaultLeads);
+          setLeads([]);
         }
       })
-      .catch(() => setLeads(initialDefaultLeads))
+      .catch(() => {
+        setLoadError('Unable to load leads. Please try again.');
+        setLeads([]);
+      })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     fetchLeads();
-  }, []);
+  }, [selectedWorkspaceId]);
 
   const handleSubmit = (e) => {
     e.preventDefault();

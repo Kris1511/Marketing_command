@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { CheckCircle2, AlertCircle, Layers, X, ShieldCheck, Share2, Key, RefreshCw, Trash2, Video } from 'lucide-react';
 import axiosInstance from '../api/axiosInstance';
+import { useWorkspace } from '../context/WorkspaceContext';
 
 const initialConnections = [
   {
@@ -78,23 +79,25 @@ const initialConnections = [
     name: 'X / Twitter',
     code: 'X',
     subtitle: 'Phase 2 integration',
-    status: 'disconnected',
-    statusText: '• Not connected',
-    timeAgo: 'No data',
-    canTest: false,
+    status: 'connected',
+    statusText: '• Connected',
+    timeAgo: 'Just now',
+    canTest: true,
   },
 ];
 
 export default function IntegrationsPage() {
+  const { selectedWorkspaceId } = useWorkspace();
   const [connections, setConnections] = useState(initialConnections);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
   
   // Facebook State
   const [showModal, setShowModal] = useState(false);
+  const [showManualModal, setShowManualModal] = useState(false);
   const [fetchedPages, setFetchedPages] = useState([]);
   const [selectedPageId, setSelectedPageId] = useState('');
-  const [showManualModal, setShowManualModal] = useState(false);
+  const [manualPlatform, setManualPlatform] = useState('facebook');
   const [manualPageId, setManualPageId] = useState('');
   const [manualPageName, setManualPageName] = useState('');
   const [manualPageToken, setManualPageToken] = useState('');
@@ -109,7 +112,41 @@ export default function IntegrationsPage() {
   const [twitterConnection, setTwitterConnection] = useState(null);
   const [twitterLoading, setTwitterLoading] = useState(true);
 
+  const fetchIntegrationsStatus = async () => {
+    try {
+      const wsId = selectedWorkspaceId || 1;
+      const res = await axiosInstance.get(`/integrations/status?workspace_id=${wsId}`);
+      if (res.data?.success && Array.isArray(res.data?.data)) {
+        const statusMap = {};
+        res.data.data.forEach(item => {
+          statusMap[item.name] = item;
+          if (item.key) statusMap[item.key] = item;
+        });
+
+        setConnections((prev) => {
+          const list = prev && prev.length > 0 ? prev : initialConnections;
+          return list.map((c) => {
+            const match = statusMap[c.name] || statusMap[c.key] || statusMap[c.code];
+            if (match && match.status === 'connected') {
+              return {
+                ...c,
+                status: 'connected',
+                statusText: `• Connected (${match.account_name || 'Active'})`,
+                timeAgo: match.last_sync ? new Date(match.last_sync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Live API',
+                canTest: true,
+              };
+            }
+            return c;
+          });
+        });
+      }
+    } catch (err) {
+      console.error('Failed to fetch integrations status:', err);
+    }
+  };
+
   useEffect(() => {
+    fetchIntegrationsStatus();
     fetchConnectedFacebookPages();
     fetchYouTubeStatus();
     fetchTwitterStatus();
@@ -122,14 +159,7 @@ export default function IntegrationsPage() {
     } else if (searchParams.get('youtube') === 'error') {
       alert('Failed to connect YouTube channel. Please check your Google OAuth permissions.');
     }
-
-    if (searchParams.get('twitter') === 'success') {
-      setSyncMsg('X (Twitter) account connected successfully!');
-      fetchTwitterStatus();
-    } else if (searchParams.get('twitter') === 'error') {
-      alert('Failed to connect X (Twitter) account.');
-    }
-  }, []);
+  }, [selectedWorkspaceId]);
 
   const fetchYouTubeStatus = async () => {
     setYoutubeLoading(true);
@@ -223,7 +253,8 @@ export default function IntegrationsPage() {
 
   const fetchConnectedFacebookPages = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/v1/facebook/pages?workspace_id=1');
+      const wsId = selectedWorkspaceId || 1;
+      const res = await fetch(`http://localhost:8000/api/v1/facebook/pages?workspace_id=${wsId}`);
       const json = await res.json();
       if (json.success && json.data.length > 0) {
         setConnectedFbPages(json.data);
@@ -242,6 +273,8 @@ export default function IntegrationsPage() {
             return c;
           })
         );
+      } else {
+        setConnectedFbPages([]);
       }
     } catch (err) {
       console.error('Failed to fetch connected Facebook pages:', err);
@@ -407,8 +440,9 @@ export default function IntegrationsPage() {
     }
 
     if (item.name.includes('Facebook') || item.name.includes('Instagram')) {
+      const wsId = selectedWorkspaceId || 1;
       const popup = window.open(
-        'http://localhost:8000/api/v1/auth/facebook?workspace_id=1',
+        `http://localhost:8000/api/v1/auth/facebook?workspace_id=${wsId}`,
         'MetaOAuthPopup',
         'width=650,height=750,scrollbars=yes'
       );
@@ -442,14 +476,17 @@ export default function IntegrationsPage() {
     if (!pageToConnect) return;
     setConnectingPage(true);
     try {
+      const wsId = selectedWorkspaceId || 1;
+      const igId = pageToConnect.instagram_business_account?.id || null;
       const res = await fetch('http://localhost:8000/api/v1/facebook/connect-page', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify({
-          workspace_id: 1,
+          workspace_id: wsId,
           page_id: pageToConnect.id,
           page_name: pageToConnect.name,
           page_access_token: pageToConnect.access_token,
+          instagram_account_id: igId,
         }),
       });
       const json = await res.json();
@@ -470,34 +507,35 @@ export default function IntegrationsPage() {
   const handleManualTokenSubmit = async (e) => {
     e.preventDefault();
     if (!manualPageId || !manualPageToken) {
-      alert('Please enter both Page ID and Page Access Token.');
+      alert('Please enter both Account ID and Access Token.');
       return;
     }
     setConnectingPage(true);
     try {
-      const res = await fetch('http://localhost:8000/api/v1/facebook/connect-page', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({
-          workspace_id: 1,
-          page_id: manualPageId.trim(),
-          page_name: manualPageName.trim() || `Page (${manualPageId.trim()})`,
-          page_access_token: manualPageToken.trim(),
-        }),
-      });
-      const json = await res.json();
-      if (res.ok && json.success) {
+      const endpoint = manualPlatform === 'instagram' ? '/instagram/connect' : '/facebook/connect-page';
+      const bodyPayload = manualPlatform === 'instagram' ? {
+        workspace_id: selectedWorkspaceId || 1,
+        instagram_account_id: manualPageId.trim(),
+        account_name: manualPageName.trim(),
+        access_token: manualPageToken.trim(),
+      } : {
+        workspace_id: selectedWorkspaceId || 1,
+        page_id: manualPageId.trim(),
+        page_name: manualPageName.trim() || `Page (${manualPageId.trim()})`,
+        page_access_token: manualPageToken.trim(),
+      };
+
+      const res = await axiosInstance.post(endpoint, bodyPayload);
+      if (res.data.success) {
         setShowManualModal(false);
-        setManualPageId('');
-        setManualPageName('');
-        setManualPageToken('');
-        setSyncMsg(`Facebook Page Token successfully saved!`);
+        setSyncMsg(`${manualPlatform === 'instagram' ? 'Instagram' : 'Facebook'} account connected successfully!`);
+        fetchIntegrationsStatus();
         fetchConnectedFacebookPages();
       } else {
-        alert(json.message || 'Failed to connect page');
+        alert(res.data.message || 'Failed to connect');
       }
     } catch (err) {
-      alert('Network error saving page token.');
+      alert(err.response?.data?.message || 'Error connecting account to backend.');
     } finally {
       setConnectingPage(false);
     }
@@ -909,16 +947,25 @@ export default function IntegrationsPage() {
             </div>
             <form onSubmit={handleManualTokenSubmit}>
               <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Facebook Page ID *</label>
-                <input type="text" className="input" placeholder="e.g. 1005544332211" value={manualPageId} onChange={(e) => setManualPageId(e.target.value)} required />
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Platform</label>
+                <select className="select" value={manualPlatform} onChange={(e) => setManualPlatform(e.target.value)}>
+                  <option value="facebook">Facebook Page</option>
+                  <option value="instagram">Instagram Business Account</option>
+                </select>
               </div>
               <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Facebook Page Name</label>
-                <input type="text" className="input" placeholder="e.g. My Business Page" value={manualPageName} onChange={(e) => setManualPageName(e.target.value)} />
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>
+                  {manualPlatform === 'instagram' ? 'Instagram Account ID *' : 'Facebook Page ID *'}
+                </label>
+                <input type="text" className="input" placeholder={manualPlatform === 'instagram' ? 'e.g. 17841444164917900' : 'e.g. 1005544332211'} value={manualPageId} onChange={(e) => setManualPageId(e.target.value)} required />
+              </div>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Account / Page Name</label>
+                <input type="text" className="input" placeholder="e.g. My Business Handle / Page" value={manualPageName} onChange={(e) => setManualPageName(e.target.value)} />
               </div>
               <div style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Page Access Token *</label>
-                <textarea className="textarea" rows={3} placeholder="Paste Page Access Token..." value={manualPageToken} onChange={(e) => setManualPageToken(e.target.value)} required />
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Access Token *</label>
+                <textarea className="textarea" rows={3} placeholder="Paste Access Token..." value={manualPageToken} onChange={(e) => setManualPageToken(e.target.value)} required />
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setShowManualModal(false)}>Cancel</button>
