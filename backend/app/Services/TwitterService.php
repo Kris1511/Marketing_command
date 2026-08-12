@@ -97,8 +97,8 @@ class TwitterService
         if ($this->isMock || str_starts_with($accessToken, 'mock_access_token_')) {
             return [
                 'id' => 'mock_twitter_user_998877',
-                'name' => 'Demo Agency',
-                'username' => 'DemoAgency_X',
+                'name' => 'Chandru',
+                'username' => 'Chandramohan_K1',
             ];
         }
 

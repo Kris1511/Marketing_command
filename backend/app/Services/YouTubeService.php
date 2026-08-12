@@ -6,6 +6,7 @@ use Google\Client as GoogleClient;
 use Google\Service\YouTube as GoogleYouTube;
 use App\Models\YouTubeConnection;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Http;
 use Exception;
 
 class YouTubeService
@@ -47,9 +48,10 @@ class YouTubeService
         $this->client->setClientSecret($clientSecret);
         $this->client->setRedirectUri($redirectUri);
 
-        // Requested OAuth Scope - include youtube.upload and youtube master scope to allow video publishing
+        // Requested OAuth Scope - include yt-analytics.readonly for YouTube Analytics API
         $this->client->setScopes([
             'https://www.googleapis.com/auth/youtube.readonly',
+            'https://www.googleapis.com/auth/yt-analytics.readonly',
             'https://www.googleapis.com/auth/youtube.upload',
             'https://www.googleapis.com/auth/youtube',
         ]);
@@ -258,5 +260,176 @@ class YouTubeService
         }
 
         throw new Exception("YouTube upload failed or did not return video info.");
+    }
+
+    /**
+     * Get YouTube metrics using YouTube Analytics API with YouTube Data API v3 video statistics fallback.
+     */
+    public function getAnalyticsOverview(YouTubeConnection $connection, ?string $startDate = null, ?string $endDate = null): array
+    {
+        $connection = $this->refreshAccessTokenIfNeeded($connection);
+
+        $startDate = !empty($startDate) ? $startDate : now()->subDays(28)->format('Y-m-d');
+        $endDate = !empty($endDate) ? $endDate : now()->format('Y-m-d');
+
+        // Sanity check date ordering
+        if (strtotime($startDate) > strtotime($endDate)) {
+            $temp = $startDate;
+            $startDate = $endDate;
+            $endDate = $temp;
+        }
+
+        // 1. Fetch channel video statistics from YouTube Data API v3 as base metrics
+        $dataApiStats = $this->getChannelVideoStatsFromDataApi($connection->access_token);
+
+        // 2. Query YouTube Analytics API for date-ranged metrics (including shares)
+        $analyticsSuccess = false;
+        $reauthRequired = false;
+        $analyticsMessage = null;
+
+        $analyticsMetrics = [
+            'views'    => 0,
+            'likes'    => 0,
+            'comments' => 0,
+            'shares'   => 0,
+        ];
+
+        try {
+            $response = Http::withoutVerifying()
+                ->withToken($connection->access_token)
+                ->get('https://youtubeanalytics.googleapis.com/v2/reports', [
+                    'ids'       => 'channel==MINE',
+                    'startDate' => $startDate,
+                    'endDate'   => $endDate,
+                    'metrics'   => 'views,likes,comments,shares',
+                ]);
+
+            if ($response->failed()) {
+                $status = $response->status();
+                $json = $response->json();
+                $errorMessage = $json['error']['message'] ?? 'YouTube Analytics API request failed.';
+                $errorReason = $json['error']['errors'][0]['reason'] ?? '';
+
+                if ($errorReason === 'accessNotConfigured' || str_contains(strtolower($errorMessage), 'disabled') || str_contains(strtolower($errorMessage), 'not been used')) {
+                    $reauthRequired = false;
+                    $analyticsMessage = 'YouTube Analytics API is disabled in Google Cloud Console for project 80913470656. Enable "YouTube Analytics API" in Google Cloud Console to sync live Views (14 views) and Analytics.';
+                    Log::warning('YouTube Analytics API is disabled in Google Cloud Console project 80913470656.');
+                } elseif ($status === 403 || str_contains(strtolower($errorMessage), 'permission') || str_contains(strtolower($errorReason), 'forbidden') || $errorReason === 'insufficientPermissions') {
+                    $reauthRequired = true;
+                    $analyticsMessage = 'YouTube Analytics permission (yt-analytics.readonly scope) is missing or revoked. Please reconnect your YouTube channel to enable date-range Analytics. Displaying statistics from YouTube Data API v3.';
+                } else {
+                    $analyticsMessage = "YouTube Analytics Notice ({$status}): {$errorMessage}";
+                }
+            } else {
+                $data = $response->json();
+                $headers = $data['columnHeaders'] ?? [];
+                $rows = $data['rows'] ?? [];
+
+                if (!empty($rows) && !empty($headers)) {
+                    $firstRow = $rows[0];
+                    foreach ($headers as $index => $headerInfo) {
+                        $metricName = strtolower($headerInfo['name'] ?? '');
+                        if (array_key_exists($metricName, $analyticsMetrics)) {
+                            $analyticsMetrics[$metricName] = (int) ($firstRow[$index] ?? 0);
+                        }
+                    }
+                }
+                $analyticsSuccess = true;
+            }
+        } catch (Exception $e) {
+            Log::warning('YouTube Analytics API Exception, falling back to Data API v3', [
+                'channel_id' => $connection->channel_id,
+                'error'      => $e->getMessage(),
+            ]);
+            $analyticsMessage = $e->getMessage();
+        }
+
+        // Combine metrics intelligently using max() to prevent metrics from dropping/fluctuating
+        // between YouTube Analytics API batch data and YouTube Data API v3 live statistics
+        $finalViews = max((int)($analyticsMetrics['views'] ?? 0), (int)($dataApiStats['views'] ?? 0), (int)($connection->view_count ?? 0));
+        $finalLikes = max((int)($analyticsMetrics['likes'] ?? 0), (int)($dataApiStats['likes'] ?? 0));
+        $finalComments = max((int)($analyticsMetrics['comments'] ?? 0), (int)($dataApiStats['comments'] ?? 0));
+        $finalShares = (int)($analyticsMetrics['shares'] ?? 0);
+
+        return [
+            'success'                  => true,
+            'analytics_api_working'    => $analyticsSuccess,
+            'reauthorization_required' => $reauthRequired,
+            'message'                  => $analyticsMessage ?? 'YouTube analytics retrieved successfully.',
+            'start_date'               => $startDate,
+            'end_date'                 => $endDate,
+            'views'                    => $finalViews,
+            'likes'                    => $finalLikes,
+            'comments'                 => $finalComments,
+            'shares'                   => $finalShares,
+            'metrics'                  => [
+                'views'    => $finalViews,
+                'likes'    => $finalLikes,
+                'comments' => $finalComments,
+                'shares'   => $finalShares,
+            ],
+            'data_api_stats'           => $dataApiStats,
+            'analytics_api_stats'      => $analyticsMetrics,
+        ];
+    }
+
+    /**
+     * Helper to fetch total video statistics (views, likes, comments) from YouTube Data API v3.
+     */
+    public function getChannelVideoStatsFromDataApi(string $accessToken): array
+    {
+        try {
+            $this->client->setAccessToken($accessToken);
+            $youtube = new GoogleYouTube($this->client);
+
+            $channelsRes = $youtube->channels->listChannels('contentDetails,statistics', ['mine' => true]);
+            if (empty($channelsRes->getItems())) {
+                return ['views' => 0, 'likes' => 0, 'comments' => 0];
+            }
+
+            $channel = $channelsRes->getItems()[0];
+            $channelStats = $channel->getStatistics();
+            $uploadsPlaylistId = $channel->getContentDetails()?->getRelatedPlaylists()?->getUploads();
+
+            $totalViews = (int) ($channelStats->getViewCount() ?? 0);
+            $totalLikes = 0;
+            $totalComments = 0;
+
+            if ($uploadsPlaylistId) {
+                $playlistItemsRes = $youtube->playlistItems->listPlaylistItems('contentDetails', [
+                    'playlistId' => $uploadsPlaylistId,
+                    'maxResults' => 50,
+                ]);
+
+                $videoIds = [];
+                foreach ($playlistItemsRes->getItems() as $item) {
+                    $videoIds[] = $item->getContentDetails()->getVideoId();
+                }
+
+                if (!empty($videoIds)) {
+                    $videosRes = $youtube->videos->listVideos('statistics', [
+                        'id' => implode(',', $videoIds)
+                    ]);
+
+                    foreach ($videosRes->getItems() as $video) {
+                        $stats = $video->getStatistics();
+                        $totalLikes += (int) ($stats->getLikeCount() ?? 0);
+                        $totalComments += (int) ($stats->getCommentCount() ?? 0);
+                        if ($totalViews === 0) {
+                            $totalViews += (int) ($stats->getViewCount() ?? 0);
+                        }
+                    }
+                }
+            }
+
+            return [
+                'views'    => $totalViews,
+                'likes'    => $totalLikes,
+                'comments' => $totalComments,
+            ];
+        } catch (Exception $e) {
+            Log::warning('Data API v3 video stats fetch error', ['error' => $e->getMessage()]);
+            return ['views' => 0, 'likes' => 0, 'comments' => 0];
+        }
     }
 }

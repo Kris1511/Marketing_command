@@ -32,6 +32,7 @@ Route::get('/youtube/connect', [YouTubeController::class, 'connect']);
 Route::get('/youtube/callback', [YouTubeController::class, 'callback']);
 Route::get('/youtube/status', [YouTubeController::class, 'status']);
 Route::get('/youtube/channel', [YouTubeController::class, 'channel']);
+Route::get('/youtube/analytics/overview', [YouTubeController::class, 'analyticsOverview']);
 Route::post('/youtube/disconnect', [YouTubeController::class, 'disconnect']);
 Route::post('/youtube/videos', [YouTubeController::class, 'uploadVideo']);
 
@@ -40,6 +41,7 @@ Route::get('/twitter/connect', [TwitterController::class, 'connect']);
 Route::get('/twitter/callback', [TwitterController::class, 'callback'])->name('twitter.callback');
 Route::get('/twitter/status', [TwitterController::class, 'status']);
 Route::post('/twitter/disconnect', [TwitterController::class, 'disconnect']);
+Route::post('/twitter/connect-mock', [TwitterController::class, 'connectMock']);
 
 Route::prefix('v1')->group(function () {
 
@@ -49,6 +51,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/callback', [YouTubeController::class, 'callback']);
         Route::get('/status', [YouTubeController::class, 'status']);
         Route::get('/channel', [YouTubeController::class, 'channel']);
+        Route::get('/analytics/overview', [YouTubeController::class, 'analyticsOverview']);
         Route::post('/disconnect', [YouTubeController::class, 'disconnect']);
         Route::post('/videos', [YouTubeController::class, 'uploadVideo']);
     });
@@ -59,6 +62,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/callback', [TwitterController::class, 'callback']);
         Route::get('/status', [TwitterController::class, 'status']);
         Route::post('/disconnect', [TwitterController::class, 'disconnect']);
+        Route::post('/connect-mock', [TwitterController::class, 'connectMock']);
     });
 
     // Handle OPTIONS Preflight CORS Requests

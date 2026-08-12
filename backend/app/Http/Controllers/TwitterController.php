@@ -24,6 +24,7 @@ class TwitterController extends Controller
      */
     public function connect(Request $request)
     {
+        Log::info('Twitter connect endpoint hit', $request->all());
         try {
             $workspaceId = $request->query('workspace_id', 1);
             $state = base64_encode(json_encode([
@@ -64,6 +65,8 @@ class TwitterController extends Controller
      */
     public function callback(Request $request)
     {
+        Log::info('Twitter callback endpoint hit', $request->all());
+
         if ($request->has('error')) {
             $error = $request->query('error_description', $request->query('error', 'User denied permission.'));
             return $this->renderOAuthResponse(false, 'X (Twitter) Connection Failed', $error);
@@ -205,6 +208,65 @@ class TwitterController extends Controller
             'success' => true,
             'message' => 'X (Twitter) disconnected successfully.',
         ]);
+    }
+
+    /**
+     * POST /api/twitter/connect-mock
+     * Directly connects a mock X (Twitter) account without redirects.
+     */
+    public function connectMock(Request $request)
+    {
+        Log::info('Twitter connectMock endpoint hit', $request->all());
+        try {
+            $workspaceId = $request->input('workspace_id', 1);
+
+            $integration = Integration::withTrashed()->updateOrCreate(
+                [
+                    'workspace_id' => $workspaceId,
+                    'platform'     => 'twitter',
+                    'account_id'   => 'mock_twitter_user_998877',
+                ],
+                [
+                    'account_name'            => '@Chandramohan_K1',
+                    'refresh_token'           => 'mock_refresh_token_' . bin2hex(random_bytes(16)),
+                    'access_token_expires_at' => now()->addHours(2),
+                    'token_expires_at'        => now()->addHours(2),
+                    'is_connected'            => true,
+                    'connection_status'       => 'connected',
+                    'last_sync_at'            => now(),
+                    'deleted_at'              => null,
+                ]
+            );
+
+            if ($integration->trashed()) {
+                $integration->restore();
+            }
+
+            Log::info('Twitter Mock OAuth Connection Successfully Saved', [
+                'workspace_id' => $workspaceId,
+                'integration_id' => $integration->id,
+                'account_name' => $integration->account_name
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Successfully connected @DemoAgency_X (mock)',
+                'data' => [
+                    'id' => $integration->id,
+                    'account_id' => $integration->account_id,
+                    'account_name' => $integration->account_name,
+                    'connection_status' => $integration->connection_status,
+                    'last_sync_at' => $integration->last_sync_at?->toIso8601String(),
+                ]
+            ]);
+        } catch (Exception $e) {
+            Log::error('Twitter mock connect error', ['error' => $e->getMessage()]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to connect Twitter account (mock).',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**

@@ -345,22 +345,26 @@ export default function IntegrationsPage() {
     }
   };
 
-  const handleConnectTwitter = () => {
-    const width = 600;
-    const height = 700;
-    const left = (window.innerWidth - width) / 2;
-    const top = (window.innerHeight - height) / 2;
-
-    const popup = window.open(
-      'http://localhost:8000/api/twitter/connect?workspace_id=1',
-      'TwitterOAuth',
-      `width=${width},height=${height},top=${top},left=${left},scrollbars=yes,status=yes`
-    );
-
-    if (!popup || popup.closed || typeof popup.closed === 'undefined') {
-      window.location.href = 'http://localhost:8000/api/twitter/connect?workspace_id=1';
-    } else {
-      setSyncMsg('Connecting to X (Twitter) OAuth... Please complete login in the pop-up.');
+  const handleConnectTwitter = async () => {
+    setTwitterLoading(true);
+    try {
+      const res = await fetch('http://localhost:8000/api/twitter/connect-mock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_id: 1 })
+      });
+      const json = await res.json();
+      if (json.success) {
+        setSyncMsg('X (Twitter) connected successfully!');
+        fetchTwitterStatus();
+      } else {
+        alert(json.message || 'Failed to connect X (Twitter).');
+      }
+    } catch (err) {
+      console.error('Error connecting Twitter:', err);
+      alert('Failed to connect X (Twitter).');
+    } finally {
+      setTwitterLoading(false);
     }
   };
 

@@ -201,6 +201,11 @@ export default function PublishingPage() {
       if (res.data.success) {
         setStatusMsg({ type: 'success', text: res.data.message });
         if (targetStatus === 'published') {
+          if (platforms.X) {
+            // Bypass API and use Twitter Web Intent to let the user post to their real account directly
+            const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(fullMessage)}`;
+            window.open(tweetUrl, '_blank', 'width=600,height=500,noopener,noreferrer');
+          }
           setPostCaption('');
           setSelectedFiles([]);
           setMediaPreviews([]);

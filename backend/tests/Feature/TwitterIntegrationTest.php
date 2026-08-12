@@ -137,8 +137,8 @@ class TwitterIntegrationTest extends TestCase
             'message' => 'X (Twitter) disconnected successfully.',
         ]);
 
-        // 3. Verify soft deleted from DB
-        $this->assertSoftDeleted('integrations', [
+        // 3. Verify deleted from DB
+        $this->assertDatabaseMissing('integrations', [
             'workspace_id' => 1,
             'platform' => 'twitter',
         ]);
@@ -185,4 +185,39 @@ class TwitterIntegrationTest extends TestCase
             'status' => 'published',
         ]);
     }
+
+    /**
+     * Test the connectMock endpoint directly connects a mock account.
+     */
+    public function test_connect_mock_creates_integration_connection()
+    {
+        $response = $this->postJson('/api/twitter/connect-mock', [
+            'workspace_id' => 1,
+        ]);
+
+        $response->assertStatus(200);
+        $response->assertJson([
+            'success' => true,
+            'message' => 'Successfully connected @DemoAgency_X (mock)',
+        ]);
+        $response->assertJsonStructure([
+            'success',
+            'message',
+            'data' => [
+                'id',
+                'account_id',
+                'account_name',
+                'connection_status',
+                'last_sync_at',
+            ]
+        ]);
+
+        $this->assertDatabaseHas('integrations', [
+            'workspace_id' => 1,
+            'platform' => 'twitter',
+            'account_name' => '@DemoAgency_X',
+            'is_connected' => true,
+        ]);
+    }
 }
+

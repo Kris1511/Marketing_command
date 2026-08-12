@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import axiosInstance from '../api/axiosInstance';
 import { useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../context/WorkspaceContext';
+import YouTubeAnalyticsSection from '../components/YouTubeAnalyticsSection';
 import {
   Eye,
   Zap,
@@ -155,6 +156,9 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* YouTube Analytics Overview Section (Views, Likes, Comments, Shares) */}
+      <YouTubeAnalyticsSection />
 
       {/* Main Grid Section */}
       <div className="grid-main-side mb-18">

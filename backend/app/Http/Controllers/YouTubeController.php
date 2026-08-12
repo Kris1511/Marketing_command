@@ -254,6 +254,86 @@ class YouTubeController extends Controller
     }
 
     /**
+     * GET /api/youtube/analytics/overview
+     * Retrieve YouTube Analytics metrics (Views, Likes, Comments, Shares) for connected channel.
+     */
+    public function analyticsOverview(Request $request)
+    {
+        $connection = YouTubeConnection::latest()->first();
+
+        if (!$connection) {
+            return response()->json([
+                'success'                  => false,
+                'connected'                => false,
+                'reauthorization_required' => false,
+                'message'                  => 'YouTube account not connected. Please connect YouTube channel in Integrations.',
+                'views'                    => 0,
+                'likes'                    => 0,
+                'comments'                 => 0,
+                'shares'                   => 0,
+                'data'                     => null,
+            ], 404);
+        }
+
+        try {
+            $startDate = $request->query('start_date');
+            $endDate = $request->query('end_date');
+
+            $analytics = $this->youtubeService->getAnalyticsOverview($connection, $startDate, $endDate);
+
+            $views = $analytics['views'] ?? 0;
+            $likes = $analytics['likes'] ?? 0;
+            $comments = $analytics['comments'] ?? 0;
+            $shares = $analytics['shares'] ?? 0;
+            $reauth = $analytics['reauthorization_required'] ?? false;
+
+            return response()->json([
+                'success'                  => $analytics['success'] ?? true,
+                'connected'                => true,
+                'reauthorization_required' => $reauth,
+                'message'                  => $analytics['message'] ?? 'YouTube analytics retrieved successfully.',
+                'channel'                  => [
+                    'channel_id'       => $connection->channel_id,
+                    'channel_name'     => $connection->channel_name,
+                    'channel_thumbnail'=> $connection->channel_thumbnail,
+                    'subscriber_count' => $connection->subscriber_count,
+                    'video_count'      => $connection->video_count,
+                    'lifetime_views'   => max((int)$connection->view_count, (int)$views),
+                ],
+                'start_date'               => $analytics['start_date'],
+                'end_date'                 => $analytics['end_date'],
+                'views'                    => $views,
+                'likes'                    => $likes,
+                'comments'                 => $comments,
+                'shares'                   => $shares,
+                'data'                     => [
+                    'views'                    => $views,
+                    'likes'                    => $likes,
+                    'comments'                 => $comments,
+                    'shares'                   => $shares,
+                    'start_date'               => $analytics['start_date'],
+                    'end_date'                 => $analytics['end_date'],
+                    'reauthorization_required' => $reauth,
+                ],
+            ]);
+        } catch (Exception $e) {
+            Log::error('YouTube analyticsOverview controller error', ['error' => $e->getMessage()]);
+
+            return response()->json([
+                'success'                  => false,
+                'connected'                => true,
+                'reauthorization_required' => false,
+                'message'                  => $e->getMessage(),
+                'views'                    => 0,
+                'likes'                    => 0,
+                'comments'                 => 0,
+                'shares'                   => 0,
+                'error'                    => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * Helper to render HTML redirect/popup response for OAuth completion.
      */
     protected function renderOAuthResponse(bool $success, string $title, string $message, ?YouTubeConnection $connection = null)

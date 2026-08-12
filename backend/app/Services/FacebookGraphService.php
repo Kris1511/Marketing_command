@@ -106,13 +106,13 @@ class FacebookGraphService
                 file_get_contents($fileOrUrl->getRealPath()),
                 $fileOrUrl->getClientOriginalName()
             )->post($url, [
-                'caption'      => $caption,
+                'message'      => $caption,
                 'access_token' => $accessToken,
             ]);
         } else {
             $response = Http::withoutVerifying()->post($url, [
                 'url'          => (string) $fileOrUrl,
-                'caption'      => $caption,
+                'message'      => $caption,
                 'access_token' => $accessToken,
             ]);
         }
@@ -171,7 +171,7 @@ class FacebookGraphService
      */
     public function publishVideo(string $pageId, string $accessToken, string $description, $fileOrUrl): array
     {
-        $url = "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/videos";
+        $url = "https://graph-video.facebook.com/{$this->apiVersion}/{$pageId}/videos";
 
         if (is_object($fileOrUrl) && method_exists($fileOrUrl, 'getRealPath')) {
             $response = Http::withoutVerifying()->attach(
