@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axiosInstance from '../api/axiosInstance';
 import { useWorkspace } from '../context/WorkspaceContext';
 import {
@@ -30,7 +30,13 @@ export default function PublishingPage() {
   const [postHashtags, setPostHashtags] = useState('');
   const [postCTA, setPostCTA] = useState('');
   const [publishType, setPublishType] = useState('now'); // 'schedule', 'now', 'draft'
-  const [scheduleAt, setScheduleAt] = useState(() => new Date(Date.now() + 3600000).toISOString().slice(0, 16));
+  // Default to 1 hour from now in LOCAL time (not UTC) so the datetime-local
+  // picker pre-fills with the correct IST time instead of the UTC equivalent.
+  const [scheduleAt, setScheduleAt] = useState(() => {
+    const d = new Date(Date.now() + 3600000);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  });
 
   // Media states
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -53,6 +59,48 @@ export default function PublishingPage() {
 
   const totalLength = postCaption.length + (postHashtags ? postHashtags.length + 2 : 0);
   const isOverTwitterLimit = platforms.X && totalLength > 280;
+
+  // Compute dynamic 7-day week starting Monday in Asia/Kolkata (IST)
+  const weekDays = useMemo(() => {
+    const now = new Date();
+    const currentDay = now.getDay(); // 0 is Sun, 1 is Mon...
+    const distanceToMonday = (currentDay + 6) % 7;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - distanceToMonday);
+    monday.setHours(0, 0, 0, 0);
+
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      days.push(d);
+    }
+    return days;
+  }, []);
+
+  const weekRangeLabel = useMemo(() => {
+    if (!weekDays || weekDays.length === 0) return '';
+    const startMonth = weekDays[0].toLocaleString('en-US', { timeZone: 'Asia/Kolkata', month: 'long' });
+    const endMonth = weekDays[6].toLocaleString('en-US', { timeZone: 'Asia/Kolkata', month: 'long' });
+    const startDay = weekDays[0].getDate();
+    const endDay = weekDays[6].getDate();
+    const year = weekDays[6].getFullYear();
+    return startMonth === endMonth
+      ? `${startMonth} ${startDay}–${endDay}, ${year}`
+      : `${startMonth} ${startDay} – ${endMonth} ${endDay}, ${year}`;
+  }, [weekDays]);
+
+  // Combine and deduplicate scheduled posts from both scheduled-posts API and history
+  const allScheduledPosts = useMemo(() => {
+    const map = new Map();
+    (scheduledPosts || []).forEach((p) => {
+      if (p.status === 'scheduled') map.set(p.id, p);
+    });
+    (historyPosts || []).forEach((p) => {
+      if (p.status === 'scheduled') map.set(p.id, p);
+    });
+    return Array.from(map.values()).sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
+  }, [scheduledPosts, historyPosts]);
 
   useEffect(() => {
     fetchPageAndData();
@@ -182,7 +230,14 @@ export default function PublishingPage() {
       formData.append('workspace_id', selectedWorkspaceId);
       formData.append('message', fullMessage);
       formData.append('status', targetStatus);
-      if (scheduleAt) formData.append('scheduled_at', scheduleAt);
+      // Append explicit IST offset (+05:30) so the backend can unambiguously
+      // parse the user-selected local time as Asia/Kolkata, not as UTC.
+      if (scheduleAt) {
+        console.log('[SCHEDULE DEBUG] Frontend selected time:', scheduleAt);
+        const scheduleAtIST = scheduleAt + '+05:30';
+        console.log('[SCHEDULE DEBUG] Payload scheduled_at (with IST offset):', scheduleAtIST);
+        formData.append('scheduled_at', scheduleAtIST);
+      }
 
       selectedPlatformsList.forEach((p) => {
         formData.append('platforms[]', p);
@@ -649,53 +704,61 @@ export default function PublishingPage() {
             <p>Upcoming posts for this week</p>
           </div>
           <div className="panel-actions">
-            <span className="pill">August 4–10, 2026</span>
+            <span className="pill">{weekRangeLabel}</span>
           </div>
         </div>
 
         <div className="calendar-grid">
-          <div className="calendar-day">
-            <div className="day-name">Tue 4</div>
-            <div className="day-empty">No content</div>
-          </div>
+          {weekDays.map((day) => {
+            const dayDateStr = day.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+            const todayDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+            const isToday = dayDateStr === todayDateStr;
+            const dayLabel = day.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric' });
 
-          <div className="calendar-day">
-            <div className="day-name">Wed 5</div>
-            <div className="day-card">
-              <span className="card-time">10:10</span>
-              <div className="card-title">Monsoon Wellness Tips</div>
-              <span className="card-tag">Instagram</span>
-            </div>
-          </div>
+            const dayPosts = allScheduledPosts.filter((p) => {
+              if (p.status !== 'scheduled' || !p.scheduled_at) return false;
+              const pDateStr = new Date(p.scheduled_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+              return pDateStr === dayDateStr;
+            });
 
-          <div className="calendar-day">
-            <div className="day-name">Thu 6</div>
-            <div className="day-card active">
-              <span className="card-time">17:00</span>
-              <div className="card-title">Customer Success Story</div>
-              <span className="card-tag">Facebook</span>
-            </div>
-          </div>
+            return (
+              <div key={dayDateStr} className={`calendar-day ${isToday ? 'is-today' : ''}`}>
+                <div className="day-name">
+                  <span>{dayLabel}</span>
+                  {isToday && <span className="today-badge">Today</span>}
+                </div>
 
-          <div className="calendar-day">
-            <div className="day-name">Fri 7</div>
-            <div className="day-empty">No content</div>
-          </div>
+                {dayPosts.length === 0 ? (
+                  <div className="day-empty">No content</div>
+                ) : (
+                  <div className="day-posts-list">
+                    {dayPosts.map((p) => {
+                      const timeLabel = new Date(p.scheduled_at).toLocaleTimeString('en-US', {
+                        timeZone: 'Asia/Kolkata',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: true,
+                      });
+                      const platform = Array.isArray(p.platform_list) && p.platform_list.length > 0
+                        ? p.platform_list[0]
+                        : (p.facebook_page_id ? 'Facebook' : 'Instagram');
+                      const title = p.content
+                        ? (p.content.length > 35 ? p.content.substring(0, 35) + '...' : p.content)
+                        : (p.post_type === 'video' ? 'Video Post' : 'Media Post');
 
-          <div className="calendar-day">
-            <div className="day-name">Sat 8</div>
-            <div className="day-empty">No content</div>
-          </div>
-
-          <div className="calendar-day">
-            <div className="day-name">Sun 9</div>
-            <div className="day-empty">No content</div>
-          </div>
-
-          <div className="calendar-day">
-            <div className="day-name">Mon 10</div>
-            <div className="day-empty">No content</div>
-          </div>
+                      return (
+                        <div key={p.id} className={`day-card active ${platform.toLowerCase()}`}>
+                          <span className="card-time">{timeLabel}</span>
+                          <div className="card-title" title={p.content || ''}>{title}</div>
+                          <span className={`card-tag tag-${platform.toLowerCase()}`}>{platform}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </section>
 
@@ -751,9 +814,9 @@ export default function PublishingPage() {
                     </td>
                     <td style={{ padding: '10px 14px' }}>
                       {post.published_at
-                        ? new Date(post.published_at).toLocaleString()
+                        ? new Date(post.published_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true })
                         : post.scheduled_at
-                        ? new Date(post.scheduled_at).toLocaleString()
+                        ? new Date(post.scheduled_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true })
                         : 'Draft'}
                     </td>
                     <td style={{ padding: '10px 14px' }}>
@@ -782,8 +845,20 @@ export default function PublishingPage() {
                             className="btn btn-secondary"
                             onClick={() => handleDeleteDraft(post.id)}
                             style={{ padding: '4px 8px', fontSize: '12px', color: '#dc2626' }}
+                            title="Delete Draft"
                           >
                             <Trash2 size={12} />
+                          </button>
+                        )}
+                        {post.status === 'scheduled' && (
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => handleDeleteScheduled(post.id)}
+                            style={{ padding: '4px 8px', fontSize: '12px', color: '#dc2626' }}
+                            title="Cancel Scheduled Post"
+                          >
+                            <Trash2 size={12} /> Cancel
                           </button>
                         )}
                       </div>

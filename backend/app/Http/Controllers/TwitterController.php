@@ -128,6 +128,12 @@ class TwitterController extends Controller
                 $integration->restore();
             }
 
+            // Cache the initial access token securely in cache store
+            if (!empty($tokens['access_token'])) {
+                $cacheTtl = max(60, $expiresIn - 300);
+                Cache::put('twitter_access_token_' . $integration->id, $tokens['access_token'], now()->addSeconds($cacheTtl));
+            }
+
             Log::info('Twitter OAuth Connection Successfully Saved', [
                 'workspace_id' => $workspaceId,
                 'integration_id' => $integration->id,

@@ -97,6 +97,8 @@ export default function IntegrationsPage() {
   const [showManualModal, setShowManualModal] = useState(false);
   const [fetchedPages, setFetchedPages] = useState([]);
   const [selectedPageId, setSelectedPageId] = useState('');
+  const [oauthSessionId, setOauthSessionId] = useState('');
+  const [oauthError, setOauthError] = useState('');
   const [manualPlatform, setManualPlatform] = useState('facebook');
   const [manualPageId, setManualPageId] = useState('');
   const [manualPageName, setManualPageName] = useState('');
@@ -284,17 +286,22 @@ export default function IntegrationsPage() {
   useEffect(() => {
     const handleMessage = (event) => {
       if (event.data?.type === 'FACEBOOK_PAGES_FETCHED') {
+        setOauthError('');
         const pages = event.data.pages || [];
+        const sessId = event.data.oauth_session_id || '';
+        setOauthSessionId(sessId);
         if (pages.length === 0) {
-          alert('No Facebook Pages were returned by Meta. Reason: Either your Facebook Account has no Pages, or you opted out of selecting a Page during login.');
+          setOauthError('No Facebook Pages were returned by Meta. Reason: Either your Facebook Account does not manage any Facebook Pages, or you unchecked Page permissions on the consent screen.');
           return;
         }
         setFetchedPages(pages);
         setSelectedPageId(pages[0].id);
         setShowModal(true);
-        setSyncMsg(`OAuth success! Please select which Facebook Page to connect.`);
+        setSyncMsg(`OAuth success! Logged in as ${event.data.user?.name || 'Facebook User'}. Please select which Facebook Page to connect.`);
       } else if (event.data?.type === 'FACEBOOK_OAUTH_ERROR') {
-        alert(`Facebook connection error: ${event.data.error || 'Failed to authenticate'}`);
+        const err = event.data.error || 'Failed to authenticate with Facebook';
+        setOauthError(err);
+        setSyncMsg('');
       } else if (event.data?.type === 'YOUTUBE_OAUTH_RESULT') {
         if (event.data.success) {
           setSyncMsg(`YouTube Connected: ${event.data.connection?.channel_name || 'Channel active'}`);
@@ -342,19 +349,20 @@ export default function IntegrationsPage() {
   };
 
   const handleConnectYouTube = () => {
+    const wsId = selectedWorkspaceId || 1;
     const width = 600;
     const height = 700;
     const left = (window.innerWidth - width) / 2;
     const top = (window.innerHeight - height) / 2;
 
     const popup = window.open(
-      'http://localhost:8000/api/youtube/connect',
+      `http://localhost:8000/api/youtube/connect?workspace_id=${wsId}`,
       'GoogleYouTubeOAuth',
       `width=${width},height=${height},top=${top},left=${left},scrollbars=yes,status=yes`
     );
 
     if (!popup || popup.closed || typeof popup.closed === 'undefined') {
-      window.location.href = 'http://localhost:8000/api/youtube/connect';
+      window.location.href = `http://localhost:8000/api/youtube/connect?workspace_id=${wsId}`;
     } else {
       setSyncMsg('Connecting to Google OAuth... Please complete login in the pop-up.');
     }
@@ -363,57 +371,59 @@ export default function IntegrationsPage() {
   const handleDisconnectYouTube = async () => {
     if (!window.confirm('Are you sure you want to disconnect your YouTube channel?')) return;
     try {
+      const wsId = selectedWorkspaceId || 1;
       const res = await fetch('http://localhost:8000/api/youtube/disconnect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_id: wsId }),
       });
       const json = await res.json();
       if (json.success) {
         setSyncMsg('YouTube channel disconnected.');
         setYoutubeChannel(null);
         fetchYouTubeStatus();
+        fetchIntegrationsStatus();
       }
     } catch (err) {
       alert('Error disconnecting YouTube channel.');
     }
   };
 
-  const handleConnectTwitter = async () => {
-    setTwitterLoading(true);
-    try {
-      const res = await fetch('http://localhost:8000/api/twitter/connect-mock', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace_id: 1 })
-      });
-      const json = await res.json();
-      if (json.success) {
-        setSyncMsg('X (Twitter) connected successfully!');
-        fetchTwitterStatus();
-      } else {
-        alert(json.message || 'Failed to connect X (Twitter).');
-      }
-    } catch (err) {
-      console.error('Error connecting Twitter:', err);
-      alert('Failed to connect X (Twitter).');
-    } finally {
-      setTwitterLoading(false);
+  const handleConnectTwitter = () => {
+    const wsId = selectedWorkspaceId || 1;
+    const width = 600;
+    const height = 700;
+    const left = (window.innerWidth - width) / 2;
+    const top = (window.innerHeight - height) / 2;
+
+    const popup = window.open(
+      `http://localhost:8000/api/twitter/connect?workspace_id=${wsId}`,
+      'TwitterOAuth',
+      `width=${width},height=${height},top=${top},left=${left},scrollbars=yes,status=yes`
+    );
+
+    if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+      window.location.href = `http://localhost:8000/api/twitter/connect?workspace_id=${wsId}`;
+    } else {
+      setSyncMsg('Connecting to X (Twitter) OAuth... Please complete login in the pop-up.');
     }
   };
 
   const handleDisconnectTwitter = async () => {
     if (!window.confirm('Are you sure you want to disconnect your X (Twitter) account?')) return;
     try {
+      const wsId = selectedWorkspaceId || 1;
       const res = await fetch('http://localhost:8000/api/twitter/disconnect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace_id: 1 })
+        body: JSON.stringify({ workspace_id: wsId })
       });
       const json = await res.json();
       if (json.success) {
         setSyncMsg('X (Twitter) disconnected.');
         setTwitterConnection(null);
         fetchTwitterStatus();
+        fetchIntegrationsStatus();
       }
     } catch (err) {
       alert('Error disconnecting X (Twitter) account.');
@@ -478,6 +488,7 @@ export default function IntegrationsPage() {
     try {
       const wsId = selectedWorkspaceId || 1;
       const igId = pageToConnect.instagram_business_account?.id || null;
+      const igUsername = pageToConnect.instagram_business_account?.username || pageToConnect.instagram_business_account?.name || null;
       const res = await fetch('http://localhost:8000/api/v1/facebook/connect-page', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -485,15 +496,18 @@ export default function IntegrationsPage() {
           workspace_id: wsId,
           page_id: pageToConnect.id,
           page_name: pageToConnect.name,
-          page_access_token: pageToConnect.access_token,
+          page_access_token: pageToConnect.access_token || undefined,
+          oauth_session_id: oauthSessionId || undefined,
           instagram_account_id: igId,
+          instagram_username: igUsername,
         }),
       });
       const json = await res.json();
       if (res.ok && json.success) {
         setShowModal(false);
-        setSyncMsg(`Facebook Page "${pageToConnect.name}" successfully connected!`);
+        setSyncMsg(`Facebook Page "${pageToConnect.name}"${igUsername ? ` and Instagram @${igUsername}` : ''} successfully connected!`);
         fetchConnectedFacebookPages();
+        fetchIntegrationsStatus();
       } else {
         alert(json.message || 'Failed to connect page');
       }
@@ -541,11 +555,24 @@ export default function IntegrationsPage() {
     }
   };
 
-  const handleTestConnection = (name) => {
+  const handleTestConnection = async (name) => {
     if (name.includes('YouTube') && youtubeChannel) {
-      alert(`YouTube API Connected!\nChannel: ${youtubeChannel.channel_name}\nSubscribers: ${youtubeChannel.subscriber_count.toLocaleString()}\nTotal Videos: ${youtubeChannel.video_count.toLocaleString()}\nTotal Views: ${youtubeChannel.view_count.toLocaleString()}`);
+      alert(`YouTube API Connected!\nChannel: ${youtubeChannel.channel_name}\nSubscribers: ${(youtubeChannel.subscriber_count || 0).toLocaleString()}\nTotal Videos: ${(youtubeChannel.video_count || 0).toLocaleString()}\nTotal Views: ${(youtubeChannel.view_count || 0).toLocaleString()}`);
     } else if (name.includes('X / Twitter') && twitterConnection) {
       alert(`X (Twitter) API Connected!\nAccount: ${twitterConnection.account_name}\nConnection Status: ${twitterConnection.connection_status}\nSynced: ${new Date(twitterConnection.last_sync_at).toLocaleString()}`);
+    } else if (name.includes('Facebook')) {
+      try {
+        const wsId = selectedWorkspaceId || 1;
+        const res = await axiosInstance.get(`/facebook/test?workspace_id=${wsId}`);
+        if (res.data?.success) {
+          const d = res.data.data;
+          alert(`Facebook Graph API Connected!\nPage: ${d.page_name || 'Active'}\nFollowers: ${(d.followers_count || 0).toLocaleString()}\nLikes: ${(d.fan_count || 0).toLocaleString()}\nStatus: Live & Verified`);
+        } else {
+          alert(`Facebook test: ${res.data?.message || 'Verification failed'}`);
+        }
+      } catch (err) {
+        alert(`Facebook API Test: ${err.response?.data?.message || err.message}`);
+      }
     } else {
       alert(`Testing API connection for ${name}... Connection verified successfully!`);
     }
@@ -579,6 +606,40 @@ export default function IntegrationsPage() {
         </div>
       </div>
 
+      {oauthError && (
+        <div
+          style={{
+            background: '#fef2f2',
+            color: '#991b1b',
+            border: '1px solid #fecaca',
+            padding: '14px 18px',
+            borderRadius: '10px',
+            marginBottom: '16px',
+            fontSize: '13.5px',
+            lineHeight: '1.5',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '12px',
+            boxShadow: '0 2px 4px rgba(239, 68, 68, 0.06)',
+          }}
+        >
+          <AlertCircle size={20} style={{ color: '#ef4444', flexShrink: 0, marginTop: '2px' }} />
+          <div style={{ flex: 1 }}>
+            <strong style={{ display: 'block', fontSize: '14px', marginBottom: '4px', color: '#b91c1c' }}>
+              Facebook Connection Notice
+            </strong>
+            <span style={{ color: '#374151' }}>{oauthError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setOauthError('')}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: '2px' }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+      )}
+
       {syncMsg && (
         <div
           style={{
@@ -599,264 +660,79 @@ export default function IntegrationsPage() {
         </div>
       )}
 
-      {/* Developer Alert Banner */}
-      <div className="dev-alert-banner" style={{ background: '#fffbeb', borderColor: '#fef3c7', color: '#92400e' }}>
-        <strong>YouTube Data API v3 Active:</strong> Google OAuth 2.0 Client ID <code>80913470656-0ahb9td2sm5oo9lj4oi3eqnj14v4b2oa.apps.googleusercontent.com</code> securely manages tokens in Laravel MySQL.
-      </div>
-
-      {/* Dedicated YouTube Integration Display Panel */}
-      <div className="panel mb-18" style={{ background: '#fff', borderRadius: '14px', border: '1px solid #e5e7eb', padding: '24px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', borderBottom: '1px solid #f3f4f6', paddingBottom: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ width: '44px', height: '44px', background: '#ff0000', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
-              <Video size={26} />
-            </div>
-            <div>
-              <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>YouTube Integration</h3>
-              <p style={{ margin: 0, fontSize: '13px', color: '#6b7280' }}>Google OAuth 2.0 & YouTube Data API v3</p>
-            </div>
-          </div>
-          <div>
-            {youtubeChannel ? (
-              <span className="pill success" style={{ fontSize: '13px', padding: '6px 14px' }}>
-                Status: Connected
-              </span>
-            ) : (
-              <span className="pill neutral" style={{ fontSize: '13px', padding: '6px 14px' }}>
-                Status: Not Connected
-              </span>
-            )}
-          </div>
-        </div>
-
-        {youtubeLoading ? (
-          <div style={{ padding: '20px', textAlign: 'center', color: '#6b7280' }}>Loading YouTube status...</div>
-        ) : youtubeChannel ? (
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '24px', background: '#f9fafb', padding: '20px', borderRadius: '12px', border: '1px solid #e5e7eb' }}>
-              {youtubeChannel.channel_thumbnail ? (
-                <img
-                  src={youtubeChannel.channel_thumbnail}
-                  alt={youtubeChannel.channel_name}
-                  style={{ width: '72px', height: '72px', borderRadius: '50%', objectFit: 'cover', border: '3px solid #ff0000' }}
-                />
-              ) : (
-                <div style={{ width: '72px', height: '72px', borderRadius: '50%', background: '#ff0000', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px', fontWeight: 'bold' }}>
-                  YT
-                </div>
-              )}
-              <div style={{ flex: 1 }}>
-                <h4 style={{ margin: '0 0 4px 0', fontSize: '20px', color: '#111827' }}>{youtubeChannel.channel_name}</h4>
-                <p style={{ margin: 0, fontSize: '13px', color: '#4b5563', maxHeight: '42px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {youtubeChannel.channel_description || 'No description provided.'}
-                </p>
-                <span style={{ fontSize: '11.5px', color: '#6b7280', display: 'block', marginTop: '6px' }}>
-                  Channel ID: <code>{youtubeChannel.channel_id}</code>
-                </span>
-              </div>
-            </div>
-
-            {/* Statistics Cards */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-              <div style={{ background: '#fef2f2', padding: '16px', borderRadius: '10px', border: '1px solid #fecaca' }}>
-                <span style={{ fontSize: '12px', color: '#991b1b', fontWeight: '600', textTransform: 'uppercase' }}>Subscribers</span>
-                <div style={{ fontSize: '24px', fontWeight: '800', color: '#7f1d1d', marginTop: '4px' }}>
-                  {youtubeChannel.subscriber_count ? youtubeChannel.subscriber_count.toLocaleString() : 0}
-                </div>
-              </div>
-
-              <div style={{ background: '#eff6ff', padding: '16px', borderRadius: '10px', border: '1px solid #bfdbfe' }}>
-                <span style={{ fontSize: '12px', color: '#1e40af', fontWeight: '600', textTransform: 'uppercase' }}>Total Videos</span>
-                <div style={{ fontSize: '24px', fontWeight: '800', color: '#1e3a8a', marginTop: '4px' }}>
-                  {youtubeChannel.video_count ? youtubeChannel.video_count.toLocaleString() : 0}
-                </div>
-              </div>
-
-              <div style={{ background: '#f0fdf4', padding: '16px', borderRadius: '10px', border: '1px solid #bbf7d0' }}>
-                <span style={{ fontSize: '12px', color: '#166534', fontWeight: '600', textTransform: 'uppercase' }}>Total Views</span>
-                <div style={{ fontSize: '24px', fontWeight: '800', color: '#14532d', marginTop: '4px' }}>
-                  {youtubeChannel.view_count ? youtubeChannel.view_count.toLocaleString() : 0}
-                </div>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={handleSyncAll}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-              >
-                <RefreshCw size={16} /> Refresh Channel Stats
-              </button>
-              <button
-                type="button"
-                className="btn"
-                onClick={handleDisconnectYouTube}
-                style={{ background: '#dc2626', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 18px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}
-              >
-                <Trash2 size={16} /> Disconnect YouTube
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div style={{ padding: '24px', textAlign: 'center', background: '#fafafa', borderRadius: '12px', border: '1px dashed #d1d5db' }}>
-            <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', color: '#374151' }}>Connect YouTube Channel</h4>
-            <p style={{ margin: '0 0 18px 0', fontSize: '13.5px', color: '#6b7280' }}>
-              Authorize Marketing Command to access your YouTube channel metadata, subscriber count, video metrics, and total views using Google OAuth 2.0.
-            </p>
-            <button
-              type="button"
-              className="btn"
-              onClick={handleConnectYouTube}
-              style={{ background: '#ff0000', color: '#fff', border: 'none', padding: '12px 24px', fontSize: '15px', borderRadius: '8px', cursor: 'pointer', fontWeight: '700', display: 'inline-flex', alignItems: 'center', gap: '8px' }}
-            >
-              <Video size={20} /> Connect YouTube
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Dedicated X / Twitter Integration Display Panel */}
-      <div className="panel mb-18" style={{ background: '#fff', borderRadius: '14px', border: '1px solid #e5e7eb', padding: '24px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', borderBottom: '1px solid #f3f4f6', paddingBottom: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ width: '44px', height: '44px', background: '#000000', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '20px' }}>
-              X
-            </div>
-            <div>
-              <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700' }}>X (Twitter) Integration</h3>
-              <p style={{ margin: 0, fontSize: '13px', color: '#6b7280' }}>Twitter API v2 & OAuth 2.0 PKCE</p>
-            </div>
-          </div>
-          <div>
-            {twitterConnection ? (
-              <span className="pill success" style={{ fontSize: '13px', padding: '6px 14px' }}>
-                Status: Connected ({twitterConnection.account_name})
-              </span>
-            ) : (
-              <span className="pill neutral" style={{ fontSize: '13px', padding: '6px 14px' }}>
-                Status: Not Connected
-              </span>
-            )}
-          </div>
-        </div>
-
-        {twitterLoading ? (
-          <div style={{ padding: '20px', textAlign: 'center', color: '#6b7280' }}>Loading X (Twitter) status...</div>
-        ) : twitterConnection ? (
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '24px', background: '#f9fafb', padding: '20px', borderRadius: '12px', border: '1px solid #e5e7eb' }}>
-              <div style={{ width: '72px', height: '72px', borderRadius: '50%', background: '#000000', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px', fontWeight: 'bold' }}>
-                X
-              </div>
-              <div style={{ flex: 1 }}>
-                <h4 style={{ margin: '0 0 4px 0', fontSize: '20px', color: '#111827' }}>{twitterConnection.account_name}</h4>
-                <p style={{ margin: 0, fontSize: '13px', color: '#4b5563' }}>
-                  Connection Status: <strong style={{ color: '#059669', textTransform: 'capitalize' }}>{twitterConnection.connection_status || 'Connected'}</strong>
-                </p>
-                <span style={{ fontSize: '11.5px', color: '#6b7280', display: 'block', marginTop: '6px' }}>
-                  Twitter Account ID: <code>{twitterConnection.account_id}</code> | Last Synced: {twitterConnection.last_sync_at ? new Date(twitterConnection.last_sync_at).toLocaleString() : 'Just now'}
-                </span>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => handleTestConnection('X / Twitter')}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-              >
-                <ShieldCheck size={16} /> Test X Connection
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={handleSyncAll}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-              >
-                <RefreshCw size={16} /> Refresh X Status
-              </button>
-              <button
-                type="button"
-                className="btn"
-                onClick={handleDisconnectTwitter}
-                style={{ background: '#dc2626', color: '#fff', border: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 18px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}
-              >
-                <Trash2 size={16} /> Disconnect X
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div style={{ padding: '24px', textAlign: 'center', background: '#fafafa', borderRadius: '12px', border: '1px dashed #d1d5db' }}>
-            <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', color: '#374151' }}>Connect X (Twitter) Account</h4>
-            <p style={{ margin: '0 0 18px 0', fontSize: '13.5px', color: '#6b7280' }}>
-              Authorize Marketing Command to post tweets, manage media publishing, and retrieve metrics using Twitter API v2 and OAuth 2.0 PKCE.
-            </p>
-            <button
-              type="button"
-              className="btn"
-              onClick={handleConnectTwitter}
-              style={{ background: '#000000', color: '#fff', border: 'none', padding: '12px 24px', fontSize: '15px', borderRadius: '8px', cursor: 'pointer', fontWeight: '700', display: 'inline-flex', alignItems: 'center', gap: '8px' }}
-            >
-              <Share2 size={20} /> Connect X (Twitter)
-            </button>
-          </div>
-        )}
-      </div>
-
       {/* Grid of All API Connections */}
-      <div className="integration-grid mb-18">
-        {connections.map((item) => (
-          <div className="integration-card" key={item.id}>
-            <div className="integration-card-head">
-              <div className="api-logo-box" style={
-                item.name.includes('YouTube') ? { background: '#ff0000', color: '#fff' } :
-                item.code === 'X' ? { background: '#000000', color: '#fff' } : {}
-              }>
-                {item.code}
-              </div>
-              <div>
-                <h4>{item.name}</h4>
-                <p>{item.subtitle}</p>
-              </div>
-            </div>
+      <div className="integration-grid mb-18" style={{ marginTop: '20px' }}>
+        {connections.map((item) => {
+          const isYT = item.name.includes('YouTube');
+          const isTwitter = item.code === 'X' || item.name.includes('X / Twitter');
+          const isFB = item.name.includes('Facebook');
+          const isIG = item.name.includes('Instagram');
 
-            <div className="status-bar-wrap">
-              <span className={`status-pill ${item.status}`}>{item.statusText}</span>
-              <span className="status-time">{item.timeAgo}</span>
-            </div>
+          let logoStyle = { background: '#64748b', color: '#fff' };
+          if (isYT) logoStyle = { background: '#ff0000', color: '#fff' };
+          else if (isTwitter) logoStyle = { background: '#000000', color: '#fff' };
+          else if (isFB) logoStyle = { background: '#1877f2', color: '#fff' };
+          else if (isIG) logoStyle = { background: 'linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%)', color: '#fff' };
+          else if (item.code === 'GA') logoStyle = { background: '#f59e0b', color: '#fff' };
+          else if (item.code === 'SC') logoStyle = { background: '#3b82f6', color: '#fff' };
+          else if (item.code === 'GB') logoStyle = { background: '#10b981', color: '#fff' };
+          else if (item.code === 'in') logoStyle = { background: '#0a66c2', color: '#fff' };
 
-            <div className="card-action-row">
-              <button
-                type="button"
-                className="btn-outline-dark"
-                onClick={() => handleConnectToggle(item)}
-              >
-                {item.name.includes('YouTube')
-                  ? youtubeChannel
-                    ? 'Disconnect YouTube'
-                    : 'Connect YouTube'
-                  : item.code === 'X'
-                  ? twitterConnection
-                    ? 'Disconnect X'
-                    : 'Connect X'
-                  : item.status === 'disconnected' || item.status === 'phase2'
-                  ? `Connect ${item.name.split(' ')[0]}`
-                  : 'Reconnect'}
-              </button>
-              <button
-                type="button"
-                className={item.canTest ? 'btn-test-primary' : 'btn-test-disabled'}
-                disabled={!item.canTest}
-                onClick={() => item.canTest && handleTestConnection(item.name)}
-              >
-                Test
-              </button>
+          return (
+            <div className="integration-card" key={item.id}>
+              <div className="integration-card-head">
+                <div className="api-logo-box" style={logoStyle}>
+                  {item.code}
+                </div>
+                <div>
+                  <h4>{item.name}</h4>
+                  <p>
+                    {isYT && youtubeChannel
+                      ? `${youtubeChannel.channel_name} (${(youtubeChannel.subscriber_count || 0).toLocaleString()} subs)`
+                      : isTwitter && twitterConnection
+                      ? `@${twitterConnection.account_name}`
+                      : isFB && connectedFbPages.length > 0
+                      ? connectedFbPages[0].account_name
+                      : item.subtitle}
+                  </p>
+                </div>
+              </div>
+
+              <div className="status-bar-wrap">
+                <span className={`status-pill ${item.status}`}>{item.statusText}</span>
+                <span className="status-time">{item.timeAgo}</span>
+              </div>
+
+              <div className="card-action-row">
+                <button
+                  type="button"
+                  className={item.status === 'connected' ? 'btn-outline-dark' : 'btn-outline-dark'}
+                  onClick={() => handleConnectToggle(item)}
+                >
+                  {isYT
+                    ? youtubeChannel
+                      ? 'Disconnect'
+                      : 'Connect YouTube'
+                    : isTwitter
+                    ? twitterConnection
+                      ? 'Disconnect'
+                      : 'Connect X'
+                    : item.status === 'connected'
+                    ? 'Reconnect'
+                    : `Connect ${item.name.split(' ')[0]}`}
+                </button>
+                <button
+                  type="button"
+                  className={item.canTest ? 'btn-test-primary' : 'btn-test-disabled'}
+                  disabled={!item.canTest}
+                  onClick={() => item.canTest && handleTestConnection(item.name)}
+                >
+                  Test
+                </button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Connected Facebook Pages Listing Panel */}
@@ -906,16 +782,25 @@ export default function IntegrationsPage() {
               </button>
             </div>
             <p style={{ fontSize: '13.5px', color: '#4b5563', marginBottom: '16px' }}>
-              Select which Facebook Page to connect:
+              Select which Facebook Page and linked Instagram Professional account to connect to this workspace:
             </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '240px', overflowY: 'auto', marginBottom: '20px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '280px', overflowY: 'auto', marginBottom: '20px' }}>
               {fetchedPages.map((page) => (
                 <label key={page.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: '10px', border: selectedPageId === page.id ? '2px solid #1877f2' : '1px solid #e5e7eb', background: selectedPageId === page.id ? '#eff6ff' : '#fff', cursor: 'pointer' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <input type="radio" name="facebook_page_selection" value={page.id} checked={selectedPageId === page.id} onChange={() => setSelectedPageId(page.id)} />
                     <div>
-                      <strong style={{ fontSize: '14px', display: 'block' }}>{page.name}</strong>
-                      <span style={{ fontSize: '11.5px', color: '#6b7280' }}>ID: {page.id}</span>
+                      <strong style={{ fontSize: '14px', display: 'block', color: '#111827' }}>{page.name}</strong>
+                      <span style={{ fontSize: '11.5px', color: '#6b7280' }}>Facebook Page ID: {page.id}</span>
+                      {page.instagram_business_account ? (
+                        <span style={{ fontSize: '11.5px', color: '#be185d', display: 'block', marginTop: '3px', fontWeight: '600' }}>
+                          📷 Linked Instagram: @{page.instagram_business_account.username || page.instagram_business_account.name} (Professional)
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: '11px', color: '#9ca3af', display: 'block', marginTop: '2px' }}>
+                          (No Instagram Professional account linked to this Page)
+                        </span>
+                      )}
                     </div>
                   </div>
                   {selectedPageId === page.id && <CheckCircle2 size={18} color="#1877f2" />}
@@ -925,7 +810,7 @@ export default function IntegrationsPage() {
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
               <button type="button" className="btn btn-primary" onClick={handleConfirmConnectPage} disabled={connectingPage || !selectedPageId}>
-                {connectingPage ? 'Connecting Page...' : 'Connect Selected Page'}
+                {connectingPage ? 'Connecting Accounts...' : 'Connect Facebook & Instagram'}
               </button>
             </div>
           </div>

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Integration;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
 use Exception;
 
 class TwitterService
@@ -38,7 +39,6 @@ class TwitterService
     public function getAuthUrl(string $state, string $codeChallenge): string
     {
         if ($this->isMock) {
-            // Simulator redirect
             return route('twitter.callback', [
                 'code' => 'mock_oauth_code_123456',
                 'state' => $state
@@ -82,72 +82,76 @@ class TwitterService
             ]);
 
         if (!$response->successful()) {
-            Log::error('Twitter token exchange failed', ['body' => $response->body()]);
-            throw new Exception('Twitter OAuth token exchange failed: ' . ($response->json('error_description') ?? $response->body()));
+            $status = $response->status();
+            $body = $response->body();
+            Log::error('Twitter token exchange failed', ['status' => $status, 'body' => $body]);
+            throw new Exception("X (Twitter) token exchange failed [HTTP {$status}]: " . ($response->json('error_description') ?? $body));
         }
 
         return $response->json();
     }
 
     /**
-     * Fetch user details from Twitter API.
+     * Fetch user details from Twitter API v2.
      */
     public function getUserDetails(string $accessToken): array
     {
         if ($this->isMock || str_starts_with($accessToken, 'mock_access_token_')) {
             return [
-                'id' => 'mock_twitter_user_998877',
-                'name' => 'Chandru',
-                'username' => 'Chandramohan_K1',
+                'id'       => 'mock_twitter_user_998877',
+                'name'     => 'Demo Agency',
+                'username' => 'DemoAgency_X',
             ];
         }
 
         $response = Http::withToken($accessToken)
-            ->get('https://api.twitter.com/2/users/me');
+            ->get('https://api.twitter.com/2/users/me', [
+                'user.fields' => 'id,name,username,profile_image_url',
+            ]);
 
         if (!$response->successful()) {
-            Log::error('Twitter fetch user details failed', ['body' => $response->body()]);
-            throw new Exception('Failed to fetch Twitter user details.');
+            $status = $response->status();
+            $body = $response->body();
+            Log::error('Twitter fetch user details failed', ['status' => $status, 'body' => $body]);
+            throw new Exception("Failed to fetch X (Twitter) user details [HTTP {$status}]: {$body}");
         }
 
         $data = $response->json('data');
         if (empty($data)) {
-            throw new Exception('Invalid user data returned from Twitter.');
+            throw new Exception('Invalid user data returned from X (Twitter) API.');
         }
 
         return [
-            'id'       => $data['id'],
-            'name'     => $data['name'],
-            'username' => $data['username'],
+            'id'                => $data['id'],
+            'name'              => $data['name'],
+            'username'          => $data['username'],
+            'profile_image_url' => $data['profile_image_url'] ?? null,
         ];
     }
 
     /**
-     * Refresh access token if expired.
+     * Get a valid access token for the integration, automatically refreshing if expired.
      */
-    public function refreshAccessTokenIfNeeded(Integration $integration): Integration
+    public function getValidAccessToken(Integration $integration): string
     {
-        // If mock, just slide expiry window
         if ($this->isMock || str_starts_with($integration->refresh_token ?? '', 'mock_')) {
-            if ($integration->access_token_expires_at && $integration->access_token_expires_at->isPast()) {
-                $integration->update([
-                    'access_token_expires_at' => now()->addHours(2),
-                    'token_expires_at'        => now()->addHours(2),
-                ]);
-            }
-            return $integration;
+            return 'mock_access_token_sample';
         }
 
-        // Check if token expires in under 5 minutes
+        $cacheKey = 'twitter_access_token_' . $integration->id;
+        $cachedToken = Cache::get($cacheKey);
+
+        // If cached token exists and token expiration is in the future (> 5 mins), return cached
         $expiresAt = $integration->access_token_expires_at ?? $integration->token_expires_at;
-        if ($expiresAt && $expiresAt->isFuture() && $expiresAt->diffInMinutes(now()) > 5) {
-            return $integration;
+        if (!empty($cachedToken) && $expiresAt && $expiresAt->isFuture() && $expiresAt->diffInMinutes(now()) > 5) {
+            return $cachedToken;
         }
 
         if (empty($integration->refresh_token)) {
-            throw new Exception('Twitter refresh token is missing. Please reconnect your account.');
+            throw new Exception('X (Twitter) refresh token is missing. Please reconnect your account.');
         }
 
+        // Perform token refresh
         $response = Http::asForm()
             ->withBasicAuth($this->clientId, $this->clientSecret)
             ->post('https://api.twitter.com/2/oauth2/token', [
@@ -157,23 +161,36 @@ class TwitterService
             ]);
 
         if (!$response->successful()) {
-            Log::error('Twitter refresh token failed', ['body' => $response->body()]);
+            $status = $response->status();
+            $body = $response->body();
+            Log::error('Twitter refresh token failed', ['status' => $status, 'body' => $body]);
             $integration->update(['connection_status' => 'expired']);
-            throw new Exception('Failed to refresh Twitter connection. Please reconnect.');
+            throw new Exception("Failed to refresh X (Twitter) connection [HTTP {$status}]: {$body}");
         }
 
         $tokens = $response->json();
-        $expiresIn = $tokens['expires_in'] ?? 7200;
+        $newAccessToken = $tokens['access_token'] ?? null;
+        $newRefreshToken = $tokens['refresh_token'] ?? $integration->refresh_token;
+        $expiresIn = (int)($tokens['expires_in'] ?? 7200);
 
-        $updateData = [
-            'refresh_token'           => $tokens['refresh_token'] ?? $integration->refresh_token,
+        if (empty($newAccessToken)) {
+            throw new Exception('Invalid token response returned from X (Twitter) refresh endpoint.');
+        }
+
+        // Update database record with new rotated refresh token & expiry
+        $integration->update([
+            'refresh_token'           => $newRefreshToken,
             'access_token_expires_at' => now()->addSeconds($expiresIn),
             'token_expires_at'        => now()->addSeconds($expiresIn),
             'connection_status'       => 'connected',
-        ];
+            'last_sync_at'            => now(),
+        ]);
 
-        $integration->update($updateData);
-        return $integration;
+        // Cache the new access token
+        $cacheTtl = max(60, $expiresIn - 300);
+        Cache::put($cacheKey, $newAccessToken, now()->addSeconds($cacheTtl));
+
+        return $newAccessToken;
     }
 
     /**
@@ -181,8 +198,6 @@ class TwitterService
      */
     public function publishTweet(Integration $integration, string $text): array
     {
-        $integration = $this->refreshAccessTokenIfNeeded($integration);
-
         if ($this->isMock || str_starts_with($integration->refresh_token ?? '', 'mock_')) {
             Log::info('Mock Tweet published', ['text' => $text, 'workspace' => $integration->workspace_id]);
             return [
@@ -191,41 +206,38 @@ class TwitterService
             ];
         }
 
-        // We need the temporary access token from exchange or refresh.
-        // In this implementation, since integrations table does not have an access_token column, 
-        // let's retrieve the fresh access token. Since we just ran refreshAccessTokenIfNeeded,
-        // the client credentials or token exchange response was returned.
-        // To be safe and simple, let's perform a token refresh to obtain a valid access token directly.
-        $response = Http::asForm()
-            ->withBasicAuth($this->clientId, $this->clientSecret)
-            ->post('https://api.twitter.com/2/oauth2/token', [
-                'client_id'     => $this->clientId,
-                'grant_type'    => 'refresh_token',
-                'refresh_token' => $integration->refresh_token,
+        $accessToken = $this->getValidAccessToken($integration);
+
+        // Strictly clamp text length to 280 characters
+        $tweetText = mb_substr(trim($text), 0, 280);
+
+        // Call X API v2 POST /2/tweets
+        $response = Http::withToken($accessToken)
+            ->post('https://api.twitter.com/2/tweets', [
+                'text' => $tweetText,
             ]);
+
+        $status = $response->status();
+        $body = $response->body();
+        $json = $response->json();
 
         if (!$response->successful()) {
-            throw new Exception('Twitter access token invalid or expired. Refresh failed.');
-        }
-
-        $accessToken = $response->json('access_token');
-
-        // Post Tweet using Twitter API v2 POST /2/tweets
-        $tweetResponse = Http::withToken($accessToken)
-            ->post('https://api.twitter.com/2/tweets', [
-                'text' => mb_substr($text, 0, 280), // Strictly clamp text length to 280 chars
+            Log::error('Twitter publishTweet failed', [
+                'status'     => $status,
+                'body'       => $body,
+                'account_id' => $integration->account_id,
             ]);
 
-        if (!$tweetResponse->successful()) {
-            Log::error('Twitter publishing failed', ['body' => $tweetResponse->body()]);
-            throw new Exception('X (Twitter) API error: ' . ($tweetResponse->json('detail') ?? $tweetResponse->body()));
+            $detail = $json['detail'] ?? ($json['title'] ?? ($json['message'] ?? $body));
+            throw new Exception("X (Twitter) API error [HTTP {$status}]: {$detail}");
         }
 
-        $data = $tweetResponse->json('data');
+        $data = $json['data'] ?? [];
 
         return [
             'success' => true,
             'id'      => $data['id'] ?? null,
+            'text'    => $data['text'] ?? $tweetText,
         ];
     }
 }

@@ -2,14 +2,11 @@ import React, { useEffect, useState, useCallback } from 'react';
 import axiosInstance from '../api/axiosInstance';
 import { useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../context/WorkspaceContext';
-<<<<<<< HEAD
-import YouTubeAnalyticsSection from '../components/YouTubeAnalyticsSection';
-=======
 import { useAuth } from '../hooks/useAuth';
->>>>>>> 9181f6b962c53016cdf86f5555f6cd0e14946eb8
 import {
   Eye, Zap, Globe, Users, Plus, RefreshCw, Share2, CheckCircle2,
-  AlertCircle, Clock, TrendingUp, AlertTriangle, BarChart2
+  AlertCircle, Clock, TrendingUp, AlertTriangle, BarChart2,
+  ChevronLeft, ChevronRight
 } from 'lucide-react';
 import {
   Chart as ChartJS,
@@ -56,13 +53,36 @@ export default function DashboardPage() {
   const [trend, setTrend] = useState(null);
   const [priorities, setPriorities] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [trendDays, setTrendDays] = useState(30);
+  const [platformIndex, setPlatformIndex] = useState(0); // 0 = FB, 1 = IG, 2 = YT
+  const getPresetDates = (days) => {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - (days - 1));
+    return {
+      start: start.toISOString().split('T')[0],
+      end: end.toISOString().split('T')[0],
+    };
+  };
+
+  const [trendDays, setTrendDays] = useState(() => {
+    const saved = localStorage.getItem('dashboard_trend_days');
+    if (saved) return saved === 'custom' ? 'custom' : Number(saved);
+    return 30;
+  });
   const [customStartDate, setCustomStartDate] = useState(() => {
+    const saved = localStorage.getItem('dashboard_custom_start');
+    if (saved) return saved;
+    const initialDays = localStorage.getItem('dashboard_trend_days');
+    const numDays = (initialDays && initialDays !== 'custom') ? Number(initialDays) : 30;
     const d = new Date();
-    d.setDate(d.getDate() - 30);
+    d.setDate(d.getDate() - (numDays - 1));
     return d.toISOString().split('T')[0];
   });
-  const [customEndDate, setCustomEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [customEndDate, setCustomEndDate] = useState(() => {
+    const saved = localStorage.getItem('dashboard_custom_end');
+    if (saved) return saved;
+    return new Date().toISOString().split('T')[0];
+  });
   const [error, setError] = useState('');
 
   const fetchAll = useCallback(async (forceRefresh = false) => {
@@ -70,16 +90,24 @@ export default function DashboardPage() {
     setLoading(true);
     setError('');
     try {
-      const overviewParams = { workspace_id: selectedWorkspaceId, days: trendDays === 'custom' ? 30 : trendDays };
+      const overviewParams = {
+        workspace_id: selectedWorkspaceId,
+        start_date: customStartDate,
+        end_date: customEndDate,
+      };
+      if (typeof trendDays === 'number') {
+        overviewParams.days = trendDays;
+      }
       if (forceRefresh === true) {
         overviewParams.force_refresh = 1;
       }
-      const trendParams = { workspace_id: selectedWorkspaceId };
 
-      if (trendDays === 'custom') {
-        trendParams.start_date = customStartDate;
-        trendParams.end_date = customEndDate;
-      } else {
+      const trendParams = {
+        workspace_id: selectedWorkspaceId,
+        start_date: customStartDate,
+        end_date: customEndDate,
+      };
+      if (typeof trendDays === 'number') {
         trendParams.days = trendDays;
       }
 
@@ -117,7 +145,11 @@ export default function DashboardPage() {
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   // ── Chart Configuration ─────────────────────────────────────────────────────
-  const hasChartData = trend?.has_data && trend?.data?.labels?.length > 0;
+  // Show chart if we have labels AND (a connected page OR non-zero data)
+  const hasChartData = trend?.data?.labels?.length > 0 && (
+    trend?.has_data ||
+    (overview?.connected_page != null)
+  );
 
   const chartData = hasChartData ? {
     labels: trend.data.labels,
@@ -218,7 +250,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Date Filter Bar — Aligned to the top right above 'Leads generated' card */}
+      {/* Date Filter Bar — Aligned to top right */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '10px', gap: '10px' }}>
         <select
           className="input"
@@ -227,6 +259,14 @@ export default function DashboardPage() {
           onChange={e => {
             const val = e.target.value === 'custom' ? 'custom' : Number(e.target.value);
             setTrendDays(val);
+            localStorage.setItem('dashboard_trend_days', val);
+            if (val !== 'custom') {
+              const { start, end } = getPresetDates(val);
+              setCustomStartDate(start);
+              setCustomEndDate(end);
+              localStorage.setItem('dashboard_custom_start', start);
+              localStorage.setItem('dashboard_custom_end', end);
+            }
           }}
         >
           <option value={7}>Last 7 days</option>
@@ -235,38 +275,43 @@ export default function DashboardPage() {
           <option value="custom">Custom</option>
         </select>
 
-        {trendDays === 'custom' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#ffffff', padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
-            <span style={{ fontSize: '12px', color: '#475569', fontWeight: '600' }}>Start:</span>
-            <input
-              type="date"
-              className="input"
-              style={{ width: 'auto', padding: '3px 8px', fontSize: '12px' }}
-              value={customStartDate}
-              onChange={e => {
-                const newStart = e.target.value;
-                setCustomStartDate(newStart);
-                if (customEndDate && newStart > customEndDate) {
-                  setCustomEndDate(newStart);
-                }
-              }}
-            />
-            <span style={{ fontSize: '12px', color: '#475569', fontWeight: '600' }}>End:</span>
-            <input
-              type="date"
-              className="input"
-              style={{ width: 'auto', padding: '3px 8px', fontSize: '12px' }}
-              min={customStartDate}
-              value={customEndDate}
-              onChange={e => {
-                const newEnd = e.target.value;
-                if (newEnd >= customStartDate) {
-                  setCustomEndDate(newEnd);
-                }
-              }}
-            />
-          </div>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#ffffff', padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+          <span style={{ fontSize: '12px', color: '#475569', fontWeight: '600' }}>Start:</span>
+          <input
+            type="date"
+            className="input"
+            style={{ width: 'auto', padding: '3px 8px', fontSize: '12px' }}
+            value={customStartDate}
+            onChange={e => {
+              const newStart = e.target.value;
+              setCustomStartDate(newStart);
+              setTrendDays('custom');
+              localStorage.setItem('dashboard_trend_days', 'custom');
+              localStorage.setItem('dashboard_custom_start', newStart);
+              if (customEndDate && newStart > customEndDate) {
+                setCustomEndDate(newStart);
+                localStorage.setItem('dashboard_custom_end', newStart);
+              }
+            }}
+          />
+          <span style={{ fontSize: '12px', color: '#475569', fontWeight: '600' }}>End:</span>
+          <input
+            type="date"
+            className="input"
+            style={{ width: 'auto', padding: '3px 8px', fontSize: '12px' }}
+            min={customStartDate}
+            value={customEndDate}
+            onChange={e => {
+              const newEnd = e.target.value;
+              if (newEnd >= customStartDate) {
+                setCustomEndDate(newEnd);
+                setTrendDays('custom');
+                localStorage.setItem('dashboard_trend_days', 'custom');
+                localStorage.setItem('dashboard_custom_end', newEnd);
+              }
+            }}
+          />
+        </div>
       </div>
 
       {/* Metrics Row — all real data */}
@@ -295,7 +340,11 @@ export default function DashboardPage() {
           </div>
           <div className="metric-value">
             {loading ? '...' : connectedChannels.length > 0
-              ? formatNum(overview?.engagement || 0)
+              ? formatNum(
+                  (overview?.engagement || 0) > 0
+                    ? (overview?.engagement || 0)
+                    : (overview?.total_likes || 0) + (overview?.total_comments || 0) + (overview?.total_shares || 0)
+                )
               : <span style={{ fontSize: '14px', color: '#9ca3af' }}>No account</span>}
           </div>
           <div className="metric-foot">
@@ -334,36 +383,60 @@ export default function DashboardPage() {
         </div>
       </div>
 
-<<<<<<< HEAD
-      {/* YouTube Analytics Overview Section (Views, Likes, Comments, Shares) */}
-      <YouTubeAnalyticsSection />
-
-      {/* Main Grid Section */}
-=======
-      {/* Meta Facebook & Instagram Real Insights Summary Panel */}
+      {/* Meta Facebook, Instagram & YouTube Real Insights Summary Panel */}
       {connectedChannels.length > 0 && (
         <div className="panel mb-18" style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '16px 20px', marginBottom: '24px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{ width: '36px', height: '36px', background: 'linear-gradient(135deg, #1877f2, #e1306c)', color: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '15px' }}>
-                f/ig
+              <div style={{
+                width: '36px',
+                height: '36px',
+                background: platformIndex === 0
+                  ? 'linear-gradient(135deg, #1877f2, #0d6efd)'
+                  : platformIndex === 1
+                    ? 'linear-gradient(135deg, #f58529, #dd2a7b, #8134af)'
+                    : 'linear-gradient(135deg, #ff0000, #cc0000)',
+                color: '#fff',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontWeight: 'bold',
+                fontSize: '14px'
+              }}>
+                {platformIndex === 0 ? 'FB' : platformIndex === 1 ? 'IG' : 'YT'}
               </div>
               <div>
-                <strong style={{ fontSize: '14px', color: '#0f172a' }}>{connectedPage?.page_name || 'Social Channels'} — Platform Insights Breakdown</strong>
-                <span style={{ fontSize: '11px', color: '#64748b', display: 'block' }}>Real Meta Graph API v23.0 & Instagram Graph API metrics</span>
+                <strong style={{ fontSize: '14px', color: '#0f172a' }}>
+                  {platformIndex === 2
+                    ? (overview?.youtube_connection?.channel_name || connectedPage?.page_name || 'Social Channels')
+                    : (connectedPage?.page_name || 'Social Channels')} — Platform Insights Breakdown
+                </strong>
+                <span style={{ fontSize: '11px', color: '#64748b', display: 'block' }}>
+                  {platformIndex === 0 && 'Real Meta Graph API v23.0 metrics'}
+                  {platformIndex === 1 && 'Real Instagram Graph API metrics'}
+                  {platformIndex === 2 && 'Real YouTube Data API v3 metrics'}
+                </span>
               </div>
             </div>
 
-            {/* Platform Specific Breakdown */}
-            <div style={{ display: 'flex', gap: '24px', alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Platform Specific Breakdown (One platform at a time: FB -> IG -> YT) */}
+            <div style={{ display: 'flex', alignItems: 'center' }}>
               {/* Facebook Metrics Card */}
-              {connectedPage && (
+              {platformIndex === 0 && (
                 <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', padding: '8px 14px', display: 'flex', gap: '14px', alignItems: 'center' }}>
                   <span style={{ fontWeight: '700', fontSize: '12px', color: '#1d4ed8' }}>FB</span>
                   <div style={{ textAlign: 'center', minWidth: '45px' }}>
-                    <span style={{ fontSize: '10px', color: '#64748b', fontWeight: '600', display: 'block' }}>VIEWS</span>
+                    <span
+                      style={{ fontSize: '10px', color: '#64748b', fontWeight: '600', display: 'block', cursor: 'help' }}
+                      title={
+                        (overview?.facebook_metrics?.views_supported === false)
+                          ? 'Views not available for this date range'
+                          : 'Facebook Views: video plays for video content (/{page}/videos?fields=views), or Page profile views (page_views_total) for photo/text pages. Source: Meta Graph API v23.0. Not impressions.'
+                      }
+                    >VIEWS</span>
                     {overview?.facebook_metrics?.views_supported === false ? (
-                      <span style={{ fontSize: '10px', color: '#94a3b8', fontStyle: 'italic' }}>N/A (Req. Perm)</span>
+                      <span style={{ fontSize: '10px', color: '#94a3b8', fontStyle: 'italic' }} title="No views data for this date range">N/A</span>
                     ) : (
                       <strong style={{ fontSize: '14px', color: '#0369a1' }}>{loading ? '...' : formatNum(overview?.facebook_metrics?.views ?? 0)}</strong>
                     )}
@@ -392,12 +465,64 @@ export default function DashboardPage() {
                       <strong style={{ fontSize: '14px', color: '#6d28d9' }}>{loading ? '...' : formatNum(overview?.facebook_metrics?.shares ?? 0)}</strong>
                     )}
                   </div>
+                  {/* Next Button -> Instagram */}
+                  <button
+                    type="button"
+                    onClick={() => setPlatformIndex(1)}
+                    title="Next: Instagram"
+                    style={{
+                      background: '#fff',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '6px',
+                      width: '28px',
+                      height: '28px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      color: '#334155',
+                      padding: 0,
+                      marginLeft: '4px',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                      transition: 'all 0.15s ease'
+                    }}
+                    onMouseOver={(e) => { e.currentTarget.style.borderColor = '#94a3b8'; e.currentTarget.style.background = '#f1f5f9'; }}
+                    onMouseOut={(e) => { e.currentTarget.style.borderColor = '#cbd5e1'; e.currentTarget.style.background = '#fff'; }}
+                  >
+                    <ChevronRight size={16} />
+                  </button>
                 </div>
               )}
 
               {/* Instagram Metrics Card */}
-              {overview?.instagram_metrics && (
+              {platformIndex === 1 && (
                 <div style={{ background: '#fdf2f8', border: '1px solid #fbcfe8', borderRadius: '8px', padding: '8px 14px', display: 'flex', gap: '14px', alignItems: 'center' }}>
+                  {/* Previous Button -> Facebook */}
+                  <button
+                    type="button"
+                    onClick={() => setPlatformIndex(0)}
+                    title="Previous: Facebook"
+                    style={{
+                      background: '#fff',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '6px',
+                      width: '28px',
+                      height: '28px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      color: '#334155',
+                      padding: 0,
+                      marginRight: '4px',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                      transition: 'all 0.15s ease'
+                    }}
+                    onMouseOver={(e) => { e.currentTarget.style.borderColor = '#94a3b8'; e.currentTarget.style.background = '#f1f5f9'; }}
+                    onMouseOut={(e) => { e.currentTarget.style.borderColor = '#cbd5e1'; e.currentTarget.style.background = '#fff'; }}
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
                   <span style={{ fontWeight: '700', fontSize: '12px', color: '#be185d' }}>IG</span>
                   <div style={{ textAlign: 'center', minWidth: '45px' }}>
                     <span style={{ fontSize: '10px', color: '#64748b', fontWeight: '600', display: 'block' }} title="Total Views / Impressions">VIEWS</span>
@@ -429,6 +554,89 @@ export default function DashboardPage() {
                       <strong style={{ fontSize: '14px', color: '#6d28d9' }}>{loading ? '...' : formatNum(overview?.instagram_metrics?.shares ?? 0)}</strong>
                     )}
                   </div>
+                  {/* Next Button -> YouTube */}
+                  <button
+                    type="button"
+                    onClick={() => setPlatformIndex(2)}
+                    title="Next: YouTube"
+                    style={{
+                      background: '#fff',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '6px',
+                      width: '28px',
+                      height: '28px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      color: '#334155',
+                      padding: 0,
+                      marginLeft: '4px',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                      transition: 'all 0.15s ease'
+                    }}
+                    onMouseOver={(e) => { e.currentTarget.style.borderColor = '#94a3b8'; e.currentTarget.style.background = '#f1f5f9'; }}
+                    onMouseOut={(e) => { e.currentTarget.style.borderColor = '#cbd5e1'; e.currentTarget.style.background = '#fff'; }}
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              )}
+
+              {/* YouTube Metrics Card */}
+              {platformIndex === 2 && (
+                <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '8px 14px', display: 'flex', gap: '14px', alignItems: 'center' }}>
+                  {/* Previous Button -> Instagram */}
+                  <button
+                    type="button"
+                    onClick={() => setPlatformIndex(1)}
+                    title="Previous: Instagram"
+                    style={{
+                      background: '#fff',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '6px',
+                      width: '28px',
+                      height: '28px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      color: '#334155',
+                      padding: 0,
+                      marginRight: '4px',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                      transition: 'all 0.15s ease'
+                    }}
+                    onMouseOver={(e) => { e.currentTarget.style.borderColor = '#94a3b8'; e.currentTarget.style.background = '#f1f5f9'; }}
+                    onMouseOut={(e) => { e.currentTarget.style.borderColor = '#cbd5e1'; e.currentTarget.style.background = '#fff'; }}
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <span style={{ fontWeight: '700', fontSize: '12px', color: '#dc2626' }}>YT</span>
+                  <div style={{ textAlign: 'center', minWidth: '45px' }}>
+                    <span style={{ fontSize: '10px', color: '#64748b', fontWeight: '600', display: 'block' }} title="Total Video Views">VIEWS</span>
+                    <strong style={{ fontSize: '14px', color: '#0369a1' }}>
+                      {loading ? '...' : formatNum(overview?.youtube_metrics?.views ?? overview?.youtube_connection?.view_count ?? 0)}
+                    </strong>
+                  </div>
+                  <div style={{ textAlign: 'center', minWidth: '45px' }}>
+                    <span style={{ fontSize: '10px', color: '#64748b', fontWeight: '600', display: 'block' }}>LIKES</span>
+                    <strong style={{ fontSize: '14px', color: '#dc2626' }}>
+                      {loading ? '...' : formatNum(overview?.youtube_metrics?.likes ?? 0)}
+                    </strong>
+                  </div>
+                  <div style={{ textAlign: 'center', minWidth: '45px' }}>
+                    <span style={{ fontSize: '10px', color: '#64748b', fontWeight: '600', display: 'block' }}>COMMENTS</span>
+                    <strong style={{ fontSize: '14px', color: '#047857' }}>
+                      {loading ? '...' : formatNum(overview?.youtube_metrics?.comments ?? 0)}
+                    </strong>
+                  </div>
+                  <div style={{ textAlign: 'center', minWidth: '45px' }}>
+                    <span style={{ fontSize: '10px', color: '#64748b', fontWeight: '600', display: 'block' }}>SHARES</span>
+                    <strong style={{ fontSize: '14px', color: '#6d28d9' }}>
+                      {loading ? '...' : formatNum(overview?.youtube_metrics?.shares ?? 0)}
+                    </strong>
+                  </div>
                 </div>
               )}
             </div>
@@ -437,7 +645,6 @@ export default function DashboardPage() {
       )}
 
       {/* Main Grid */}
->>>>>>> 9181f6b962c53016cdf86f5555f6cd0e14946eb8
       <div className="grid-main-side mb-18">
         {/* Performance Trend Chart */}
         <div className="panel">

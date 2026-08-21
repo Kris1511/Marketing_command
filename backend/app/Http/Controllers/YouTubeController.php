@@ -24,9 +24,11 @@ class YouTubeController extends Controller
     public function connect(Request $request)
     {
         try {
+            $workspaceId = (int)$request->query('workspace_id', 4);
             $state = base64_encode(json_encode([
-                'user_id' => $request->user()?->id ?? 1,
-                'time' => time(),
+                'user_id'      => $request->user()?->id ?? 1,
+                'workspace_id' => $workspaceId,
+                'time'         => time(),
             ]));
 
             $authUrl = $this->youtubeService->getAuthUrl($state);
@@ -70,10 +72,12 @@ class YouTubeController extends Controller
 
         // 2. Validate state
         $userId = 1;
+        $workspaceId = 4;
         if ($stateRaw) {
             $decoded = json_decode(base64_decode($stateRaw), true);
-            if (is_array($decoded) && isset($decoded['user_id'])) {
-                $userId = $decoded['user_id'];
+            if (is_array($decoded)) {
+                if (isset($decoded['user_id'])) $userId = $decoded['user_id'];
+                if (isset($decoded['workspace_id'])) $workspaceId = (int)$decoded['workspace_id'];
             }
         }
 
@@ -86,6 +90,23 @@ class YouTubeController extends Controller
 
             // 7. Save Channel Information & Tokens (encrypted)
             $connection = $this->youtubeService->saveChannelConnection($userId, $tokens, $channelData);
+
+            // Also persist to integrations table for workspace
+            \App\Models\Integration::updateOrCreate(
+                [
+                    'workspace_id' => $workspaceId,
+                    'platform'     => 'youtube',
+                ],
+                [
+                    'account_id'        => $channelData['channel_id'] ?? $connection->channel_id,
+                    'account_name'      => $channelData['channel_name'] ?? $connection->channel_name,
+                    'refresh_token'     => $tokens['refresh_token'] ?? null,
+                    'is_connected'      => true,
+                    'connection_status' => 'connected',
+                    'followers_count'   => $connection->subscriber_count ?? 0,
+                    'last_sync_at'      => now(),
+                ]
+            );
 
             // 8. Redirect user to Marketing Command dashboard
             return $this->renderOAuthResponse(
@@ -107,7 +128,23 @@ class YouTubeController extends Controller
      */
     public function status(Request $request)
     {
+        $workspaceId = $request->query('workspace_id');
         $connection = YouTubeConnection::latest()->first();
+
+        if ($workspaceId) {
+            $integ = \App\Models\Integration::where('workspace_id', (int)$workspaceId)
+                ->where('platform', 'youtube')
+                ->where('is_connected', true)
+                ->first();
+            if (!$integ && !$connection) {
+                return response()->json([
+                    'success' => true,
+                    'connected' => false,
+                    'message' => 'YouTube is not connected for this workspace.',
+                    'data' => null,
+                ]);
+            }
+        }
 
         if (!$connection) {
             return response()->json([
@@ -213,7 +250,7 @@ class YouTubeController extends Controller
     public function uploadVideo(Request $request)
     {
         $request->validate([
-            'video' => 'required|file|mimes:mp4,mov,avi,mkv|max:51200',
+            'video' => 'required|file|mimes:mp4,mov,avi,mkv|max:512000',
             'title' => 'nullable|string|max:100',
             'description' => 'nullable|string',
         ]);

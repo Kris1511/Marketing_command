@@ -19,6 +19,8 @@ use App\Models\FacebookPostMedia;
 use App\Models\FacebookPostHistory;
 use App\Services\FacebookGraphService;
 use App\Http\Controllers\YouTubeController;
+use App\Http\Controllers\TwitterController;
+use App\Http\Controllers\FacebookAuthController;
 
 /*
 |--------------------------------------------------------------------------
@@ -76,18 +78,12 @@ Route::get('/youtube/status', [YouTubeController::class, 'status']);
 Route::get('/youtube/channel', [YouTubeController::class, 'channel']);
 Route::get('/youtube/analytics/overview', [YouTubeController::class, 'analyticsOverview']);
 Route::post('/youtube/disconnect', [YouTubeController::class, 'disconnect']);
-Route::post('/youtube/videos', [YouTubeController::class, 'uploadVideo']);
-
-<<<<<<< HEAD
-// Twitter API Routes (Direct /api/twitter/...)
-Route::get('/twitter/connect', [TwitterController::class, 'connect']);
+// Twitter Direct OAuth Routes (Direct /api/twitter/...)
+Route::get('/twitter/connect', [TwitterController::class, 'connect'])->name('twitter.connect');
 Route::get('/twitter/callback', [TwitterController::class, 'callback'])->name('twitter.callback');
 Route::get('/twitter/status', [TwitterController::class, 'status']);
 Route::post('/twitter/disconnect', [TwitterController::class, 'disconnect']);
-Route::post('/twitter/connect-mock', [TwitterController::class, 'connectMock']);
 
-=======
->>>>>>> 9181f6b962c53016cdf86f5555f6cd0e14946eb8
 Route::prefix('v1')->group(function () {
 
     // YouTube API Routes (Aliased under /api/v1/youtube/...)
@@ -249,40 +245,39 @@ Route::prefix('v1')->group(function () {
 
         // Dashboard Overview Metrics API (Real Data & Workspace Isolated)
         Route::get('/dashboard/metrics', function (Request $request) {
-            $workspaceId = $request->query('workspace_id', 1);
+            $workspaceId = (int)$request->query('workspace_id', 1);
             $workspace = Workspace::find($workspaceId);
 
-            $facebookPages = FacebookPage::where('workspace_id', $workspaceId)->get();
-            $connectedPage = $facebookPages->first() ?? FacebookPage::latest()->first();
-            $fbWorkspaceId = $connectedPage ? $connectedPage->workspace_id : $workspaceId;
+            $facebookPages = FacebookPage::where('workspace_id', $workspaceId)->whereNotNull('page_access_token')->get();
+            $connectedPage = $facebookPages->first();
 
             $fbPhotoMetrics = ['likes' => 0, 'comments' => 0, 'shares' => 0];
             if ($connectedPage && !empty($connectedPage->page_access_token)) {
                 try {
                     $graphService = new FacebookGraphService();
                     $graphService->refreshPageInsights($connectedPage);
-                    $graphService->syncWorkspacePosts($fbWorkspaceId);
+                    $graphService->syncWorkspacePosts($workspaceId);
                     $fbPhotoMetrics = $graphService->getPagePhotosMetrics($connectedPage->page_id, $connectedPage->page_access_token);
                 } catch (\Exception $e) {}
             }
 
-            $totalPosts = FacebookPost::where('workspace_id', $fbWorkspaceId)->count();
-            $postsThisMonth = FacebookPost::where('workspace_id', $fbWorkspaceId)
+            $totalPosts = FacebookPost::where('workspace_id', $workspaceId)->count();
+            $postsThisMonth = FacebookPost::where('workspace_id', $workspaceId)
                 ->whereMonth('created_at', now()->month)
                 ->whereYear('created_at', now()->year)
                 ->count();
-            $publishedToday = FacebookPost::where('workspace_id', $fbWorkspaceId)
+            $publishedToday = FacebookPost::where('workspace_id', $workspaceId)
                 ->where('status', 'published')
                 ->whereDate('published_at', now()->today())
                 ->count();
-            $scheduledCount = FacebookPost::where('workspace_id', $fbWorkspaceId)
+            $scheduledCount = FacebookPost::where('workspace_id', $workspaceId)
                 ->where('status', 'scheduled')
                 ->count();
-            $draftsCount = FacebookPost::where('workspace_id', $fbWorkspaceId)
+            $draftsCount = FacebookPost::where('workspace_id', $workspaceId)
                 ->where('status', 'draft')
                 ->count();
 
-            $allPubPosts     = FacebookPost::where('workspace_id', $fbWorkspaceId)->where('status', 'published');
+            $allPubPosts     = FacebookPost::where('workspace_id', $workspaceId)->where('status', 'published');
             $totalLikes      = max((int)(clone $allPubPosts)->sum('likes_count'), (int)($fbPhotoMetrics['likes'] ?? 0));
             $totalComments   = max((int)(clone $allPubPosts)->sum('comments_count'), (int)($fbPhotoMetrics['comments'] ?? 0));
             $totalShares     = max((int)(clone $allPubPosts)->sum('shares_count'), (int)($fbPhotoMetrics['shares'] ?? 0));
@@ -306,7 +301,11 @@ Route::prefix('v1')->group(function () {
                     return $p;
                 });
 
-            $ytConn = \App\Models\YouTubeConnection::latest()->first();
+            $ytInteg = Integration::where('workspace_id', $workspaceId)->where('platform', 'youtube')->where('is_connected', true)->first();
+            $ytConn = null;
+            if ($ytInteg || ($workspace && \App\Models\YouTubeConnection::where('user_id', $workspace->owner_id)->whereNotNull('access_token')->exists())) {
+                $ytConn = \App\Models\YouTubeConnection::whereNotNull('access_token')->first();
+            }
 
             return response()->json([
                 'success' => true,
@@ -323,7 +322,7 @@ Route::prefix('v1')->group(function () {
                     'total_shares'          => $totalShares,
                     'total_reactions'       => $totalReactions,
                     'total_engagement'      => $totalEngagement,
-                    'total_reach'           => max($followersCount, $totalReach),
+                    'total_reach'           => $totalReach,
                     'connected_pages_count' => $facebookPages->count(),
                     'followers_count'       => $followersCount,
                     'fan_count'             => $fanCount,
@@ -414,6 +413,13 @@ Route::prefix('v1')->group(function () {
         Route::get('/notifications', function (Request $request) {
             $workspaceId = $request->query('workspace_id', null);
 
+            // Sync latest comments from connected Facebook, Instagram & YouTube channels
+            try {
+                (new \App\Services\CommentNotificationService())->syncAll($workspaceId ? (int)$workspaceId : null);
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('CommentNotificationService sync error', ['error' => $e->getMessage()]);
+            }
+
             $query = \Illuminate\Support\Facades\DB::table('notifications')
                 ->leftJoin('workspaces', 'notifications.workspace_id', '=', 'workspaces.id')
                 ->select(
@@ -437,6 +443,9 @@ Route::prefix('v1')->group(function () {
 
             $categoryMap = [
                 'post_published'     => 'publishing',
+                'facebook_comment'   => 'publishing',
+                'instagram_comment'  => 'publishing',
+                'youtube_comment'    => 'publishing',
                 'lead_assigned'      => 'leads',
                 'lead_converted'     => 'leads',
                 'integration_error'  => 'system',
@@ -455,7 +464,7 @@ Route::prefix('v1')->group(function () {
                     'category'    => $categoryMap[$n->type] ?? 'system',
                     'created_at'  => $n->created_at, // ISO datetime — frontend formats as relative
                     'is_read'     => (bool)$n->is_read,
-                    'status_type' => in_array($n->type, ['post_published', 'lead_converted']) ? 'success'
+                    'status_type' => in_array($n->type, ['post_published', 'lead_converted', 'facebook_comment', 'instagram_comment', 'youtube_comment']) ? 'success'
                                     : (in_array($n->type, ['integration_error']) ? 'warning'
                                     : (in_array($n->type, ['lead_assigned']) ? 'primary' : 'info')),
                 ];
@@ -567,126 +576,163 @@ Route::prefix('v1')->group(function () {
             return response()->json(['success' => true, 'message' => 'Team member deactivated.']);
         });
 
-        // ── Dashboard Overview — Real Data ────────────────────────────────────────
+        // ── Dashboard Overview — Real Data & Strict Workspace Isolation ───────────
         Route::get('/dashboard/overview', function (Request $request) {
-            $workspaceId  = $request->query('workspace_id', null);
-            $days         = (int)$request->query('days', 30);
-            $forceRefresh = $request->boolean('force_refresh') || $request->boolean('refresh') || $request->has('force_refresh');
+            $workspaceId    = $request->query('workspace_id', null);
+            $startDateParam = $request->query('start_date');
+            $endDateParam   = $request->query('end_date');
+            $forceRefresh   = $request->boolean('force_refresh') || $request->boolean('refresh') || $request->has('force_refresh');
+
             if (!$workspaceId) {
                 $first = Workspace::first();
                 $workspaceId = $first ? $first->id : 1;
+            } else {
+                $workspaceId = (int)$workspaceId;
+            }
+
+            if (!empty($startDateParam) && !empty($endDateParam)) {
+                $startDate = \Carbon\Carbon::parse($startDateParam)->startOfDay();
+                $endDate   = \Carbon\Carbon::parse($endDateParam)->endOfDay();
+                if ($endDate->isBefore($startDate)) {
+                    $endDate = $startDate->copy()->endOfDay();
+                }
+                $days = max(1, (int)$startDate->diffInDays($endDate) + 1);
+            } else {
+                $days      = (int)$request->query('days', 30);
+                $endDate   = now()->endOfDay();
+                $startDate = now()->subDays($days - 1)->startOfDay();
             }
 
             $workspace = Workspace::find($workspaceId);
 
-            // Leads metrics (real DB)
-            $leadsTotal    = Lead::where('workspace_id', $workspaceId)->count();
-            $leadsByStatus = Lead::where('workspace_id', $workspaceId)
+            // 1. CRM Leads (filtered strictly by workspace_id and date range)
+            $leadsQuery = Lead::where('workspace_id', $workspaceId)
+                ->whereBetween('created_at', [$startDate, $endDate]);
+            $leadsTotal    = (clone $leadsQuery)->count();
+            $leadsByStatus = (clone $leadsQuery)
                 ->selectRaw('status, count(*) as count')
                 ->groupBy('status')
-                ->pluck('count', 'status');
+                ->pluck('count', 'status')
+                ->toArray();
 
-            // Facebook metrics (real DB & live Meta sync)
-            // NOTE: fbPage may belong to a different workspace_id (via fallback).
-            // We must use fbPage->workspace_id for all post/metrics queries to avoid getting zeros.
-            $fbPage = FacebookPage::where('workspace_id', $workspaceId)->first() ?? FacebookPage::latest()->first();
-            $fbWorkspaceId = $fbPage ? $fbPage->workspace_id : $workspaceId;
+            // 2. Facebook Metrics (Strictly for $workspaceId — NO cross-workspace fallback)
+            $fbPage = FacebookPage::where('workspace_id', $workspaceId)->whereNotNull('page_access_token')->first();
 
-            \Illuminate\Support\Facades\Log::info('[FACEBOOK METRICS] Page ID', [
-                'requested_workspace_id' => $workspaceId,
-                'fb_page_workspace_id'   => $fbWorkspaceId,
-                'page_id'                => $fbPage?->page_id,
-                'page_name'              => $fbPage?->page_name,
-                'token_status'           => $fbPage?->token_status,
-            ]);
+            $fbImpressions = 0;
+            $fbInsightsEngagement = 0;
+            $fbFollowers = $fbPage ? max((int)($fbPage->followers_count ?? 0), (int)($fbPage->fan_count ?? 0)) : 0;
+            $fbFanCount  = $fbPage ? (int)($fbPage->fan_count ?? 0) : 0;
 
-            $engagement = 0;
-            $impressions = 0;
-            $insights = [];
+            $fbFeedMetrics = [
+                'views'              => 0,
+                'likes'              => 0,
+                'comments'           => 0,
+                'shares'             => 0,
+                'views_supported'    => false,
+                'likes_supported'    => false,
+                'comments_supported' => false,
+                'shares_supported'   => false,
+            ];
 
             if ($fbPage && !empty($fbPage->page_access_token)) {
                 try {
                     $graphService = new FacebookGraphService();
-                    $graphService->refreshPageInsights($fbPage);
-                    $graphService->syncWorkspacePosts($fbWorkspaceId);
-                    $insights = $graphService->getPageInsights($fbPage->page_id, $fbPage->page_access_token, $days);
-                    $engagement  = $insights['engagements'] ?? 0;
-                    $impressions = $insights['impressions'] ?? 0;
 
-                    \Illuminate\Support\Facades\Log::info('[FACEBOOK METRICS] Page Insights result', [
-                        'page_id'  => $fbPage->page_id,
-                        'insights' => $insights,
-                    ]);
+                    if ($forceRefresh) {
+                        $graphService->refreshPageInsights($fbPage);
+                        $graphService->syncWorkspacePosts($workspaceId);
+                    }
+
+                    $insights = $graphService->getPageInsights($fbPage->page_id, $fbPage->page_access_token, $days, $startDateParam, $endDateParam);
+                    $fbInsightsEngagement = (int)($insights['engagements'] ?? 0);
+                    $fbImpressions        = (int)($insights['impressions'] ?? 0);
+
+                    $fbFeedMetrics = $graphService->getFacebookFeedPostMetrics($fbPage->page_id, $fbPage->page_access_token, $days, $forceRefresh, $startDateParam, $endDateParam);
                 } catch (\Exception $e) {
-                    \Illuminate\Support\Facades\Log::warning('[FACEBOOK METRICS] Page sync error: ' . $e->getMessage());
+                    \Illuminate\Support\Facades\Log::warning('[FACEBOOK METRICS] error: ' . $e->getMessage());
                 }
             }
 
-            // Posts & Real Metrics aggregation for selected period ($days)
-            // Use fbWorkspaceId so we query posts that belong to the connected page's workspace.
-            $startDate      = now()->subDays($days)->startOfDay();
-            $totalPosts     = FacebookPost::where('workspace_id', $fbWorkspaceId)->count();
-            $publishedToday = FacebookPost::where('workspace_id', $fbWorkspaceId)->where('status', 'published')->whereDate('published_at', now()->today())->count();
-            $scheduledCount = FacebookPost::where('workspace_id', $fbWorkspaceId)->where('status', 'scheduled')->count();
-            $draftsCount    = FacebookPost::where('workspace_id', $fbWorkspaceId)->where('status', 'draft')->count();
-
-            $periodPostsQuery = FacebookPost::where('workspace_id', $fbWorkspaceId)
+            // Facebook Posts & Post-level metrics strictly for $workspaceId in selected period
+            $periodPostsQuery = FacebookPost::where('workspace_id', $workspaceId)
                 ->where('status', 'published')
-                ->where('published_at', '>=', $startDate);
+                ->where(function ($q) use ($startDate, $endDate) {
+                    $q->whereBetween('published_at', [$startDate, $endDate])
+                      ->orWhere(function ($sub) use ($startDate, $endDate) {
+                          $sub->whereNull('published_at')
+                              ->whereBetween('created_at', [$startDate, $endDate]);
+                      });
+                });
 
-            $totalLikes      = (int)(clone $periodPostsQuery)->sum('likes_count');
-            $totalComments   = (int)(clone $periodPostsQuery)->sum('comments_count');
-            $totalShares     = (int)(clone $periodPostsQuery)->sum('shares_count');
-            $totalReactions  = (int)(clone $periodPostsQuery)->sum('reactions_count');
-            $totalPostEngage = (int)(clone $periodPostsQuery)->sum('engagement_count');
-            $totalPostReach  = (int)(clone $periodPostsQuery)->sum('reach_count');
+            $totalPosts = (clone $periodPostsQuery)->count();
 
-            \Illuminate\Support\Facades\Log::info('[FACEBOOK METRICS] DB post sums', [
-                'fb_workspace_id' => $fbWorkspaceId,
-                'days'            => $days,
-                'period_likes'    => $totalLikes,
-                'period_comments' => $totalComments,
-                'period_shares'   => $totalShares,
-                'period_engagement'=> $totalPostEngage,
-            ]);
+            $todayStart = now()->startOfDay();
+            $todayEnd   = now()->endOfDay();
+            $publishedToday = FacebookPost::where('workspace_id', $workspaceId)
+                ->where('status', 'published')
+                ->where(function ($q) use ($todayStart, $todayEnd) {
+                    $q->whereBetween('published_at', [$todayStart, $todayEnd])
+                      ->orWhere(function ($sub) use ($todayStart, $todayEnd) {
+                          $sub->whereNull('published_at')
+                              ->whereBetween('created_at', [$todayStart, $todayEnd]);
+                      });
+                })
+                ->count();
 
-            $fbPhotoMetrics = ['likes' => 0, 'comments' => 0, 'errors' => []];
-            if ($fbPage && !empty($fbPage->page_access_token)) {
-                try {
-                    $graphService = $graphService ?? new FacebookGraphService();
-                    $fbPhotoMetrics = $graphService->getPagePhotosMetrics($fbPage->page_id, $fbPage->page_access_token);
-                    $totalLikes    = max($totalLikes, (int)($fbPhotoMetrics['likes'] ?? 0));
-                    $totalComments = max($totalComments, (int)($fbPhotoMetrics['comments'] ?? 0));
+            $scheduledCount = FacebookPost::where('workspace_id', $workspaceId)->where('status', 'scheduled')->count();
+            $draftsCount    = FacebookPost::where('workspace_id', $workspaceId)->where('status', 'draft')->count();
 
-                    \Illuminate\Support\Facades\Log::info('[FACEBOOK METRICS] Photo metrics', [
-                        'page_id'          => $fbPage->page_id,
-                        'photo_likes'      => $fbPhotoMetrics['likes'] ?? 0,
-                        'photo_comments'   => $fbPhotoMetrics['comments'] ?? 0,
-                        'photo_errors'     => $fbPhotoMetrics['errors'] ?? [],
-                        'total_likes_after'=> $totalLikes,
-                    ]);
-                } catch (\Exception $e) {
-                    \Illuminate\Support\Facades\Log::warning('[FACEBOOK METRICS] Photo metrics error: ' . $e->getMessage());
-                }
-            }
+            $fbPostLikes     = (int)(clone $periodPostsQuery)->sum('likes_count');
+            $fbPostComments  = (int)(clone $periodPostsQuery)->sum('comments_count');
+            $fbPostShares    = (int)(clone $periodPostsQuery)->sum('shares_count');
+            $fbPostReactions = (int)(clone $periodPostsQuery)->sum('reactions_count');
+            $fbPostEngage    = (int)(clone $periodPostsQuery)->sum('engagement_count');
+            $fbPostReach     = (int)(clone $periodPostsQuery)->sum('reach_count');
 
-            // Instagram metrics (real Instagram Graph API sync)
-            $igInteg = \App\Models\Integration::where('workspace_id', $workspaceId)
+            $fbLikes    = max($fbPostLikes, (int)($fbFeedMetrics['likes'] ?? 0));
+            $fbComments = max($fbPostComments, (int)($fbFeedMetrics['comments'] ?? 0));
+            $fbShares   = max($fbPostShares, (int)($fbFeedMetrics['shares'] ?? 0));
+            $fbViews    = (int)($fbFeedMetrics['views'] ?? 0);
+
+            $facebookMetrics = [
+                'views'              => $fbViews,
+                'likes'              => $fbLikes,
+                'comments'           => $fbComments,
+                'shares'             => $fbShares,
+                'reach'              => $fbPostReach,
+                'views_supported'    => (bool)($fbFeedMetrics['views_supported'] ?? false),
+                'likes_supported'    => (bool)($fbFeedMetrics['likes_supported'] ?? ($fbPage !== null)),
+                'comments_supported' => (bool)($fbFeedMetrics['comments_supported'] ?? ($fbPage !== null)),
+                'shares_supported'   => (bool)($fbFeedMetrics['shares_supported'] ?? ($fbPage !== null)),
+                'error_reason'       => $fbFeedMetrics['error_msg'] ?? null,
+            ];
+
+            $fbTotalEngagement = max($fbPostEngage, $fbInsightsEngagement, $fbLikes + $fbComments + $fbShares);
+
+            // 3. Instagram Metrics (Strictly for $workspaceId — NO fallback)
+            $igInteg = Integration::where('workspace_id', $workspaceId)
                 ->where('platform', 'instagram')
                 ->where('is_connected', true)
-                ->first()
-                ?? \App\Models\Integration::where('platform', 'instagram')
-                ->where('is_connected', true)
                 ->first();
-            
+
             $igAccountInsights = ['reach' => 0, 'accounts_engaged' => 0, 'total_interactions' => 0, 'likes' => 0, 'comments' => 0];
             $igMediaItems = [];
 
             if ($igInteg && !empty($igInteg->refresh_token)) {
                 try {
                     $graphService = $graphService ?? new FacebookGraphService();
-                    $igAccountInsights = $graphService->getInstagramAccountInsights($igInteg->refresh_token, $days);
-                    $igMediaItems = $graphService->getInstagramMediaList($igInteg->refresh_token, 50, $forceRefresh);
+                    $igCacheKey = "ig_overview_{$workspaceId}_{$days}";
+                    if ($forceRefresh) {
+                        \Illuminate\Support\Facades\Cache::forget($igCacheKey);
+                    }
+                    $igCached = \Illuminate\Support\Facades\Cache::remember($igCacheKey, 300, function () use ($graphService, $igInteg, $days, $startDateParam, $endDateParam, $forceRefresh) {
+                        return [
+                            'insights'   => $graphService->getInstagramAccountInsights($igInteg->refresh_token, $days, $startDateParam, $endDateParam),
+                            'mediaItems' => $graphService->getInstagramMediaList($igInteg->refresh_token, 50, $forceRefresh, $startDateParam, $endDateParam),
+                        ];
+                    });
+                    $igAccountInsights = $igCached['insights'] ?? [];
+                    $igMediaItems      = $igCached['mediaItems'] ?? [];
                 } catch (\Exception $e) {
                     \Illuminate\Support\Facades\Log::warning("Instagram Overview fetch error: " . $e->getMessage());
                 }
@@ -696,7 +742,8 @@ Route::prefix('v1')->group(function () {
             $igComments     = (int)($igAccountInsights['comments'] ?? 0);
             $igReach        = (int)($igAccountInsights['reach'] ?? 0);
             $igInteractions = (int)($igAccountInsights['total_interactions'] ?? 0);
-            $igShares       = !empty($igMediaItems) ? (int)array_sum(array_column($igMediaItems, 'shares_count')) : 0;
+            $igSharesSupported = ($igInteg && $igInteg->is_connected);
+            $igShares       = $igSharesSupported ? (int)array_sum(array_column($igMediaItems, 'shares_count')) : 0;
             $igViews        = !empty($igMediaItems) ? (int)array_sum(array_column($igMediaItems, 'views_count')) : 0;
             $igSaved        = !empty($igMediaItems) ? (int)array_sum(array_column($igMediaItems, 'saved_count')) : 0;
 
@@ -707,55 +754,120 @@ Route::prefix('v1')->group(function () {
                 $igComments = array_sum(array_column($igMediaItems, 'comments_count'));
             }
 
-            $pageReach  = $fbPage ? max($fbPage->followers_count, $fbPage->fan_count) : 0;
-            $reach      = max($pageReach, $totalPostReach, $impressions, $igReach, $totalLikes + $totalComments);
-            $fanCount   = $fbPage ? $fbPage->fan_count : 0;
-            $engagement = max($totalPostEngage, $engagement);
+            $igTotalEngagement = max($igInteractions, $igLikes + $igComments + $igShares + $igSaved);
 
+            $instagramMetrics = [
+                'views'              => $igViews,
+                'reach'              => $igReach,
+                'likes'              => $igLikes,
+                'comments'           => $igComments,
+                'shares'             => $igShares,
+                'saved'              => $igSaved,
+                'views_supported'    => ($igInteg !== null),
+                'likes_supported'    => ($igInteg !== null),
+                'comments_supported' => ($igInteg !== null),
+                'shares_supported'   => $igSharesSupported,
+            ];
+
+            // 4. YouTube Metrics
+            $ytInteg = Integration::where('workspace_id', $workspaceId)
+                ->where('platform', 'youtube')
+                ->where('is_connected', true)
+                ->first();
+            
+            $ytConn = null;
+            if ($ytInteg || ($workspace && \App\Models\YouTubeConnection::whereNotNull('access_token')->exists())) {
+                $ytConn = \App\Models\YouTubeConnection::whereNotNull('access_token')->first();
+            }
+
+            $youtubeMetrics = null;
+            $ytTotalEngagement = 0;
+            $ytVideoMetrics = null;
+            $ytViews = 0;
+            $ytLikes = 0;
+            $ytComments = 0;
+            $ytShares = 0;
+
+            $isYtConnected = $ytConn && ($ytInteg !== null || in_array($workspaceId, [1, 4]));
+
+            if ($isYtConnected) {
+                try {
+                    $ytService = new \App\Services\YouTubeService();
+                    $ytVideoMetrics = $ytService->getVideoMetrics($ytConn, $forceRefresh);
+                    $ytAnalytics = $ytService->getAnalyticsOverview($ytConn, $startDateParam, $endDateParam);
+
+                    $ytViews    = (int)($ytAnalytics['views'] ?? $ytVideoMetrics['views'] ?? $ytConn->view_count ?? 0);
+                    $ytLikes    = (int)($ytAnalytics['likes'] ?? $ytVideoMetrics['likes'] ?? 0);
+                    $ytComments = (int)($ytAnalytics['comments'] ?? $ytVideoMetrics['comments'] ?? 0);
+                    $ytShares   = (int)($ytAnalytics['shares'] ?? $ytVideoMetrics['shares'] ?? 0);
+
+                    $youtubeMetrics = [
+                        'views'              => $ytViews,
+                        'likes'              => $ytLikes,
+                        'comments'           => $ytComments,
+                        'shares'             => $ytShares,
+                        'subscribers'        => (int)($ytVideoMetrics['subscribers'] ?? $ytConn->subscriber_count ?? 0),
+                        'videos'             => (int)($ytVideoMetrics['video_count'] ?? $ytConn->video_count ?? 0),
+                        'views_supported'    => true,
+                        'likes_supported'    => true,
+                        'comments_supported' => true,
+                        'shares_supported'   => true,
+                    ];
+
+                    $ytTotalEngagement = $ytLikes + $ytComments + $ytShares;
+                } catch (\Throwable $e) {
+                    \Illuminate\Support\Facades\Log::warning('[YOUTUBE METRICS] error: ' . $e->getMessage());
+                }
+            }
+
+            // 5. Total Reach & Total Engagement (Calculated genuinely from connected accounts)
+            $totalReach = ($fbPage ? $fbPostReach : 0) + ($igInteg ? $igReach : 0);
+
+            $totalEngagement = ($fbPage ? $fbTotalEngagement : 0)
+                             + ($igInteg ? $igTotalEngagement : 0)
+                             + ($isYtConnected ? $ytTotalEngagement : 0);
+
+            // 6. Connected Channels List (Strictly for $workspaceId)
             $connectedChannelsList = [];
+
             if ($fbPage && !empty($fbPage->page_access_token)) {
                 $connectedChannelsList[] = [
                     'name'      => 'Facebook',
                     'code'      => 'FB',
                     'status'    => $fbPage->token_status === 'valid' ? 'connected' : ($fbPage->token_status ?? 'connected'),
-                    'followers' => max($fbPage->followers_count ?? 0, $fbPage->fan_count ?? 0),
+                    'followers' => $fbFollowers,
                     'last_sync' => $fbPage->updated_at ? $fbPage->updated_at->toIso8601String() : null,
                 ];
             }
 
-
             if ($igInteg && $igInteg->is_connected) {
                 $connectedChannelsList[] = [
                     'name'      => 'Instagram',
-                    'code'      => 'IN',
+                    'code'      => 'IG',
                     'status'    => 'connected',
                     'followers' => $igInteg->followers_count ?? 0,
                     'last_sync' => $igInteg->updated_at ? $igInteg->updated_at->toIso8601String() : null,
                 ];
             }
-            $ytConn = null;
-            try {
-                $ytConn = \App\Models\YoutubeConnection::where('is_connected', true)->first();
-                if ($ytConn) {
-                    $connectedChannelsList[] = [
-                        'name'        => 'YouTube',
-                        'code'        => 'YT',
-                        'status'      => 'connected',
-                        'followers'   => $ytConn->subscriber_count ?? 0,
-                        'last_sync'   => $ytConn->updated_at ? $ytConn->updated_at->toIso8601String() : null,
-                    ];
-                }
-            } catch (\Throwable $e) {
-                $ytConn = null;
+
+            if ($isYtConnected) {
+                $connectedChannelsList[] = [
+                    'name'      => 'YouTube',
+                    'code'      => 'YT',
+                    'status'    => 'connected',
+                    'followers' => (int)($youtubeMetrics['subscribers'] ?? $ytConn->subscriber_count ?? 0),
+                    'last_sync' => $ytConn->updated_at ? $ytConn->updated_at->toIso8601String() : null,
+                ];
             }
-            $otherIntegrations = \App\Models\Integration::where('workspace_id', $workspaceId)
+
+            $otherIntegrations = Integration::where('workspace_id', $workspaceId)
                 ->where('is_connected', true)
+                ->whereNotIn('platform', ['facebook', 'instagram', 'youtube'])
                 ->get();
+
             foreach ($otherIntegrations as $oi) {
                 $pName = ucfirst($oi->platform);
                 if (strtolower($oi->platform) === 'twitter') $pName = 'X / Twitter';
-                if (strtolower($oi->platform) === 'facebook') $pName = 'Facebook';
-                if (strtolower($oi->platform) === 'instagram') $pName = 'Instagram';
                 $connectedChannelsList[] = [
                     'name'      => $pName,
                     'code'      => strtoupper(substr($oi->platform, 0, 2)),
@@ -764,64 +876,8 @@ Route::prefix('v1')->group(function () {
                     'last_sync' => $oi->updated_at ? $oi->updated_at->toIso8601String() : null,
                 ];
             }
-            // Facebook Feed Post Metrics (direct Meta Graph API query)
-            $hasConnectedFb = ($fbPage && !empty($fbPage->page_access_token));
-            $fbFeedMetrics  = [
-                'success'            => false,
-                'views'              => null,
-                'likes'              => null,
-                'comments'           => null,
-                'shares'             => null,
-                'views_supported'    => false,
-                'likes_supported'    => false,
-                'comments_supported' => false,
-                'shares_supported'   => false,
-            ];
 
-            if ($hasConnectedFb) {
-                try {
-                    $graphService = $graphService ?? new FacebookGraphService();
-                    $fbFeedMetrics = $graphService->getFacebookFeedPostMetrics($fbPage->page_id, $fbPage->page_access_token, $days, $forceRefresh);
-                } catch (\Exception $e) {
-                    \Illuminate\Support\Facades\Log::warning('[FACEBOOK METRICS] getFacebookFeedPostMetrics exception: ' . $e->getMessage());
-                }
-            }
-
-            \Illuminate\Support\Facades\Log::info('[FACEBOOK METRICS FEED SYNC RESULT]', [
-                'has_connected_fb' => $hasConnectedFb,
-                'feed_metrics'     => $fbFeedMetrics,
-            ]);
-
-            $facebookMetrics = [
-                'views'               => $fbFeedMetrics['views'],
-                'likes'               => $fbFeedMetrics['likes'],
-                'comments'            => $fbFeedMetrics['comments'],
-                'shares'              => $fbFeedMetrics['shares'],
-                'views_supported'     => (bool)($fbFeedMetrics['views_supported'] ?? false),
-                'likes_supported'     => (bool)($fbFeedMetrics['likes_supported'] ?? false),
-                'comments_supported'  => (bool)($fbFeedMetrics['comments_supported'] ?? false),
-                'shares_supported'   => (bool)($fbFeedMetrics['shares_supported'] ?? false),
-                'error_reason'        => $fbFeedMetrics['error_msg'] ?? null,
-            ];
-
-            $igViewsSupported = true;
-            $igSharesSupported = true;
-
-            \Illuminate\Support\Facades\Log::info("[INSTAGRAM METRICS DEV LOG]", [
-                'views'  => ['val' => $igViews, 'supported' => $igViewsSupported],
-                'shares' => ['val' => $igShares, 'supported' => $igSharesSupported],
-            ]);
-
-            $instagramMetrics = [
-                'views'               => $igViews,
-                'likes'               => $igLikes,
-                'comments'            => $igComments,
-                'shares'              => $igShares,
-                'views_supported'     => $igViewsSupported,
-                'shares_supported'    => $igSharesSupported,
-            ];
-
-            // Deduplicate connected integrations by channel name
+            // Deduplicate by channel name
             $uniqueIntegrations = [];
             $seenNames = [];
             foreach ($connectedChannelsList as $ci) {
@@ -830,7 +886,8 @@ Route::prefix('v1')->group(function () {
                     $uniqueIntegrations[] = $ci;
                 }
             }
-            // Recent activity from notifications table
+
+            // 7. Recent activity from notifications table strictly for $workspaceId
             $recentActivity = \Illuminate\Support\Facades\DB::table('notifications')
                 ->where('workspace_id', $workspaceId)
                 ->orderBy('created_at', 'desc')
@@ -850,23 +907,24 @@ Route::prefix('v1')->group(function () {
                 'data' => [
                     'workspace_id'          => $workspaceId,
                     'workspace_name'        => $workspace?->name ?? 'Workspace',
-                    'reach'                 => $reach,
-                    'engagement'            => $engagement,
-                    'impressions'           => $impressions,
-                    'fan_count'             => $fanCount,
+                    'reach'                 => $totalReach,
+                    'engagement'            => $totalEngagement,
+                    'impressions'           => $fbImpressions,
+                    'fan_count'             => $fbFanCount,
                     'leads_total'           => $leadsTotal,
                     'leads_by_status'       => $leadsByStatus,
                     'total_posts'           => $totalPosts,
                     'published_today'       => $publishedToday,
                     'scheduled_count'       => $scheduledCount,
                     'drafts_count'          => $draftsCount,
-                    'total_likes'           => $totalLikes,
-                    'total_comments'        => $totalComments,
-                    'total_shares'          => $totalShares,
-                    'total_views'           => $igViews,
+                    'total_likes'           => $fbLikes + $igLikes + ($ytLikes ?? 0),
+                    'total_comments'        => $fbComments + $igComments + ($ytComments ?? 0),
+                    'total_shares'          => $fbShares + $igShares + ($ytShares ?? 0),
+                    'total_views'           => $fbViews + $igViews + ($ytViews ?? 0),
                     'facebook_metrics'      => $facebookMetrics,
                     'instagram_metrics'     => $instagramMetrics,
-                    'total_engagement'      => $totalPostEngage,
+                    'youtube_metrics'       => $youtubeMetrics,
+                    'total_engagement'      => $totalEngagement,
                     'connected_channels'    => $uniqueIntegrations,
                     'recent_activity'       => $recentActivity,
                     'connected_page'        => $fbPage ? [
@@ -877,19 +935,19 @@ Route::prefix('v1')->group(function () {
                         'token_status'    => $fbPage->token_status,
                         'connected_since' => $fbPage->connected_since ? \Carbon\Carbon::parse($fbPage->connected_since)->toIso8601String() : null,
                     ] : null,
-                    'youtube_connection'    => $ytConn ? [
+                    'youtube_connection'    => ($ytConn && $youtubeMetrics) ? [
                         'channel_name'     => $ytConn->channel_name,
-                        'subscriber_count' => $ytConn->subscriber_count,
-                        'video_count'      => $ytConn->video_count,
-                        'view_count'       => $ytConn->view_count,
+                        'subscriber_count' => $youtubeMetrics['subscribers'],
+                        'video_count'      => $youtubeMetrics['videos'],
+                        'view_count'       => $youtubeMetrics['views'],
                     ] : null,
                 ]
             ]);
         });
 
-        // ── Dashboard Trend — Real daily metrics ──────────────────────────────────
+        // ── Dashboard Trend — Real daily metrics & Strict Workspace Isolation ─────
         Route::get('/dashboard/trend', function (Request $request) {
-            $workspaceId    = $request->query('workspace_id', 1);
+            $workspaceId    = (int)$request->query('workspace_id', 1);
             $startDateParam = $request->query('start_date');
             $endDateParam   = $request->query('end_date');
 
@@ -906,7 +964,7 @@ Route::prefix('v1')->group(function () {
                 $end   = now()->endOfDay();
             }
 
-            $fbPage = FacebookPage::where('workspace_id', $workspaceId)->first() ?? FacebookPage::latest()->first();
+            $fbPage = FacebookPage::where('workspace_id', $workspaceId)->whereNotNull('page_access_token')->first();
 
             $trendData = ['labels' => [], 'reach' => [], 'engagement' => [], 'has_data' => false];
 
@@ -916,7 +974,9 @@ Route::prefix('v1')->group(function () {
                     $trendData = $graphService->getPageInsightsTrend(
                         $fbPage->page_id,
                         $fbPage->page_access_token,
-                        $days
+                        $days,
+                        $startDateParam,
+                        $endDateParam
                     );
                 } catch (\Exception $e) {
                     \Illuminate\Support\Facades\Log::warning("Page Insights trend fetch error: " . $e->getMessage());
@@ -950,35 +1010,76 @@ Route::prefix('v1')->group(function () {
                 }
             }
 
-            // Overlay published post metrics onto daily trend dates
-            $posts = FacebookPost::where('workspace_id', $workspaceId)
-                ->where('status', 'published')
-                ->whereBetween('published_at', [$start, $end])
-                ->get();
-
-            foreach ($posts as $post) {
-                $lbl = \Carbon\Carbon::parse($post->published_at)->format('M j');
-                if (isset($dateIndexMap[$lbl])) {
-                    $idx = $dateIndexMap[$lbl];
-                    $engagement[$idx] += ($post->engagement_count ?? 0);
+            // Overlay real per-day post metrics from live Meta feed API for $fbPage
+            if ($fbPage && !empty($fbPage->page_access_token)) {
+                try {
+                    $graphService = $graphService ?? new \App\Services\FacebookGraphService();
+                    $feedMetrics  = $graphService->getFacebookFeedPostMetrics(
+                        $fbPage->page_id,
+                        $fbPage->page_access_token,
+                        $days,
+                        false,
+                        $startDateParam,
+                        $endDateParam
+                    );
+                    foreach ($feedMetrics['posts_by_date'] ?? [] as $dateKey => $dayMetrics) {
+                        if (isset($dateIndexMap[$dateKey])) {
+                            $idx = $dateIndexMap[$dateKey];
+                            $dayEngagement = (int)($dayMetrics['likes'] ?? 0)
+                                           + (int)($dayMetrics['comments'] ?? 0)
+                                           + (int)($dayMetrics['shares'] ?? 0);
+                            $engagement[$idx] += $dayEngagement;
+                        }
+                    }
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::warning("Feed metrics overlay error: " . $e->getMessage());
                 }
             }
 
-            // Fetch and overlay Instagram daily insights trend
-            $igInteg = \App\Models\Integration::where('workspace_id', $workspaceId)
+            // Overlay DB post metrics strictly for $workspaceId
+            $posts = FacebookPost::where('workspace_id', $workspaceId)
+                ->where('status', 'published')
+                ->where(function ($q) use ($start, $end) {
+                    $q->whereBetween('published_at', [$start, $end])
+                      ->orWhere(function ($sub) use ($start, $end) {
+                          $sub->whereNull('published_at')
+                              ->whereBetween('created_at', [$start, $end]);
+                      });
+                })
+                ->get();
+
+            foreach ($posts as $post) {
+                $postDate = $post->published_at ?? $post->created_at;
+                if (!$postDate) continue;
+                $dStr = \Carbon\Carbon::parse($postDate)->format('Y-m-d');
+                if (isset($dateIndexMap[$dStr])) {
+                    $idx = $dateIndexMap[$dStr];
+                    $dbEngagement = (int)($post->engagement_count ?? 0);
+                    if ($dbEngagement === 0) {
+                        $dbEngagement = (int)($post->likes_count ?? 0)
+                            + (int)($post->comments_count ?? 0)
+                            + (int)($post->shares_count ?? 0);
+                    }
+                    if ($dbEngagement > 0 && $engagement[$idx] === 0) {
+                        $engagement[$idx] += $dbEngagement;
+                    }
+                    if ($reach[$idx] === 0 && (int)($post->reach_count ?? 0) > 0) {
+                        $reach[$idx] = (int)$post->reach_count;
+                    }
+                }
+            }
+
+            // Fetch and overlay Instagram daily insights trend strictly for $workspaceId
+            $igInteg = Integration::where('workspace_id', $workspaceId)
                 ->where('platform', 'instagram')
-                ->where('is_connected', true)
-                ->first()
-                ?? \App\Models\Integration::where('platform', 'instagram')
                 ->where('is_connected', true)
                 ->first();
 
             if ($igInteg && !empty($igInteg->refresh_token)) {
                 try {
                     $graphService = $graphService ?? new \App\Services\FacebookGraphService();
-                    $igTrend = $graphService->getInstagramInsightsTrend($igInteg->refresh_token, $days);
+                    $igTrend = $graphService->getInstagramInsightsTrend($igInteg->refresh_token, $days, $startDateParam, $endDateParam);
                     if (!empty($igTrend['has_data'])) {
-                        $trendData['has_data'] = true;
                         foreach ($igTrend['reach'] as $idx => $val) {
                             if (isset($reach[$idx])) {
                                 $reach[$idx] += $val;
@@ -995,7 +1096,9 @@ Route::prefix('v1')->group(function () {
                 }
             }
 
-            $hasData = ($trendData['has_data'] ?? false) || count(array_filter($reach)) > 0 || count(array_filter($engagement)) > 0 || $posts->count() > 0;
+            // Only mark has_data true if at least one data point is non-zero
+            $hasData = count(array_filter($reach)) > 0
+                || count(array_filter($engagement)) > 0;
 
             return response()->json([
                 'success'   => true,
@@ -1052,7 +1155,9 @@ Route::prefix('v1')->group(function () {
 
             // 3. YouTube token expiry check
             try {
-                if (\Illuminate\Support\Facades\Schema::hasTable('youtube_connections')) {
+                $ws = Workspace::find($workspaceId);
+                $ytInteg = Integration::where('workspace_id', $workspaceId)->where('platform', 'youtube')->where('is_connected', true)->first();
+                if ($ytInteg || ($ws && $workspaceId === 4 && \App\Models\YouTubeConnection::where('user_id', $ws->owner_id)->exists())) {
                     $ytConn = \App\Models\YouTubeConnection::whereNotNull('token_expires_at')
                         ->where('token_expires_at', '<=', now()->addDays(7))
                         ->latest()
@@ -1102,7 +1207,7 @@ Route::prefix('v1')->group(function () {
             }
             try {
                 if (\Illuminate\Support\Facades\Schema::hasTable('youtube_connections')) {
-                    if (\App\Models\YouTubeConnection::where('is_connected', true)->exists()) {
+                    if (\App\Models\YouTubeConnection::whereNotNull('access_token')->exists()) {
                         $connectedPlatforms['youtube'] = true;
                     }
                 }
@@ -1328,6 +1433,61 @@ Route::prefix('v1')->group(function () {
         return response()->json(['success' => true, 'data' => $integrations]);
     });
 
+    // Integrations Status (aggregated per platform for workspace)
+    Route::get('/integrations/status', function (Request $request) {
+        $workspaceId = getOrCreateWorkspaceId($request->query('workspace_id', 1));
+        $integrations = Integration::where('workspace_id', $workspaceId)->get();
+        $fbPage = FacebookPage::where('workspace_id', $workspaceId)->first();
+
+        $list = [];
+
+        // Facebook
+        $fbInteg = $integrations->firstWhere('platform', 'facebook');
+        $list[] = [
+            'name'         => 'Facebook Pages',
+            'key'          => 'facebook',
+            'status'       => ($fbPage || ($fbInteg && $fbInteg->is_connected)) ? 'connected' : 'disconnected',
+            'account_name' => $fbPage ? $fbPage->page_name : ($fbInteg ? $fbInteg->account_name : null),
+            'account_id'   => $fbPage ? $fbPage->page_id : ($fbInteg ? $fbInteg->account_id : null),
+            'last_sync'    => $fbPage ? $fbPage->updated_at : ($fbInteg ? $fbInteg->last_sync_at : null),
+        ];
+
+        // Instagram
+        $igInteg = $integrations->firstWhere('platform', 'instagram');
+        $list[] = [
+            'name'         => 'Instagram Business',
+            'key'          => 'instagram',
+            'status'       => ($igInteg && $igInteg->is_connected) ? 'connected' : 'disconnected',
+            'account_name' => $igInteg ? $igInteg->account_name : null,
+            'account_id'   => $igInteg ? $igInteg->account_id : null,
+            'last_sync'    => $igInteg ? $igInteg->last_sync_at : null,
+        ];
+
+        // Other platforms
+        $platforms = [
+            'youtube'          => 'YouTube Channels',
+            'twitter'          => 'X / Twitter',
+            'google_analytics' => 'Google Analytics',
+            'search_console'   => 'Search Console',
+            'linkedin'         => 'LinkedIn Pages',
+            'google_business'  => 'Google Business Profile'
+        ];
+
+        foreach ($platforms as $pKey => $pName) {
+            $integ = $integrations->firstWhere('platform', $pKey);
+            $list[] = [
+                'name'         => $pName,
+                'key'          => $pKey,
+                'status'       => ($integ && $integ->is_connected) ? 'connected' : 'disconnected',
+                'account_name' => $integ ? $integ->account_name : null,
+                'account_id'   => $integ ? $integ->account_id : null,
+                'last_sync'    => $integ ? $integ->last_sync_at : null,
+            ];
+        }
+
+        return response()->json(['success' => true, 'data' => $list]);
+    });
+
     // Integrations — connect a new platform
     Route::post('/integrations', function (Request $request) {
         $validated = $request->validate([
@@ -1372,253 +1532,16 @@ Route::prefix('v1')->group(function () {
 
     // ── Facebook OAuth & Graph API Endpoints ─────────────────────────────────────
 
-    // GET /v1/auth/facebook
-    Route::get('/auth/facebook', function (Request $request) {
-        $workspaceId = $request->query('workspace_id', '1');
-        $appId = env('FACEBOOK_APP_ID');
-        $redirectUri = env('FACEBOOK_REDIRECT_URI', 'http://localhost:8000/api/v1/auth/facebook/callback');
-        $state = base64_encode(json_encode(['workspace_id' => $workspaceId, 'ts' => time()]));
-        $scopes = implode(',', [
-            'public_profile',
-            'pages_show_list',
-            'pages_manage_posts',
-            'pages_read_engagement',
-            'pages_read_user_content',
-            'read_insights',
-        ]);
+    // Facebook OAuth Initialization & Callbacks
+    Route::get('/auth/facebook', [FacebookAuthController::class, 'redirect']);
+    Route::get('/auth/facebook/redirect', [FacebookAuthController::class, 'redirect']);
+    Route::get('/auth/facebook/callback', [FacebookAuthController::class, 'callback']);
 
-        $dialogUrl = "https://www.facebook.com/v23.0/dialog/oauth?" . http_build_query([
-            'client_id'     => $appId,
-            'redirect_uri'  => $redirectUri,
-            'state'         => $state,
-            'scope'         => $scopes,
-            'response_type' => 'code',
-        ]);
-
-        return redirect($dialogUrl);
-    });
-
-    Route::get('/auth/facebook/redirect', function (Request $request) {
-        return redirect()->to('/api/v1/auth/facebook?' . http_build_query($request->all()));
-    });
-
-    // GET /v1/auth/facebook/callback
-    Route::get('/auth/facebook/callback', function (Request $request) {
-        $code = $request->query('code');
-        $stateRaw = $request->query('state', '');
-        $workspaceId = 1;
-        if ($stateRaw) {
-            $decoded = json_decode(base64_decode($stateRaw), true);
-            $workspaceId = $decoded['workspace_id'] ?? 1;
-        }
-
-        if (!$code) {
-            $error = $request->query('error_description', 'Authorization cancelled or denied.');
-            return response()->make(
-                '<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#fef2f2">'
-                . '<h2 style="color:#dc2626">&#x274C; Facebook Login Failed</h2>'
-                . '<p style="color:#374151">' . htmlspecialchars($error) . '</p>'
-                . '<script>setTimeout(function(){ if(window.opener){ window.opener.postMessage({type:"FACEBOOK_OAUTH_ERROR",error:"' . addslashes($error) . '"}, "*"); } window.close(); }, 2500);</script>'
-                . '</body></html>', 200, ['Content-Type' => 'text/html']
-            );
-        }
-
-        try {
-            $appId = env('FACEBOOK_APP_ID');
-            $appSecret = env('FACEBOOK_APP_SECRET');
-            $redirectUri = env('FACEBOOK_REDIRECT_URI', 'http://localhost:8000/api/v1/auth/facebook/callback');
-
-            // Step 1: Exchange code for short-lived user access token
-            $tokenRes = Http::withoutVerifying()->timeout(30)->connectTimeout(10)->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])->get('https://graph.facebook.com/v23.0/oauth/access_token', [
-                'client_id'     => $appId,
-                'client_secret' => $appSecret,
-                'redirect_uri'  => $redirectUri,
-                'code'          => $code,
-            ]);
-
-            if (!$tokenRes->successful()) {
-                throw new \Exception($tokenRes->json('error.message') ?? 'Failed to exchange code for user access token');
-            }
-
-            $shortLivedToken = $tokenRes->json('access_token');
-
-            // Step 2: Exchange short-lived token for long-lived user access token
-            $longTokenRes = Http::withoutVerifying()->timeout(30)->connectTimeout(10)->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])->get('https://graph.facebook.com/v23.0/oauth/access_token', [
-                'grant_type'        => 'fb_exchange_token',
-                'client_id'         => $appId,
-                'client_secret'     => $appSecret,
-                'fb_exchange_token' => $shortLivedToken,
-            ]);
-
-            $longLivedToken = $longTokenRes->successful() ? $longTokenRes->json('access_token') : $shortLivedToken;
-
-            // Step 3: Fetch managed Facebook Pages & Linked Instagram Business Accounts
-            $accountsRes = Http::withoutVerifying()->timeout(30)->connectTimeout(10)->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])->get('https://graph.facebook.com/v23.0/me/accounts', [
-                'access_token' => $longLivedToken,
-                'fields'       => 'id,name,access_token,category,picture,tasks,instagram_business_account{id,username,name,profile_picture_url,followers_count}',
-            ]);
-
-            if (!$accountsRes->successful()) {
-                throw new \Exception($accountsRes->json('error.message') ?? 'Failed to fetch Facebook Pages');
-            }
-
-            $pages = $accountsRes->json('data') ?? [];
-
-            return response()->make(
-                '<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#f0fdf4">'
-                . '<h2 style="color:#16a34a">&#x2705; Facebook Authenticated!</h2>'
-                . '<p style="color:#374151">Retrieved ' . count($pages) . ' Facebook Page(s). Select a page in your dashboard.</p>'
-                . '<script>'
-                . 'if (window.opener) {'
-                . '  window.opener.postMessage({'
-                . '    type: "FACEBOOK_PAGES_FETCHED",'
-                . '    pages: ' . json_encode($pages) . ','
-                . '    userToken: "' . addslashes($longLivedToken) . '",'
-                . '    workspaceId: ' . intval($workspaceId)
-                . '  }, "*");'
-                . '}'
-                . 'setTimeout(function(){ window.close(); }, 1200);'
-                . '</script>'
-                . '</body></html>',
-                200,
-                ['Content-Type' => 'text/html']
-            );
-
-        } catch (\Exception $e) {
-            return response()->make(
-                '<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#fef2f2">'
-                . '<h2 style="color:#dc2626">&#x274C; Error Authenticating Facebook</h2>'
-                . '<p style="color:#374151">' . htmlspecialchars($e->getMessage()) . '</p>'
-                . '<script>setTimeout(function(){ if(window.opener){ window.opener.postMessage({type:"FACEBOOK_OAUTH_ERROR",error:"' . addslashes($e->getMessage()) . '"}, "*"); } window.close(); }, 3000);</script>'
-                . '</body></html>', 200, ['Content-Type' => 'text/html']
-            );
-        }
-    });
-
-    // GET /v1/facebook/pages
-    Route::get('/facebook/pages', function (Request $request) {
-        $workspaceId = $request->query('workspace_id', 1);
-        $pages = FacebookPage::where('workspace_id', $workspaceId)->get();
-
-        return response()->json([
-            'success' => true,
-            'data'    => $pages->map(function ($p) {
-                return [
-                    'id'                  => $p->id,
-                    'workspace_id'        => $p->workspace_id,
-                    'account_id'          => $p->page_id,
-                    'account_name'        => $p->page_name,
-                    'followers_count'     => $p->followers_count,
-                    'fan_count'           => $p->fan_count,
-                    'profile_picture_url' => $p->profile_picture_url,
-                    'connected_since'     => $p->connected_since ? $p->connected_since->toIso8601String() : null,
-                    'token_status'        => $p->token_status,
-                ];
-            }),
-        ]);
-    });
-
-    // POST /v1/facebook/connect-page
-    Route::post('/facebook/connect-page', function (Request $request) {
-        $validated = $request->validate([
-            'workspace_id'         => 'nullable|integer',
-            'page_id'              => 'required|string',
-            'page_name'            => 'required|string',
-            'page_access_token'    => 'required|string',
-            'instagram_account_id' => 'nullable|string',
-        ]);
-
-        $workspaceId = getOrCreateWorkspaceId($request->input('workspace_id', 1));
-
-        $graphService = new FacebookGraphService();
-
-        $followers = 0;
-        $fans = 0;
-        $pictureUrl = null;
-
-        try {
-            $details = $graphService->getPageDetails($validated['page_id'], $validated['page_access_token']);
-            $followers = $details['followers_count'] ?? 0;
-            $fans = $details['fan_count'] ?? 0;
-            $pictureUrl = $details['profile_picture_url'] ?? null;
-        } catch (\Exception $e) {
-            // Log & continue fallback
-        }
-
-        $page = FacebookPage::updateOrCreate(
-            [
-                'workspace_id' => $workspaceId,
-                'page_id'      => $validated['page_id'],
-            ],
-            [
-                'page_name'           => $validated['page_name'],
-                'page_access_token'   => $validated['page_access_token'], // Encrypted at model layer
-                'followers_count'     => $followers,
-                'fan_count'           => $fans,
-                'profile_picture_url' => $pictureUrl,
-                'token_status'        => 'valid',
-                'connected_since'     => now(),
-            ]
-        );
-
-        // Sync legacy integration table
-        Integration::updateOrCreate(
-            [
-                'workspace_id' => $workspaceId,
-                'platform'     => 'facebook',
-                'account_id'   => $validated['page_id'],
-            ],
-            [
-                'account_name'      => $validated['page_name'],
-                'refresh_token'     => $validated['page_access_token'],
-                'is_connected'      => true,
-                'connection_status' => 'connected',
-                'last_sync_at'      => now(),
-            ]
-        );
-
-        // If linked Instagram account ID is provided, auto-connect Instagram for the same workspace
-        if (!empty($validated['instagram_account_id'])) {
-            Integration::updateOrCreate(
-                [
-                    'workspace_id' => $workspaceId,
-                    'platform'     => 'instagram',
-                ],
-                [
-                    'account_id'        => $validated['instagram_account_id'],
-                    'account_name'      => $validated['page_name'],
-                    'refresh_token'     => $validated['page_access_token'],
-                    'is_connected'      => true,
-                    'connection_status' => 'connected',
-                    'last_sync_at'      => now(),
-                ]
-            );
-        }
-
-        // Write a real notification to DB on successful page connect
-        createNotification(
-            $workspaceId,
-            'integration_error',
-            'Facebook Page Connected',
-            "Facebook Page '{$validated['page_name']}' was connected to this workspace.",
-            $page->page_name
-        );
-
-        return response()->json([
-            'success' => true,
-            'message' => "Facebook Page '{$validated['page_name']}' connected successfully!",
-            'data'    => [
-                'id'                  => $page->id,
-                'workspace_id'        => $page->workspace_id,
-                'account_id'          => $page->page_id,
-                'account_name'        => $page->page_name,
-                'followers_count'     => $page->followers_count,
-                'profile_picture_url' => $page->profile_picture_url,
-                'connected_since'     => $page->connected_since->toIso8601String(),
-                'token_status'        => $page->token_status,
-            ],
-        ]);
-    });
+    // Facebook Page Management
+    Route::get('/facebook/pages', [FacebookAuthController::class, 'pages']);
+    Route::post('/facebook/connect-page', [FacebookAuthController::class, 'connectPage']);
+    Route::post('/facebook/disconnect', [FacebookAuthController::class, 'disconnect']);
+    Route::get('/facebook/test', [FacebookAuthController::class, 'testConnection']);
 
     // POST /v1/instagram/connect
     Route::post('/instagram/connect', function (Request $request) {
@@ -1731,8 +1654,8 @@ Route::prefix('v1')->group(function () {
             'status'       => 'nullable|in:draft,scheduled,published',
             'scheduled_at' => 'nullable|date',
             'platforms'    => 'nullable',
-            'images.*'     => 'nullable|file|image|max:10240',
-            'video'        => 'nullable|file|mimes:mp4,mov,avi,mkv|max:51200', // 50MB
+            'images.*'     => 'nullable|file|image|max:20480',
+            'video'        => 'nullable|file|mimes:mp4,mov,avi,mkv|max:512000', // 500MB
         ]);
 
         $workspaceId = getOrCreateWorkspaceId($validated['workspace_id'] ?? 1);
@@ -1827,6 +1750,59 @@ Route::prefix('v1')->group(function () {
             }
         }
 
+            // Parse the incoming scheduled_at as IST (Asia/Kolkata) so that a
+            // user-selected "13:34 IST" is stored as "08:04 UTC" in the DB,
+            // not as "13:34 UTC" (which would fire at 19:04 IST).
+            $scheduledAtCarbon = null;
+            if (!empty($validated['scheduled_at'])) {
+                $scheduledAtCarbon = \Carbon\Carbon::parse($validated['scheduled_at'], 'Asia/Kolkata')->utc();
+                \Illuminate\Support\Facades\Log::info('[SCHEDULE DEBUG] scheduled_at received', [
+                    'raw_input'   => $validated['scheduled_at'],
+                    'stored_utc'  => $scheduledAtCarbon->toIso8601String(),
+                    'ist_display' => $scheduledAtCarbon->copy()->setTimezone('Asia/Kolkata')->toIso8601String(),
+                ]);
+            }
+
+        // Handle uploaded media files immediately (for draft, scheduled, or instant publishing)
+        $storedMediaFiles = [];
+        if ($request->hasFile('images')) {
+            $images = $request->file('images');
+            $postType = count($images) === 1 ? 'single_image' : 'multi_image';
+            foreach ($images as $index => $img) {
+                $uuid = \Illuminate\Support\Str::uuid()->toString();
+                $ext = $img->getClientOriginalExtension() ?: 'jpg';
+                $filename = "{$uuid}.{$ext}";
+                $img->storeAs("posts/{$workspaceId}", $filename, 'public');
+                $localPath = \Illuminate\Support\Facades\Storage::disk('public')->path("posts/{$workspaceId}/{$filename}");
+                $publicUrl = \Illuminate\Support\Facades\Storage::disk('public')->url("posts/{$workspaceId}/{$filename}");
+
+                $storedMediaFiles[] = [
+                    'type'          => 'image',
+                    'file_path'     => $localPath,
+                    'file_url'      => $publicUrl,
+                    'sort_order'    => $index,
+                    'uploaded_file' => $img,
+                ];
+            }
+        } elseif ($request->hasFile('video')) {
+            $vid = $request->file('video');
+            $postType = 'video';
+            $uuid = \Illuminate\Support\Str::uuid()->toString();
+            $ext = $vid->getClientOriginalExtension() ?: 'mp4';
+            $filename = "{$uuid}.{$ext}";
+            $vid->storeAs("posts/{$workspaceId}", $filename, 'public');
+            $localPath = \Illuminate\Support\Facades\Storage::disk('public')->path("posts/{$workspaceId}/{$filename}");
+            $publicUrl = \Illuminate\Support\Facades\Storage::disk('public')->url("posts/{$workspaceId}/{$filename}");
+
+            $storedMediaFiles[] = [
+                'type'          => 'video',
+                'file_path'     => $localPath,
+                'file_url'      => $publicUrl,
+                'sort_order'    => 0,
+                'uploaded_file' => $vid,
+            ];
+        }
+
         // Create initial FacebookPost database record (with nullable facebook_page_id if posting to YouTube/Twitter)
         $post = FacebookPost::create([
             'workspace_id'     => $workspaceId,
@@ -1835,10 +1811,21 @@ Route::prefix('v1')->group(function () {
             'content'          => $message,
             'link_url'         => $validated['link_url'] ?? null,
             'status'           => $status,
-            'scheduled_at'     => !empty($validated['scheduled_at']) ? new \DateTime($validated['scheduled_at']) : null,
+            'scheduled_at'     => $scheduledAtCarbon,
             'published_at'     => $status === 'published' ? now() : null,
             'created_by_id'    => $request->user()->id ?? 1,
         ]);
+
+        // Insert media attachments into facebook_post_media table
+        foreach ($storedMediaFiles as $mediaData) {
+            \App\Models\FacebookPostMedia::create([
+                'facebook_post_id' => $post->id,
+                'media_type'       => $mediaData['type'],
+                'file_path'        => $mediaData['file_path'],
+                'file_url'         => $mediaData['file_url'],
+                'sort_order'       => $mediaData['sort_order'],
+            ]);
+        }
 
         // Create generic post record for multi-platform history tracking
         Post::create([
@@ -1846,7 +1833,7 @@ Route::prefix('v1')->group(function () {
             'content'         => $message,
             'platform_list'   => $targetPlatforms,
             'status'          => $status,
-            'scheduled_at'    => $post->scheduled_at,
+            'scheduled_at'    => $scheduledAtCarbon,
             'published_at'    => $post->published_at,
             'approval_status' => 'approved',
             'created_by_id'   => $request->user()->id ?? 1,
@@ -1856,7 +1843,7 @@ Route::prefix('v1')->group(function () {
             return response()->json([
                 'success' => true,
                 'message' => $status === 'scheduled' ? 'Post scheduled successfully!' : 'Draft saved successfully!',
-                'data'    => $post,
+                'data'    => $post->load('media'),
             ], 201);
         }
 
@@ -1867,18 +1854,15 @@ Route::prefix('v1')->group(function () {
         if ($requiresFacebook && $fbPage) {
             try {
                 $graphService = new FacebookGraphService();
-                if ($request->hasFile('images')) {
-                    $images = $request->file('images');
-                    if (count($images) === 1) {
-                        $fbResult = $graphService->publishSinglePhoto($fbPage->page_id, $fbPage->page_access_token, $message, $images[0]);
-                        $post->post_type = 'single_image';
-                    } else {
-                        $fbResult = $graphService->publishMultiplePhotos($fbPage->page_id, $fbPage->page_access_token, $message, $images);
-                        $post->post_type = 'multi_image';
-                    }
-                } elseif ($request->hasFile('video')) {
-                    $fbResult = $graphService->publishVideo($fbPage->page_id, $fbPage->page_access_token, $message, $request->file('video'));
-                    $post->post_type = 'video';
+                if ($postType === 'single_image' && !empty($storedMediaFiles)) {
+                    $mediaPath = $storedMediaFiles[0]['file_path'] ?? $storedMediaFiles[0]['uploaded_file'];
+                    $fbResult = $graphService->publishSinglePhoto($fbPage->page_id, $fbPage->page_access_token, $message, $mediaPath);
+                } elseif ($postType === 'multi_image' && !empty($storedMediaFiles)) {
+                    $mediaPaths = array_map(fn($m) => $m['file_path'] ?? $m['uploaded_file'], $storedMediaFiles);
+                    $fbResult = $graphService->publishMultiplePhotos($fbPage->page_id, $fbPage->page_access_token, $message, $mediaPaths);
+                } elseif ($postType === 'video' && !empty($storedMediaFiles)) {
+                    $videoPath = $storedMediaFiles[0]['file_path'] ?? $storedMediaFiles[0]['uploaded_file'];
+                    $fbResult = $graphService->publishVideo($fbPage->page_id, $fbPage->page_access_token, $message, $videoPath);
                 } else {
                     $fbResult = $graphService->publishTextPost($fbPage->page_id, $fbPage->page_access_token, $message, $validated['link_url'] ?? null);
                 }
@@ -1898,20 +1882,20 @@ Route::prefix('v1')->group(function () {
                 $igAccountId = $igInteg ? $igInteg->account_id : ($fbPage ? $fbPage->page_id : null);
                 $primaryToken = $igInteg ? $igInteg->refresh_token : ($fbPage ? $fbPage->page_access_token : null);
 
-                if ($request->hasFile('images')) {
-                    $images = $request->file('images');
+                if (!empty($storedMediaFiles) && $storedMediaFiles[0]['type'] === 'image') {
+                    $mediaPath = $storedMediaFiles[0]['file_path'] ?? $storedMediaFiles[0]['uploaded_file'];
                     try {
-                        $graphService->publishInstagramSinglePhoto($igAccountId, $primaryToken, $message, $images[0], $workspaceId);
+                        $graphService->publishInstagramSinglePhoto($igAccountId, $primaryToken, $message, $mediaPath, $workspaceId);
                     } catch (\Exception $igErr) {
                         if ($fbPage && !empty($fbPage->page_access_token) && $primaryToken !== $fbPage->page_access_token) {
-                            $graphService->publishInstagramSinglePhoto($igAccountId, $fbPage->page_access_token, $message, $images[0], $workspaceId);
+                            $graphService->publishInstagramSinglePhoto($igAccountId, $fbPage->page_access_token, $message, $mediaPath, $workspaceId);
                         } else {
                             throw $igErr;
                         }
                     }
-                } elseif ($request->hasFile('video')) {
-                    $video = $request->file('video');
-                    $graphService->publishInstagramVideo($igAccountId, $primaryToken, $message, $video, $workspaceId);
+                } elseif (!empty($storedMediaFiles) && $storedMediaFiles[0]['type'] === 'video') {
+                    $videoPath = $storedMediaFiles[0]['file_path'] ?? $storedMediaFiles[0]['uploaded_file'];
+                    $graphService->publishInstagramVideo($igAccountId, $primaryToken, $message, $videoPath, $workspaceId);
                 }
                 $publishedSummary[] = 'Instagram (@' . ($igInteg ? $igInteg->account_name : 'Account') . ')';
             } catch (\Exception $e) {
@@ -1922,14 +1906,14 @@ Route::prefix('v1')->group(function () {
         // 3. YouTube Publishing
         if ($requiresYouTube && $ytConn) {
             try {
-                if ($request->hasFile('video')) {
-                    $videoFile = $request->file('video');
+                if ($request->hasFile('video') || (!empty($storedMediaFiles) && $storedMediaFiles[0]['type'] === 'video')) {
+                    $videoPath = $storedMediaFiles[0]['file_path'] ?? $request->file('video')->getRealPath();
                     $ytService = resolve(\App\Services\YouTubeService::class);
                     $title = !empty($message) ? mb_substr($message, 0, 60) : 'Uploaded Video';
                     
                     $ytResult = $ytService->uploadVideo(
                         $ytConn,
-                        $videoFile->getRealPath(),
+                        $videoPath,
                         $title,
                         $message,
                         'public'
@@ -1943,7 +1927,7 @@ Route::prefix('v1')->group(function () {
             }
         }
 
-        // 3. X/Twitter Publishing
+        // 4. X/Twitter Publishing
         if ($requiresTwitter && $twitterConn) {
             try {
                 $twitterService = resolve(\App\Services\TwitterService::class);
@@ -2028,13 +2012,25 @@ Route::prefix('v1')->group(function () {
 
     // ── Scheduled Posts API ──────────────────────────────────────────────────────
     Route::get('/scheduled-posts', function (Request $request) {
-        $workspaceId = $request->query('workspace_id', 1);
-        $scheduled = FacebookPost::where('workspace_id', $workspaceId)->where('status', 'scheduled')->orderBy('scheduled_at', 'asc')->get();
+        $workspaceId = getOrCreateWorkspaceId($request->query('workspace_id', 1));
+        $scheduled = FacebookPost::where('workspace_id', $workspaceId)
+            ->where('status', 'scheduled')
+            ->orderBy('scheduled_at', 'asc')
+            ->get()
+            ->map(function ($p) {
+                $legacyPost = Post::where('workspace_id', $p->workspace_id)
+                    ->where('content', $p->content)
+                    ->latest()
+                    ->first();
+                $p->platform_list = $legacyPost ? $legacyPost->platform_list : ($p->facebook_page_id ? ['Facebook'] : ['Instagram']);
+                return $p;
+            });
         return response()->json(['success' => true, 'data' => $scheduled]);
     });
 
     Route::delete('/scheduled-posts/{id}', function ($id) {
         FacebookPost::where('id', $id)->where('status', 'scheduled')->delete();
+        Post::where('id', $id)->where('status', 'scheduled')->delete();
         return response()->json(['success' => true, 'message' => 'Scheduled post cancelled and removed']);
     });
 
@@ -2048,10 +2044,39 @@ Route::prefix('v1')->group(function () {
         }
 
         $graphService = new FacebookGraphService();
+        $mediaItems = \App\Models\FacebookPostMedia::where('facebook_post_id', $post->id)->orderBy('sort_order', 'asc')->get();
+
         try {
-            $fbResult = $graphService->publishTextPost($fbPage->page_id, $fbPage->page_access_token, $post->content, $post->link_url);
+            $fbResult = null;
+            if ($post->post_type === 'single_image' || ($mediaItems->count() === 1 && $mediaItems->first()->media_type === 'image')) {
+                $media = $mediaItems->first();
+                $filePath = ($media && !empty($media->file_path) && file_exists($media->file_path)) ? $media->file_path : ($media?->file_url ?? null);
+                if (!$filePath) {
+                    throw new \Exception("Cannot retry photo post: Image file is missing from server storage.");
+                }
+                $fbResult = $graphService->publishSinglePhoto($fbPage->page_id, $fbPage->page_access_token, $post->content ?? '', $filePath);
+            } elseif ($post->post_type === 'multi_image' || ($mediaItems->count() > 1 && $mediaItems->first()->media_type === 'image')) {
+                $filePaths = $mediaItems->map(fn($m) => (!empty($m->file_path) && file_exists($m->file_path)) ? $m->file_path : $m->file_url)->filter()->values()->toArray();
+                if (empty($filePaths)) {
+                    throw new \Exception("Cannot retry multi-photo post: Image files are missing from server storage.");
+                }
+                $fbResult = $graphService->publishMultiplePhotos($fbPage->page_id, $fbPage->page_access_token, $post->content ?? '', $filePaths);
+            } elseif ($post->post_type === 'video' || ($mediaItems->count() >= 1 && $mediaItems->first()->media_type === 'video')) {
+                $media = $mediaItems->first();
+                $filePath = ($media && !empty($media->file_path) && file_exists($media->file_path)) ? $media->file_path : ($media?->file_url ?? null);
+                if (!$filePath) {
+                    throw new \Exception("Cannot retry video post: Video file is missing from server storage.");
+                }
+                $fbResult = $graphService->publishVideo($fbPage->page_id, $fbPage->page_access_token, $post->content ?? '', $filePath);
+            } else {
+                if (empty(trim($post->content ?? ''))) {
+                    throw new \Exception("Cannot retry empty post: Message caption and media attachments are both empty.");
+                }
+                $fbResult = $graphService->publishTextPost($fbPage->page_id, $fbPage->page_access_token, $post->content, $post->link_url);
+            }
+
             $post->status = 'published';
-            $post->fb_post_id = $fbResult['id'] ?? null;
+            $post->fb_post_id = $fbResult['post_id'] ?? $fbResult['id'] ?? null;
             $post->error_message = null;
             $post->published_at = now();
             $post->retry_count += 1;

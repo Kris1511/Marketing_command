@@ -36,9 +36,11 @@ return [
     ],
 
     'facebook' => [
-        'client_id' => env('FACEBOOK_APP_ID'),
+        'client_id'     => env('FACEBOOK_APP_ID', '1390717679611716'),
         'client_secret' => env('FACEBOOK_APP_SECRET'),
-        'redirect' => env('FACEBOOK_REDIRECT_URI'),
+        'redirect'      => env('FACEBOOK_REDIRECT_URI', 'http://localhost:8000/api/v1/auth/facebook/callback'),
+        'scopes'        => env('FACEBOOK_OAUTH_SCOPES', 'public_profile,pages_show_list,pages_read_engagement,pages_manage_posts,pages_read_user_content,read_insights'),
+        'graph_version' => env('FACEBOOK_GRAPH_VERSION', 'v23.0'),
     ],
 
     'google' => [

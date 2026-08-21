@@ -82,6 +82,10 @@ export default function NotificationsPage() {
     else navigate('/reports');
   };
 
+  const isComment = (n) =>
+    ['facebook_comment', 'instagram_comment', 'youtube_comment'].includes(n.type) ||
+    n.title?.toLowerCase().includes('comment');
+
   // Filtering
   const filtered = notifications.filter((n) => {
     const matchesSearch =
@@ -89,9 +93,10 @@ export default function NotificationsPage() {
       n.message.toLowerCase().includes(searchQuery.toLowerCase()) ||
       n.workspace.toLowerCase().includes(searchQuery.toLowerCase());
 
+    if (filterTab === 'comments') return matchesSearch && isComment(n);
     if (filterTab === 'unread') return matchesSearch && !n.is_read;
     if (filterTab === 'leads') return matchesSearch && n.category === 'leads';
-    if (filterTab === 'publishing') return matchesSearch && n.category === 'publishing';
+    if (filterTab === 'publishing') return matchesSearch && n.category === 'publishing' && !isComment(n);
     if (filterTab === 'system') return matchesSearch && n.category === 'system';
     return matchesSearch;
   });
@@ -167,6 +172,13 @@ export default function NotificationsPage() {
               onClick={() => setFilterTab('all')}
             >
               All ({notifications.length})
+            </button>
+            <button
+              type="button"
+              className={`platform-tab ${filterTab === 'comments' ? 'active' : ''}`}
+              onClick={() => setFilterTab('comments')}
+            >
+              Comments
             </button>
             <button
               type="button"
@@ -275,7 +287,7 @@ export default function NotificationsPage() {
                       ></span>
                     )}
                   </div>
-                  <span style={{ color: '#475569', fontSize: '13px', marginTop: '4px' }}>
+                  <span style={{ color: '#475569', fontSize: '13px', marginTop: '4px', display: 'block', whiteSpace: 'pre-line', lineHeight: '1.45' }}>
                     {item.message}
                   </span>
                 </div>

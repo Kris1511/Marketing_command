@@ -62,10 +62,15 @@ class FacebookGraphService
      * Get Facebook Page Insights & Analytics Metrics for a given period.
      * Queries valid Meta Graph API v23.0 metrics (page_views_total, page_post_engagements, page_daily_follows_unique).
      */
-    public function getPageInsights(string $pageId, string $accessToken, int $days = 30): array
+    public function getPageInsights(string $pageId, string $accessToken, int $days = 30, $startDate = null, $endDate = null): array
     {
-        $since = now()->subDays($days)->startOfDay()->timestamp;
-        $until = now()->endOfDay()->timestamp;
+        if ($startDate && $endDate) {
+            $since = \Carbon\Carbon::parse($startDate)->startOfDay()->timestamp;
+            $until = \Carbon\Carbon::parse($endDate)->endOfDay()->timestamp;
+        } else {
+            $since = now()->subDays($days - 1)->startOfDay()->timestamp;
+            $until = now()->endOfDay()->timestamp;
+        }
 
         $url = "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/insights";
 
@@ -128,10 +133,19 @@ class FacebookGraphService
      * Get day-by-day Page Insights trend for the last N days.
      * Returns a complete date-mapped series for every day in the period using real Meta API data.
      */
-    public function getPageInsightsTrend(string $pageId, string $accessToken, int $days = 30): array
+    public function getPageInsightsTrend(string $pageId, string $accessToken, int $days = 30, $startDate = null, $endDate = null): array
     {
-        $since = now()->subDays($days)->startOfDay()->timestamp;
-        $until = now()->endOfDay()->timestamp;
+        if ($startDate && $endDate) {
+            $start = \Carbon\Carbon::parse($startDate)->startOfDay();
+            $end   = \Carbon\Carbon::parse($endDate)->endOfDay();
+            $days  = max(1, (int)$start->diffInDays($end) + 1);
+        } else {
+            $end   = now()->endOfDay();
+            $start = now()->subDays($days - 1)->startOfDay();
+        }
+
+        $since = $start->timestamp;
+        $until = $end->timestamp;
 
         $url = "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/insights";
 
@@ -155,9 +169,10 @@ class FacebookGraphService
         $engagementByDate = [];
         $labels           = [];
 
-        for ($i = $days - 1; $i >= 0; $i--) {
-            $dateStr = now()->subDays($i)->format('Y-m-d');
-            $label   = now()->subDays($i)->format('M j');
+        for ($i = 0; $i < $days; $i++) {
+            $currDate = (clone $start)->addDays($i);
+            $dateStr = $currDate->format('Y-m-d');
+            $label   = $currDate->format('M j');
             $labels[] = $label;
             $reachByDate[$dateStr]      = 0;
             $engagementByDate[$dateStr] = 0;
@@ -173,7 +188,12 @@ class FacebookGraphService
                     $name   = $metric['name'] ?? '';
                     $values = $metric['values'] ?? [];
                     foreach ($values as $entry) {
-                        $date  = substr($entry['end_time'] ?? '', 0, 10);
+                        // Meta's end_time is 1 day AHEAD of the actual data date (e.g. Aug 13 end_time = data for Aug 12)
+                        // Subtract 1 day to get the real data date
+                        $endTimeFull = $entry['end_time'] ?? '';
+                        $date = $endTimeFull
+                            ? \Carbon\Carbon::parse($endTimeFull)->subDay()->format('Y-m-d')
+                            : '';
                         $value = is_array($entry['value'] ?? null) ? array_sum($entry['value']) : (int)($entry['value'] ?? 0);
                         if (isset($reachByDate[$date])) {
                             if ($name === 'page_views_total') {
@@ -208,6 +228,39 @@ class FacebookGraphService
     }
 
     /**
+     * Helper to log comprehensive Meta API error diagnostics and throw formatted Exception
+     */
+    protected function logAndThrowMetaError(string $action, string $url, string $pageOrAccountId, $response): void
+    {
+        $error = $response->json('error') ?? [];
+        $message = $error['message'] ?? $response->json('error.message') ?? $response->body();
+        $code = $error['code'] ?? $response->status();
+        $type = $error['type'] ?? 'OAuthException';
+        $subcode = $error['error_subcode'] ?? null;
+        $userMsg = $error['error_user_msg'] ?? null;
+
+        \Illuminate\Support\Facades\Log::error("[FACEBOOK PUBLISH FAILED]", [
+            'action'             => $action,
+            'endpoint'           => $url,
+            'page_or_account'    => $pageOrAccountId,
+            'http_status'        => $response->status(),
+            'meta_error_code'    => $code,
+            'meta_error_type'    => $type,
+            'meta_error_subcode' => $subcode,
+            'meta_error_message' => $message,
+            'meta_user_msg'      => $userMsg,
+            'raw_response'       => $response->body(),
+        ]);
+
+        $formatted = "Meta Error [{$code} / {$type}]: {$message}";
+        if ($userMsg) {
+            $formatted .= " ({$userMsg})";
+        }
+
+        throw new Exception($formatted);
+    }
+
+    /**
      * Publish Text or Link Post to Page Feed
      */
     public function publishTextPost(string $pageId, string $accessToken, string $message, ?string $linkUrl = null): array
@@ -222,11 +275,22 @@ class FacebookGraphService
             $params['link'] = $linkUrl;
         }
 
+        \Illuminate\Support\Facades\Log::info('[FACEBOOK PUBLISH] Starting publishTextPost', [
+            'page_id'  => $pageId,
+            'endpoint' => $url,
+            'has_link' => !empty($linkUrl),
+        ]);
+
         $response = $this->client()->post($url, $params);
 
         if (!$response->successful()) {
-            throw new Exception($response->json('error.message') ?? 'Failed to publish post to Facebook Page');
+            $this->logAndThrowMetaError('publishTextPost', $url, $pageId, $response);
         }
+
+        \Illuminate\Support\Facades\Log::info('[FACEBOOK PUBLISH] publishTextPost successful', [
+            'page_id'  => $pageId,
+            'response' => $response->json(),
+        ]);
 
         return $response->json();
     }
@@ -238,6 +302,12 @@ class FacebookGraphService
     {
         $url = "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/photos";
 
+        \Illuminate\Support\Facades\Log::info('[FACEBOOK PUBLISH] Starting publishSinglePhoto', [
+            'page_id'   => $pageId,
+            'endpoint'  => $url,
+            'file_type' => is_object($fileOrUrl) ? get_class($fileOrUrl) : (is_string($fileOrUrl) && file_exists($fileOrUrl) ? 'local_path' : 'url_string'),
+        ]);
+
         if (is_object($fileOrUrl) && method_exists($fileOrUrl, 'getRealPath')) {
             $response = $this->client()->attach(
                 'source',
@@ -245,6 +315,15 @@ class FacebookGraphService
                 $fileOrUrl->getClientOriginalName()
             )->post($url, [
                 'message'      => $caption,
+                'access_token' => $accessToken,
+            ]);
+        } elseif (is_string($fileOrUrl) && file_exists($fileOrUrl)) {
+            $response = $this->client()->attach(
+                'source',
+                file_get_contents($fileOrUrl),
+                basename($fileOrUrl)
+            )->post($url, [
+                'caption'      => $caption,
                 'access_token' => $accessToken,
             ]);
         } else {
@@ -256,8 +335,13 @@ class FacebookGraphService
         }
 
         if (!$response->successful()) {
-            throw new Exception($response->json('error.message') ?? 'Failed to publish photo to Facebook Page');
+            $this->logAndThrowMetaError('publishSinglePhoto', $url, $pageId, $response);
         }
+
+        \Illuminate\Support\Facades\Log::info('[FACEBOOK PUBLISH] publishSinglePhoto successful', [
+            'page_id'  => $pageId,
+            'response' => $response->json(),
+        ]);
 
         return $response->json();
     }
@@ -269,24 +353,48 @@ class FacebookGraphService
     {
         $attachedMedia = [];
 
+        \Illuminate\Support\Facades\Log::info('[FACEBOOK PUBLISH] Starting publishMultiplePhotos', [
+            'page_id'     => $pageId,
+            'total_files' => count($files),
+        ]);
+
         foreach ($files as $file) {
             $photoUrl = "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/photos";
-            $response = $this->client()->attach(
-                'source',
-                file_get_contents($file->getRealPath()),
-                $file->getClientOriginalName()
-            )->post($photoUrl, [
-                'published'    => 'false', // Upload without publishing to feed yet
-                'access_token' => $accessToken,
-            ]);
+            if (is_object($file) && method_exists($file, 'getRealPath')) {
+                $response = $this->client()->attach(
+                    'source',
+                    file_get_contents($file->getRealPath()),
+                    $file->getClientOriginalName()
+                )->post($photoUrl, [
+                    'published'    => 'false',
+                    'access_token' => $accessToken,
+                ]);
+            } elseif (is_string($file) && file_exists($file)) {
+                $response = $this->client()->attach(
+                    'source',
+                    file_get_contents($file),
+                    basename($file)
+                )->post($photoUrl, [
+                    'published'    => 'false',
+                    'access_token' => $accessToken,
+                ]);
+            } else {
+                $response = $this->client()->post($photoUrl, [
+                    'url'          => (string) $file,
+                    'published'    => 'false',
+                    'access_token' => $accessToken,
+                ]);
+            }
 
             if ($response->successful() && $response->json('id')) {
                 $attachedMedia[] = ['media_fbid' => $response->json('id')];
+            } else {
+                $this->logAndThrowMetaError('publishMultiplePhotos (upload photo)', $photoUrl, $pageId, $response);
             }
         }
 
         if (empty($attachedMedia)) {
-            throw new Exception('Failed to upload images for multi-photo post');
+            throw new Exception('Failed to upload images for multi-photo post: No media IDs returned.');
         }
 
         // Post all attached media together in feed
@@ -298,8 +406,13 @@ class FacebookGraphService
         ]);
 
         if (!$response->successful()) {
-            throw new Exception($response->json('error.message') ?? 'Failed to publish multi-photo post');
+            $this->logAndThrowMetaError('publishMultiplePhotos (feed publish)', $feedUrl, $pageId, $response);
         }
+
+        \Illuminate\Support\Facades\Log::info('[FACEBOOK PUBLISH] publishMultiplePhotos successful', [
+            'page_id'  => $pageId,
+            'response' => $response->json(),
+        ]);
 
         return $response->json();
     }
@@ -311,11 +424,26 @@ class FacebookGraphService
     {
         $url = "https://graph-video.facebook.com/{$this->apiVersion}/{$pageId}/videos";
 
+        \Illuminate\Support\Facades\Log::info('[FACEBOOK PUBLISH] Starting publishVideo', [
+            'page_id'   => $pageId,
+            'endpoint'  => $url,
+            'file_type' => is_object($fileOrUrl) ? get_class($fileOrUrl) : (is_string($fileOrUrl) && file_exists($fileOrUrl) ? 'local_path' : 'url_string'),
+        ]);
+
         if (is_object($fileOrUrl) && method_exists($fileOrUrl, 'getRealPath')) {
             $response = $this->client()->attach(
                 'source',
                 file_get_contents($fileOrUrl->getRealPath()),
                 $fileOrUrl->getClientOriginalName()
+            )->post($url, [
+                'description'  => $description,
+                'access_token' => $accessToken,
+            ]);
+        } elseif (is_string($fileOrUrl) && file_exists($fileOrUrl)) {
+            $response = $this->client()->attach(
+                'source',
+                file_get_contents($fileOrUrl),
+                basename($fileOrUrl)
             )->post($url, [
                 'description'  => $description,
                 'access_token' => $accessToken,
@@ -329,8 +457,13 @@ class FacebookGraphService
         }
 
         if (!$response->successful()) {
-            throw new Exception($response->json('error.message') ?? 'Failed to publish video to Facebook Page');
+            $this->logAndThrowMetaError('publishVideo', $url, $pageId, $response);
         }
+
+        \Illuminate\Support\Facades\Log::info('[FACEBOOK PUBLISH] publishVideo successful', [
+            'page_id'  => $pageId,
+            'response' => $response->json(),
+        ]);
 
         return $response->json();
     }
@@ -372,6 +505,24 @@ class FacebookGraphService
                 ]);
                 $mediaUrl = $cdnRes->json('secure_url') ?? $localAsset;
             }
+        } elseif (is_string($fileOrUrl) && file_exists($fileOrUrl)) {
+            $filename = basename($fileOrUrl);
+            $localAsset = asset("storage/posts/{$workspaceId}/{$filename}");
+            $publicDomain = env('PUBLIC_MEDIA_URL');
+            if (!empty($publicDomain)) {
+                $mediaUrl = rtrim($publicDomain, '/') . "/storage/posts/{$workspaceId}/{$filename}";
+            } elseif (str_starts_with(env('APP_URL'), 'https://')) {
+                $mediaUrl = asset("storage/posts/{$workspaceId}/{$filename}");
+            } else {
+                $cdnRes = $this->client()->attach(
+                    'file',
+                    file_get_contents($fileOrUrl),
+                    $filename
+                )->post('https://api.cloudinary.com/v1_1/demo/image/upload', [
+                    'upload_preset' => 'unsigned'
+                ]);
+                $mediaUrl = $cdnRes->json('secure_url') ?? $localAsset;
+            }
         } else {
             $mediaUrl = (string) $fileOrUrl;
         }
@@ -390,7 +541,7 @@ class FacebookGraphService
         ]);
 
         if (!$response->successful() || !($containerId = $response->json('id'))) {
-            throw new Exception($response->json('error.message') ?? 'Failed to create Instagram photo container');
+            $this->logAndThrowMetaError('publishInstagramSinglePhoto (create container)', $containerUrl, $igAccountId, $response);
         }
 
         // Wait for Meta container processing (up to 5 attempts, 2 seconds each)
@@ -417,7 +568,7 @@ class FacebookGraphService
         ]);
 
         if (!$pubResponse->successful()) {
-            throw new Exception($pubResponse->json('error.message') ?? 'Failed to publish container to Instagram');
+            $this->logAndThrowMetaError('publishInstagramSinglePhoto (publish container)', $publishUrl, $igAccountId, $pubResponse);
         }
 
         $publishedId = $pubResponse->json('id');
@@ -466,6 +617,17 @@ class FacebookGraphService
             } else {
                 $videoUrl = $localAsset;
             }
+        } elseif (is_string($fileOrUrl) && file_exists($fileOrUrl)) {
+            $filename = basename($fileOrUrl);
+            $localAsset = asset("storage/posts/{$workspaceId}/{$filename}");
+            $publicDomain = env('PUBLIC_MEDIA_URL');
+            if (!empty($publicDomain)) {
+                $videoUrl = rtrim($publicDomain, '/') . "/storage/posts/{$workspaceId}/{$filename}";
+            } elseif (str_starts_with(env('APP_URL'), 'https://')) {
+                $videoUrl = asset("storage/posts/{$workspaceId}/{$filename}");
+            } else {
+                $videoUrl = $localAsset;
+            }
         } else {
             $videoUrl = (string) $fileOrUrl;
         }
@@ -482,7 +644,7 @@ class FacebookGraphService
         ]);
 
         if (!$response->successful() || !($containerId = $response->json('id'))) {
-            throw new Exception($response->json('error.message') ?? 'Failed to create Instagram video container');
+            $this->logAndThrowMetaError('publishInstagramVideo (create container)', $containerUrl, $igAccountId, $response);
         }
 
         // Wait for Meta container processing (up to 8 attempts for video, 3 seconds each)
@@ -508,7 +670,7 @@ class FacebookGraphService
         ]);
 
         if (!$pubResponse->successful()) {
-            throw new Exception($pubResponse->json('error.message') ?? 'Failed to publish video to Instagram');
+            $this->logAndThrowMetaError('publishInstagramVideo (publish container)', $publishUrl, $igAccountId, $pubResponse);
         }
 
         $publishedId = $pubResponse->json('id');
@@ -531,10 +693,15 @@ class FacebookGraphService
     /**
      * Fetch Instagram Business / Professional Account Insights via Instagram Graph API.
      */
-    public function getInstagramAccountInsights(string $accessToken, int $days = 30): array
+    public function getInstagramAccountInsights(string $accessToken, int $days = 30, $startDate = null, $endDate = null): array
     {
-        $since = now()->subDays($days)->startOfDay()->timestamp;
-        $until = now()->endOfDay()->timestamp;
+        if ($startDate && $endDate) {
+            $since = \Carbon\Carbon::parse($startDate)->startOfDay()->timestamp;
+            $until = \Carbon\Carbon::parse($endDate)->endOfDay()->timestamp;
+        } else {
+            $since = now()->subDays($days - 1)->startOfDay()->timestamp;
+            $until = now()->endOfDay()->timestamp;
+        }
 
         $isIgToken = str_starts_with($accessToken, 'IGAA');
         $baseUrl   = $isIgToken ? 'https://graph.instagram.com/v23.0' : "{$this->baseUrl}/{$this->apiVersion}";
@@ -740,16 +907,23 @@ class FacebookGraphService
      * Logs the RAW Meta API response before any processing.
      * Does NOT swallow or convert permission/API errors into 0.
      */
-    public function getFacebookFeedPostMetrics(string $pageId, string $accessToken, int $days = 30, bool $forceRefresh = false): array
+    public function getFacebookFeedPostMetrics(string $pageId, string $accessToken, int $days = 30, bool $forceRefresh = false, $startDate = null, $endDate = null): array
     {
-        $cacheKey = "fb_feed_metrics_{$pageId}_{$days}";
+        $startStr = $startDate ? \Carbon\Carbon::parse($startDate)->format('Ymd') : '';
+        $endStr   = $endDate ? \Carbon\Carbon::parse($endDate)->format('Ymd') : '';
+        $cacheKey = "fb_feed_metrics_{$pageId}_{$days}_{$startStr}_{$endStr}";
         if ($forceRefresh) {
             \Illuminate\Support\Facades\Cache::forget($cacheKey);
         }
-        return \Illuminate\Support\Facades\Cache::remember($cacheKey, 300, function () use ($pageId, $accessToken, $days) {
+        return \Illuminate\Support\Facades\Cache::remember($cacheKey, 300, function () use ($pageId, $accessToken, $days, $startDate, $endDate) {
             $publishedPostsEndpoint = "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/published_posts";
-            $since = strtotime("-{$days} days midnight UTC");
-            $until = time();
+            if ($startDate && $endDate) {
+                $since = \Carbon\Carbon::parse($startDate)->startOfDay()->timestamp;
+                $until = \Carbon\Carbon::parse($endDate)->endOfDay()->timestamp;
+            } else {
+                $since = strtotime("-{$days} days midnight UTC");
+                $until = time();
+            }
 
             \Illuminate\Support\Facades\Log::info("[FACEBOOK API CALL] getFacebookFeedPostMetrics request", [
                 'page_id'     => $pageId,
@@ -760,11 +934,18 @@ class FacebookGraphService
                 'until'       => date('Y-m-d H:i:s', $until),
             ]);
 
-            $response = $this->client()->timeout(10)->get($publishedPostsEndpoint, [
-                'fields'       => 'id,message,created_time,shares,likes.summary(true),comments.summary(true)',
-                'limit'        => 25,
+            $queryParams = [
+                // Include inline post_media_view metric — Meta's official Graph API post-level view metric
+                'fields'       => 'id,message,created_time,shares,likes.summary(true),comments.summary(true),insights.metric(post_media_view){values}',
+                'limit'        => 50,
                 'access_token' => $accessToken,
-            ]);
+            ];
+            if ($since && $until) {
+                $queryParams['since'] = $since;
+                $queryParams['until'] = $until;
+            }
+
+            $response = $this->client()->timeout(10)->get($publishedPostsEndpoint, $queryParams);
 
             // LOG RAW META RESPONSE BEFORE ANY PROCESSING
             \Illuminate\Support\Facades\Log::info("[FACEBOOK API RAW RESPONSE] getFacebookFeedPostMetrics", [
@@ -804,69 +985,49 @@ class FacebookGraphService
             $totalComments = 0;
             $totalShares   = 0;
             $totalViews    = 0;
-            $viewsSupported = false;
+            $viewsSupported = true;
+            $postsByDate   = []; // keyed by Y-m-d → ['views','likes','comments','shares']
 
             foreach ($postsData as $p) {
-                $totalLikes    += (int)($p['likes']['summary']['total_count'] ?? 0);
-                $totalComments += (int)($p['comments']['summary']['total_count'] ?? 0);
-                $totalShares   += (int)($p['shares']['count'] ?? 0);
-            }
-
-            try {
-                $insightsEndpoint = "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/insights";
-                $requestedMetric  = 'page_posts_impressions_organic';
-
-                $pageViewsRes = $this->client()->timeout(5)->get($insightsEndpoint, [
-                    'metric'       => $requestedMetric,
-                    'period'       => 'day',
-                    'since'        => $since,
-                    'until'        => $until,
-                    'access_token' => $accessToken,
-                ]);
-
-                \Illuminate\Support\Facades\Log::info("[FACEBOOK VIEWS API RESPONSE]", [
-                    'page_id'          => $pageId,
-                    'endpoint'         => $insightsEndpoint,
-                    'requested_metric' => $requestedMetric,
-                    'since'            => date('Y-m-d H:i:s', $since),
-                    'until'            => date('Y-m-d H:i:s', $until),
-                    'status'           => $pageViewsRes->status(),
-                    'raw_response'     => $pageViewsRes->json(),
-                ]);
-
-                if ($pageViewsRes->successful() && !empty($pageViewsRes->json('data'))) {
-                    $viewsSupported = true;
-                    $totalViews = 0;
-                    foreach ($pageViewsRes->json('data.0.values') ?? [] as $v) {
-                        $totalViews += (int)($v['value'] ?? 0);
-                    }
-                } else {
-                    $requestedMetric = 'page_views_total';
-                    $pvRes = $this->client()->timeout(5)->get($insightsEndpoint, [
-                        'metric'       => $requestedMetric,
-                        'period'       => 'day',
-                        'since'        => $since,
-                        'until'        => $until,
-                        'access_token' => $accessToken,
-                    ]);
-                    if ($pvRes->successful() && !empty($pvRes->json('data'))) {
-                        $viewsSupported = true;
-                        $totalViews = 0;
-                        foreach ($pvRes->json('data.0.values') ?? [] as $v) {
-                            $totalViews += (int)($v['value'] ?? 0);
-                        }
+                if ($since && $until && !empty($p['created_time'])) {
+                    $cTime = strtotime($p['created_time']);
+                    if ($cTime < $since || $cTime > $until) {
+                        continue;
                     }
                 }
+                $pLikes    = (int)($p['likes']['summary']['total_count'] ?? 0);
+                $pComments = (int)($p['comments']['summary']['total_count'] ?? 0);
+                $pShares   = (int)($p['shares']['count'] ?? 0);
+                
+                // Read genuine Meta post_media_view metric from inline insights
+                $pViews    = (int)($p['insights']['data'][0]['values'][0]['value'] ?? 0);
 
-                \Illuminate\Support\Facades\Log::info("[FACEBOOK VIEWS FINAL CALCULATED]", [
-                    'page_id'          => $pageId,
-                    'metric_used'      => $requestedMetric,
-                    'calculated_views' => $totalViews,
-                    'views_supported'  => $viewsSupported,
-                ]);
-            } catch (\Exception $e) {
-                \Illuminate\Support\Facades\Log::warning("[FACEBOOK VIEWS API ERROR] " . $e->getMessage());
+                $totalLikes    += $pLikes;
+                $totalComments += $pComments;
+                $totalShares   += $pShares;
+                $totalViews    += $pViews;
+
+                // Build per-day breakdown using the post's created_time
+                if (!empty($p['created_time'])) {
+                    $dateKey = \Carbon\Carbon::parse($p['created_time'])->format('Y-m-d');
+                    if (!isset($postsByDate[$dateKey])) {
+                        $postsByDate[$dateKey] = ['views' => 0, 'likes' => 0, 'comments' => 0, 'shares' => 0];
+                    }
+                    $postsByDate[$dateKey]['views']    += $pViews;
+                    $postsByDate[$dateKey]['likes']    += $pLikes;
+                    $postsByDate[$dateKey]['comments'] += $pComments;
+                    $postsByDate[$dateKey]['shares']   += $pShares;
+                }
             }
+
+            \Illuminate\Support\Facades\Log::info("[FACEBOOK VIEWS FINAL]", [
+                'page_id'             => $pageId,
+                'post_media_view_sum' => $totalViews,
+                'total_likes'         => $totalLikes,
+                'total_comments'      => $totalComments,
+                'total_shares'        => $totalShares,
+                'note'                => 'post_media_view metric fetched directly from Meta Graph API published_posts (matches Meta Business Suite Views)',
+            ]);
 
             return [
                 'success'            => true,
@@ -878,6 +1039,7 @@ class FacebookGraphService
                 'likes_supported'    => true,
                 'comments_supported' => true,
                 'shares_supported'   => true,
+                'posts_by_date'      => $postsByDate, // e.g. ['2026-08-12' => ['likes'=>2,'comments'=>2,'shares'=>2]]
             ];
         });
     }
@@ -885,13 +1047,15 @@ class FacebookGraphService
     /**
      * Fetch Instagram Media List with real likes, comments, and media insights.
      */
-    public function getInstagramMediaList(string $accessToken, int $limit = 50, bool $forceRefresh = false): array
+    public function getInstagramMediaList(string $accessToken, int $limit = 50, bool $forceRefresh = false, $startDate = null, $endDate = null): array
     {
-        $cacheKey = "ig_media_list_" . md5($accessToken) . "_{$limit}";
+        $startStr = $startDate ? \Carbon\Carbon::parse($startDate)->format('Ymd') : '';
+        $endStr   = $endDate ? \Carbon\Carbon::parse($endDate)->format('Ymd') : '';
+        $cacheKey = "ig_media_list_" . md5($accessToken) . "_{$limit}_{$startStr}_{$endStr}";
         if ($forceRefresh) {
             \Illuminate\Support\Facades\Cache::forget($cacheKey);
         }
-        return \Illuminate\Support\Facades\Cache::remember($cacheKey, 300, function () use ($accessToken, $limit) {
+        return \Illuminate\Support\Facades\Cache::remember($cacheKey, 300, function () use ($accessToken, $limit, $startDate, $endDate) {
             $isIgToken = str_starts_with($accessToken, 'IGAA');
             $baseUrl   = $isIgToken ? 'https://graph.instagram.com/v23.0' : "{$this->baseUrl}/{$this->apiVersion}";
             $url       = "{$baseUrl}/me/media";
@@ -911,7 +1075,26 @@ class FacebookGraphService
                     return [];
                 }
 
-                $items = $response->json('data') ?? [];
+                $rawItems = $response->json('data') ?? [];
+                if (empty($rawItems)) {
+                    return [];
+                }
+
+                // Filter by date range if provided
+                $items = [];
+                $sTime = $startDate ? \Carbon\Carbon::parse($startDate)->startOfDay() : null;
+                $eTime = $endDate ? \Carbon\Carbon::parse($endDate)->endOfDay() : null;
+
+                foreach ($rawItems as $rawItem) {
+                    if ($sTime && $eTime) {
+                        $itemTime = !empty($rawItem['timestamp']) ? \Carbon\Carbon::parse($rawItem['timestamp']) : null;
+                        if ($itemTime && ($itemTime->isBefore($sTime) || $itemTime->isAfter($eTime))) {
+                            continue;
+                        }
+                    }
+                    $items[] = $rawItem;
+                }
+
                 if (empty($items)) {
                     return [];
                 }
@@ -940,6 +1123,7 @@ class FacebookGraphService
                     $shares = 0;
                     $saved  = 0;
                     $interactions = $likes + $comments;
+                    $itemSharesSupported = true;
 
                     $insightsRes = $poolResponses[$mId] ?? null;
                     if ($insightsRes && $insightsRes instanceof \Illuminate\Http\Client\Response && $insightsRes->successful()) {
@@ -947,7 +1131,9 @@ class FacebookGraphService
                             $n = $metric['name'] ?? '';
                             $v = (int)($metric['values'][0]['value'] ?? 0);
                             if ($n === 'reach') $reach = $v;
-                            if ($n === 'shares' || str_contains($n, 'share')) $shares = max($shares, $v);
+                            if ($n === 'shares' || str_contains($n, 'share')) {
+                                $shares = max($shares, $v);
+                            }
                             if ($n === 'views') $views = $v;
                             if ($n === 'saved') $saved = $v;
                             if ($n === 'total_interactions') $interactions = max($interactions, $v);
@@ -970,6 +1156,7 @@ class FacebookGraphService
                         ]);
                     }
 
+                    // Strict API value for views (no metric substitution or engagement math)
                     $totalViews += $views;
                     $totalShares += $shares;
 
@@ -987,6 +1174,7 @@ class FacebookGraphService
                         'saved_count'        => $saved,
                         'reach'              => $reach,
                         'total_interactions' => $interactions,
+                        'shares_supported'   => $itemSharesSupported,
                     ];
                 }
 
@@ -1007,10 +1195,19 @@ class FacebookGraphService
     /**
      * Fetch daily Instagram reach and interaction time-series trend over $days.
      */
-    public function getInstagramInsightsTrend(string $accessToken, int $days = 30): array
+    public function getInstagramInsightsTrend(string $accessToken, int $days = 30, $startDate = null, $endDate = null): array
     {
-        $since = now()->subDays($days)->startOfDay()->timestamp;
-        $until = now()->endOfDay()->timestamp;
+        if ($startDate && $endDate) {
+            $start = \Carbon\Carbon::parse($startDate)->startOfDay();
+            $end   = \Carbon\Carbon::parse($endDate)->endOfDay();
+            $days  = max(1, (int)$start->diffInDays($end) + 1);
+        } else {
+            $end   = now()->endOfDay();
+            $start = now()->subDays($days - 1)->startOfDay();
+        }
+
+        $since = $start->timestamp;
+        $until = $end->timestamp;
 
         $isIgToken = str_starts_with($accessToken, 'IGAA');
         $baseUrl   = $isIgToken ? 'https://graph.instagram.com/v23.0' : "{$this->baseUrl}/{$this->apiVersion}";
@@ -1028,9 +1225,10 @@ class FacebookGraphService
         $engagementByDate = [];
         $labels           = [];
 
-        for ($i = $days - 1; $i >= 0; $i--) {
-            $dateStr = now()->subDays($i)->format('Y-m-d');
-            $label   = now()->subDays($i)->format('M j');
+        for ($i = 0; $i < $days; $i++) {
+            $currDate = (clone $start)->addDays($i);
+            $dateStr = $currDate->format('Y-m-d');
+            $label   = $currDate->format('M j');
             $labels[] = $label;
             $reachByDate[$dateStr]      = 0;
             $engagementByDate[$dateStr] = 0;
@@ -1390,7 +1588,7 @@ class FacebookGraphService
      * Permissions: pages_show_list + pages_manage_posts (already granted).
      * pages_read_engagement is NOT required for /{albumId}/photos.
      */
-    public function getPagePhotosMetrics(string $pageId, string $accessToken): array
+    public function getPagePhotosMetrics(string $pageId, string $accessToken, int $days = 30, $startDate = null, $endDate = null): array
     {
         $likes      = 0;
         $comments   = 0;
@@ -1399,6 +1597,8 @@ class FacebookGraphService
         $albumsProcessed = 0;
         $photosProcessed = 0;
         $errors     = [];
+        $sTime = $startDate ? \Carbon\Carbon::parse($startDate)->startOfDay() : null;
+        $eTime = $endDate ? \Carbon\Carbon::parse($endDate)->endOfDay() : null;
 
         \Illuminate\Support\Facades\Log::info('[FACEBOOK METRICS] getPagePhotosMetrics start', [
             'page_id'   => $pageId,
@@ -1453,6 +1653,12 @@ class FacebookGraphService
                                 $phId = $photo['id'] ?? null;
                                 if ($phId && !isset($seenPhotos[$phId])) {
                                     $seenPhotos[$phId] = true;
+                                    if ($sTime && $eTime) {
+                                        $createdTime = !empty($photo['created_time']) ? \Carbon\Carbon::parse($photo['created_time']) : null;
+                                        if ($createdTime && ($createdTime->isBefore($sTime) || $createdTime->isAfter($eTime))) {
+                                            continue;
+                                        }
+                                    }
                                     $photoLikes    = (int)($photo['likes']['summary']['total_count'] ?? 0);
                                     $photoComments = (int)($photo['comments']['summary']['total_count'] ?? 0);
                                     $photoShares   = (int)($photo['shares']['count'] ?? 0);
