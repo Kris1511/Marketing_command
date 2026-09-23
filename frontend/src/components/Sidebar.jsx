@@ -7,6 +7,8 @@ import {
   Send,
   Target,
   BarChart3,
+  Inbox,
+  MessageSquare,
   Bell,
   Link2,
   Shield,
@@ -36,6 +38,11 @@ export default function Sidebar({ isOpen, onClose }) {
     { label: 'Notifications', path: '/notifications', icon: Bell },
     { label: 'API Connections', path: '/integrations', icon: Link2 },
     { label: 'Team & Access', path: '/team', icon: Shield },
+  ];
+
+  const engagementItems = [
+    { label: 'Inbox', path: '/inbox', icon: Inbox },
+    { label: 'Comments', path: '/comments', icon: MessageSquare },
   ];
 
   const steps = [
@@ -96,6 +103,30 @@ export default function Sidebar({ isOpen, onClose }) {
             );
           })}
         </nav>
+
+        {engagementItems.length > 0 && (
+          <>
+            <div className="nav-group-title">Engagement</div>
+            <nav className="nav-list" aria-label="Engagement navigation">
+              {engagementItems.map((item) => {
+                const IconComponent = item.icon;
+                return (
+                  <NavLink
+                    key={item.path}
+                    to={item.path}
+                    onClick={onClose}
+                    className={({ isActive }) => `nav-btn ${isActive ? 'active' : ''}`}
+                  >
+                    <span className="nav-icon" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <IconComponent size={18} />
+                    </span>
+                    {item.label}
+                  </NavLink>
+                );
+              })}
+            </nav>
+          </>
+        )}
 
         <div className="nav-group-title">System</div>
         <nav className="nav-list" aria-label="System navigation">

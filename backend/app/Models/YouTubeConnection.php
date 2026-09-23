@@ -13,6 +13,7 @@ class YouTubeConnection extends Model
 
     protected $fillable = [
         'user_id',
+        'workspace_id',
         'channel_id',
         'channel_name',
         'channel_description',

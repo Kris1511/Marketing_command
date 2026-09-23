@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import axiosInstance from '../api/axiosInstance';
 import { useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../context/WorkspaceContext';
@@ -11,7 +11,11 @@ import {
   RefreshCw,
   Megaphone,
   Link2,
-  Bell
+  Bell,
+  ChevronLeft,
+  ChevronRight,
+  ShieldCheck,
+  RotateCw
 } from 'lucide-react';
 
 const renderNotificationIcon = (iconStr, statusType, category) => {
@@ -26,7 +30,6 @@ const renderNotificationIcon = (iconStr, statusType, category) => {
 
 function formatRelativeTime(iso) {
   if (!iso) return '';
-  // Check if already human string
   if (typeof iso === 'string' && (iso.includes('ago') || iso.includes('Yesterday') || iso.includes('Now'))) return iso;
   const diff = Date.now() - new Date(iso).getTime();
   if (isNaN(diff)) return iso;
@@ -41,67 +44,169 @@ function formatRelativeTime(iso) {
 
 export default function NotificationsPage() {
   const navigate = useNavigate();
-  const { selectedWorkspaceId } = useWorkspace();
+  const { selectedWorkspaceId, selectedWorkspace } = useWorkspace();
+
+  // State
   const [notifications, setNotifications] = useState([]);
+  const [pagination, setPagination] = useState({
+    current_page: 1,
+    per_page: 5,
+    total: 0,
+    last_page: 1,
+    has_prev: false,
+    has_next: false,
+  });
+  const [summary, setSummary] = useState({
+    total_notifications: 0,
+    unread_alerts: 0,
+    active_workspaces: 0,
+    system_status: 'Operational',
+    counts: {
+      all: 0,
+      comments: 0,
+      unread: 0,
+      leads: 0,
+      publishing: 0,
+      system: 0,
+    },
+  });
+
   const [loading, setLoading] = useState(true);
   const [filterTab, setFilterTab] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(1);
 
+  // Debounce search input
   useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+      setPage(1); // reset to page 1 on new search
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
+
+  // Reset page to 1 when workspace or category tab changes
+  useEffect(() => {
+    setPage(1);
+  }, [selectedWorkspaceId, filterTab]);
+
+  // Fetch real notifications with backend pagination
+  const fetchNotifications = useCallback(() => {
+    if (!selectedWorkspaceId) return;
     setLoading(true);
+
+    const params = {
+      workspace_id: selectedWorkspaceId,
+      category: filterTab,
+      page,
+      per_page: 5,
+    };
+    if (debouncedSearch.trim()) {
+      params.search = debouncedSearch.trim();
+    }
+
     axiosInstance
-      .get('/notifications', { params: { workspace_id: selectedWorkspaceId } })
+      .get('/notifications', { params })
       .then((res) => {
         if (res.data.success) {
-          const formatted = (res.data.data || []).map(n => ({
+          const formatted = (res.data.data || []).map((n) => ({
             ...n,
             timeAgo: formatRelativeTime(n.created_at),
           }));
           setNotifications(formatted);
+          if (res.data.pagination) {
+            setPagination(res.data.pagination);
+          }
+          if (res.data.summary) {
+            setSummary(res.data.summary);
+          }
         }
       })
       .catch((err) => console.error('Error fetching notifications:', err))
       .finally(() => setLoading(false));
-  }, [selectedWorkspaceId]);
+  }, [selectedWorkspaceId, filterTab, page, debouncedSearch]);
 
+  useEffect(() => {
+    fetchNotifications();
+  }, [fetchNotifications]);
+
+  // Mark all notifications for active workspace as read
   const handleMarkAllRead = () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
-    axiosInstance.post('/notifications/mark-read').catch(() => {});
+    setSummary((prev) => ({
+      ...prev,
+      unread_alerts: 0,
+      counts: { ...prev.counts, unread: 0 },
+    }));
+
+    axiosInstance
+      .post('/notifications/mark-read', { workspace_id: selectedWorkspaceId })
+      .then(() => {
+        fetchNotifications();
+      })
+      .catch((err) => console.error('Error marking all as read:', err));
   };
 
+  // Toggle read/unread for single notification
   const toggleReadStatus = (id) => {
+    const target = notifications.find((n) => n.id === id);
+    if (!target) return;
+
+    const newRead = !target.is_read;
+
+    // Optimistic UI update
     setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, is_read: !n.is_read } : n))
+      prev.map((n) => (n.id === id ? { ...n, is_read: newRead } : n))
     );
+    setSummary((prev) => {
+      const delta = newRead ? -1 : 1;
+      const newUnread = Math.max(0, (prev.unread_alerts || 0) + delta);
+      return {
+        ...prev,
+        unread_alerts: newUnread,
+        counts: {
+          ...prev.counts,
+          unread: Math.max(0, (prev.counts?.unread || 0) + delta),
+        },
+      };
+    });
+
+    axiosInstance
+      .patch(`/notifications/${id}/read`)
+      .catch((err) => {
+        console.error('Error toggling read status:', err);
+        fetchNotifications(); // Revert on failure
+      });
   };
 
-  const handleActionClick = (category) => {
+  const handleActionClick = (item) => {
+    if (item.type === 'youtube_comment' && item.related_entity) {
+      const parts = item.related_entity.split(':');
+      if (parts.length >= 3) {
+        const videoId = parts[2];
+        if (videoId) {
+          window.open(`https://www.youtube.com/watch?v=${videoId}`, '_blank');
+          return;
+        }
+      }
+    }
+
+    const category = item.category;
     if (category === 'leads') navigate('/leads');
     else if (category === 'publishing') navigate('/publishing');
     else if (category === 'system') navigate('/integrations');
     else navigate('/reports');
   };
 
-  const isComment = (n) =>
-    ['facebook_comment', 'instagram_comment', 'youtube_comment'].includes(n.type) ||
-    n.title?.toLowerCase().includes('comment');
-
-  // Filtering
-  const filtered = notifications.filter((n) => {
-    const matchesSearch =
-      n.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      n.message.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      n.workspace.toLowerCase().includes(searchQuery.toLowerCase());
-
-    if (filterTab === 'comments') return matchesSearch && isComment(n);
-    if (filterTab === 'unread') return matchesSearch && !n.is_read;
-    if (filterTab === 'leads') return matchesSearch && n.category === 'leads';
-    if (filterTab === 'publishing') return matchesSearch && n.category === 'publishing' && !isComment(n);
-    if (filterTab === 'system') return matchesSearch && n.category === 'system';
-    return matchesSearch;
-  });
-
-  const unreadCount = notifications.filter((n) => !n.is_read).length;
+  const counts = summary.counts || {
+    all: 0,
+    comments: 0,
+    unread: 0,
+    leads: 0,
+    publishing: 0,
+    system: 0,
+  };
 
   return (
     <div>
@@ -109,25 +214,37 @@ export default function NotificationsPage() {
       <div className="section-head">
         <div>
           <h2>Notifications & activity log</h2>
-          <p>Real-time channel alerts, system logs, lead updates, and integration warnings.</p>
+          <p>
+            Real-time channel alerts, system logs, lead updates, and integration warnings for{' '}
+            <strong>{selectedWorkspace?.name || 'Selected Workspace'}</strong>.
+          </p>
         </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
           <button
             type="button"
-            className="btn btn-secondary"
+            className="btn btn-secondary btn-sm"
+            onClick={fetchNotifications}
+            disabled={loading}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+          >
+            <RotateCw size={13} className={loading ? 'spin' : ''} /> Refresh
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
             onClick={handleMarkAllRead}
-            disabled={unreadCount === 0}
+            disabled={summary.unread_alerts === 0 || loading}
           >
             Mark all as read
           </button>
         </div>
       </div>
 
-      {/* 2. Stat Cards Grid */}
+      {/* 2. Stat Cards Grid (100% Real Backend Data) */}
       <div className="metric-grid">
         <div className="metric-card">
           <span className="metric-label">Total notifications</span>
-          <div className="metric-value">{notifications.length}</div>
+          <div className="metric-value">{summary.total_notifications}</div>
           <div className="metric-foot">
             <span>All activity history</span>
           </div>
@@ -135,78 +252,80 @@ export default function NotificationsPage() {
 
         <div className="metric-card">
           <span className="metric-label">Unread alerts</span>
-          <div className="metric-value">{unreadCount}</div>
+          <div className="metric-value">{summary.unread_alerts}</div>
           <div className="metric-foot">
-            <span className={unreadCount > 0 ? 'trend-down' : 'trend-up'}>
-              {unreadCount > 0 ? 'Action required' : 'All caught up'}
+            <span className={summary.unread_alerts > 0 ? 'trend-down' : 'trend-up'}>
+              {summary.unread_alerts > 0 ? 'Action required' : 'All caught up'}
             </span>
           </div>
         </div>
 
         <div className="metric-card">
           <span className="metric-label">System Status</span>
-          <div className="metric-value">99.2%</div>
+          <div className="metric-value" style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <ShieldCheck size={20} color="#10b981" /> {summary.system_status}
+          </div>
           <div className="metric-foot">
             <span className="trend-up" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-              <CheckCircle2 size={13} /> Healthy WAMP sync
+              <CheckCircle2 size={13} /> Active DB & Services
             </span>
           </div>
         </div>
 
         <div className="metric-card">
           <span className="metric-label">Active Workspaces</span>
-          <div className="metric-value">4</div>
+          <div className="metric-value">{summary.active_workspaces}</div>
           <div className="metric-foot">
             <span>Across all channels</span>
           </div>
         </div>
       </div>
 
-      {/* 3. Notification List Panel */}
+      {/* 3. Notification List Panel with 5-Record Pagination */}
       <section className="panel">
-        <div className="panel-header" style={{ alignItems: 'center' }}>
-          <div className="panel-actions" style={{ gap: '8px' }}>
+        <div className="panel-header" style={{ alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+          <div className="panel-actions" style={{ gap: '8px', flexWrap: 'wrap' }}>
             <button
               type="button"
               className={`platform-tab ${filterTab === 'all' ? 'active' : ''}`}
               onClick={() => setFilterTab('all')}
             >
-              All ({notifications.length})
+              All ({counts.all || 0})
             </button>
             <button
               type="button"
               className={`platform-tab ${filterTab === 'comments' ? 'active' : ''}`}
               onClick={() => setFilterTab('comments')}
             >
-              Comments
+              Comments ({counts.comments || 0})
             </button>
             <button
               type="button"
               className={`platform-tab ${filterTab === 'unread' ? 'active' : ''}`}
               onClick={() => setFilterTab('unread')}
             >
-              Unread ({unreadCount})
+              Unread ({counts.unread || 0})
             </button>
             <button
               type="button"
               className={`platform-tab ${filterTab === 'leads' ? 'active' : ''}`}
               onClick={() => setFilterTab('leads')}
             >
-              Leads
+              Leads ({counts.leads || 0})
             </button>
             <button
               type="button"
               className={`platform-tab ${filterTab === 'publishing' ? 'active' : ''}`}
               onClick={() => setFilterTab('publishing')}
             >
-              Publishing
+              Publishing ({counts.publishing || 0})
             </button>
             <button
               type="button"
               className={`platform-tab ${filterTab === 'system' ? 'active' : ''}`}
               onClick={() => setFilterTab('system')}
             >
-              System Alerts
+              System Alerts ({counts.system || 0})
             </button>
           </div>
 
@@ -221,15 +340,15 @@ export default function NotificationsPage() {
           </div>
         </div>
 
-        <div className="activity-list mt-10">
-          {loading ? (
-            <p style={{ textAlign: 'center', padding: '24px' }}>Loading notifications...</p>
-          ) : filtered.length === 0 ? (
-            <p style={{ textAlign: 'center', padding: '24px', color: '#64748b' }}>
-              No notifications found matching your filter.
+        <div className="activity-list mt-10" style={{ opacity: loading ? 0.6 : 1, transition: 'opacity 0.2s' }}>
+          {loading && notifications.length === 0 ? (
+            <p style={{ textAlign: 'center', padding: '32px', color: '#64748b' }}>Loading notifications...</p>
+          ) : notifications.length === 0 ? (
+            <p style={{ textAlign: 'center', padding: '32px', color: '#64748b' }}>
+              No notifications found for this workspace matching your filter.
             </p>
           ) : (
-            filtered.map((item) => (
+            notifications.map((item) => (
               <div
                 key={item.id}
                 className="activity-item"
@@ -299,7 +418,7 @@ export default function NotificationsPage() {
                       type="button"
                       className="link-button"
                       style={{ fontSize: '12px' }}
-                      onClick={() => handleActionClick(item.category)}
+                      onClick={() => handleActionClick(item)}
                     >
                       View
                     </button>
@@ -309,7 +428,7 @@ export default function NotificationsPage() {
                       style={{ fontSize: '12px', color: '#64748b' }}
                       onClick={() => toggleReadStatus(item.id)}
                     >
-                      {item.is_read ? 'Unread' : 'Mark read'}
+                      {item.is_read ? 'Mark unread' : 'Mark read'}
                     </button>
                   </div>
                 </div>
@@ -317,6 +436,63 @@ export default function NotificationsPage() {
             ))
           )}
         </div>
+
+        {/* 4. 5-Record Pagination Footer */}
+        {pagination.total > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '16px 4px 4px',
+              borderTop: '1px solid #f1f5f9',
+              marginTop: '12px',
+              flexWrap: 'wrap',
+              gap: '12px',
+            }}
+          >
+            <div style={{ fontSize: '12.5px', color: '#64748b' }}>
+              Showing records <strong>{(page - 1) * pagination.per_page + (notifications.length > 0 ? 1 : 0)}</strong> to{' '}
+              <strong>{Math.min(page * pagination.per_page, pagination.total)}</strong> of{' '}
+              <strong>{pagination.total}</strong> notifications
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1 || !pagination.has_prev || loading}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '5px 12px' }}
+              >
+                <ChevronLeft size={15} /> Previous
+              </button>
+
+              <span
+                style={{
+                  fontSize: '13px',
+                  fontWeight: '600',
+                  padding: '4px 10px',
+                  background: '#f1f5f9',
+                  borderRadius: '6px',
+                  color: '#334155',
+                }}
+              >
+                {page} / {pagination.last_page}
+              </span>
+
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setPage((p) => Math.min(pagination.last_page, p + 1))}
+                disabled={page >= pagination.last_page || !pagination.has_next || loading}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '5px 12px' }}
+              >
+                Next <ChevronRight size={15} />
+              </button>
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );

@@ -1,0 +1,19 @@
+# Temporary, Browser Runtime & CDP Cache
+.tmp-chrome-cdp/
+.tmp*/
+.temp*/
+*.pma
+*.crx
+CrashpadMetrics*
+BrowserMetrics*
+
+# Operating System & IDE Files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.suo
+*.user
+
+# Logs
+*.log

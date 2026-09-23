@@ -2,10 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axiosInstance from '../api/axiosInstance';
 import { useWorkspace } from '../context/WorkspaceContext';
-import { Plus, Search, X, CheckCircle2 } from 'lucide-react';
+import { Plus, Search, X, CheckCircle2, Building2, AlertTriangle, Layers, ArrowRight } from 'lucide-react';
 
-const CHANNELS = ['Instagram', 'Facebook', 'YouTube', 'Google Analytics', 'Search Console', 'Google Business'];
-
+const CHANNELS = ['Facebook', 'Instagram', 'YouTube', 'X / Twitter', 'Google Analytics', 'Search Console'];
 
 const emptyForm = {
   name: '',
@@ -14,21 +13,18 @@ const emptyForm = {
   primary_contact_email: '',
   budget: '',
   status: 'active',
-  channels: [],
 };
-
 
 export default function ClientsPage() {
   const { workspaces, setSelectedWorkspaceId, fetchWorkspaces, loadingWorkspaces } = useWorkspace();
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'active', 'setup_pending'
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
-  const [workspaceMetrics, setWorkspaceMetrics] = useState({}); // keyed by workspace id
-  const [metricsLoading, setMetricsLoading] = useState(false);
 
   const openModal = () => {
     setForm(emptyForm);
@@ -42,27 +38,6 @@ export default function ClientsPage() {
     setError('');
   };
 
-  // Fetch real per-workspace metrics after workspaces load
-  useEffect(() => {
-    if (!workspaces || workspaces.length === 0) return;
-    setMetricsLoading(true);
-    Promise.allSettled(
-      workspaces.map(ws =>
-        axiosInstance.get(`/workspace/${ws.id}/metrics`)
-          .then(res => ({ id: ws.id, data: res.data.data }))
-          .catch(() => ({ id: ws.id, data: null }))
-      )
-    ).then(results => {
-      const map = {};
-      results.forEach(r => {
-        if (r.status === 'fulfilled' && r.value.data) {
-          map[r.value.id] = r.value.data;
-        }
-      });
-      setWorkspaceMetrics(map);
-    }).finally(() => setMetricsLoading(false));
-  }, [workspaces]);
-
   // Helper: compute initials from workspace name
   const getInitials = (name) => {
     if (!name) return 'WS';
@@ -74,25 +49,17 @@ export default function ClientsPage() {
 
   // Helper: format numbers
   const formatNum = (n) => {
-    if (!n && n !== 0) return '—';
-    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-    return String(n);
+    if (n === null || n === undefined) return '0';
+    const num = Number(n);
+    if (isNaN(num)) return '0';
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    return String(num);
   };
-
 
   const handleChange = (e) => {
     const { name, value } = e.target;
     setForm((prev) => ({ ...prev, [name]: value }));
-  };
-
-  const handleChannelToggle = (ch) => {
-    setForm((prev) => ({
-      ...prev,
-      channels: prev.channels.includes(ch)
-        ? prev.channels.filter((c) => c !== ch)
-        : [...prev.channels, ch],
-    }));
   };
 
   const handleSubmit = async (e) => {
@@ -106,10 +73,10 @@ export default function ClientsPage() {
     try {
       const res = await axiosInstance.post('/workspaces', {
         name: form.name.trim(),
-        industry: form.industry ? form.industry.trim() : null,
-        primary_contact: form.primary_contact ? form.primary_contact.trim() : null,
+        industry: form.industry ? form.industry.trim() : 'General',
+        primary_contact: form.primary_contact ? form.primary_contact.trim() : 'Primary Contact',
         primary_contact_email: form.primary_contact_email && form.primary_contact_email.trim() ? form.primary_contact_email.trim() : null,
-        budget: form.budget || 0,
+        budget: form.budget ? Number(form.budget) : 0,
         status: form.status || 'active',
       });
 
@@ -136,20 +103,62 @@ export default function ClientsPage() {
     navigate('/');
   };
 
-  const filteredWorkspaces = (workspaces || []).filter((ws) => {
+  // Helper predicates for client operational status
+  const isClientActive = (w) => {
+    const s = (w.status || 'active').toLowerCase();
+    const channels = w.channels_count ?? 0;
+    return s === 'active' && channels > 0;
+  };
+
+  const isClientPending = (w) => {
+    const s = (w.status || '').toLowerCase();
+    const channels = w.channels_count ?? 0;
+    return s === 'setup' || s === 'pending' || channels === 0;
+  };
+
+  // Compute aggregate real metrics
+  const clientList = workspaces || [];
+  const totalClients = clientList.length;
+  const activeClients = clientList.filter(isClientActive).length;
+  const totalConnectedAccounts = clientList.reduce((acc, w) => acc + (w.channels_count || 0), 0);
+  const setupPendingClients = clientList.filter(isClientPending).length;
+
+  const filteredWorkspaces = clientList.filter((ws) => {
     const term = searchTerm.toLowerCase();
-    return (
+    const matchesSearch = (
       ws.name?.toLowerCase().includes(term) ||
       ws.industry?.toLowerCase().includes(term) ||
-      ws.primary_contact?.toLowerCase().includes(term)
+      ws.primary_contact?.toLowerCase().includes(term) ||
+      ws.primary_contact_email?.toLowerCase().includes(term)
     );
+
+    if (!matchesSearch) return false;
+
+    if (statusFilter === 'active') {
+      return isClientActive(ws);
+    }
+    if (statusFilter === 'setup_pending') {
+      return isClientPending(ws);
+    }
+
+    return true;
   });
 
-  const getStatusClass = (status) => {
+  const getStatusClass = (status, channelCount) => {
+    if (channelCount === 0) return 'pill warning';
     const s = (status || '').toLowerCase();
-    if (s === 'active') return 'pill success';
     if (s === 'setup' || s === 'pending') return 'pill warning';
+    if (s === 'active') return 'pill success';
     return 'pill';
+  };
+
+  const getStatusLabel = (status, channelCount) => {
+    if (channelCount === 0) return 'Setup pending';
+    const s = (status || '').toLowerCase();
+    if (s === 'active') return 'Active';
+    if (s === 'setup') return 'Setup';
+    if (s === 'pending') return 'Pending';
+    return status || 'Active';
   };
 
   return (
@@ -158,7 +167,7 @@ export default function ClientsPage() {
       <div className="section-head">
         <div>
           <h2>Client workspaces</h2>
-          <p>Each client's channels, leads, content, and reports stay separate.</p>
+          <p>Each client's channels, leads, content, and reports stay completely isolated.</p>
         </div>
         <div className="toolbar">
           <button type="button" className="btn btn-primary" onClick={openModal} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
@@ -171,47 +180,103 @@ export default function ClientsPage() {
       <div className="metric-grid">
         <div className="metric-card">
           <div className="metric-label">Total clients</div>
-          <div className="metric-value">{(workspaces || []).length}</div>
-          <div className="metric-foot">All isolated workspaces</div>
+          <div className="metric-value">{totalClients}</div>
+          <div className="metric-foot">Isolated workspaces</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Active clients</div>
-          <div className="metric-value">{(workspaces || []).filter((w) => (w.status || 'active').toLowerCase() === 'active').length}</div>
+          <div className="metric-value">{activeClients}</div>
           <div className="metric-foot">
             <span className="trend-up" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-              <CheckCircle2 size={13} /> Healthy
+              <CheckCircle2 size={13} /> Active workspaces
             </span>
           </div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Connected accounts</div>
-          <div className="metric-value">
-            {Object.values(workspaceMetrics).reduce((acc, m) => acc + (m?.channels || 0), 0) || '—'}
-          </div>
-          <div className="metric-foot">Across all workspaces</div>
+          <div className="metric-value">{totalConnectedAccounts}</div>
+          <div className="metric-foot">Live social & marketing channels</div>
         </div>
         <div className="metric-card">
           <div className="metric-label">Setup pending</div>
-          <div className="metric-value">{(workspaces || []).filter((w) => (w.status || '').toLowerCase() === 'setup' || (w.status || '').toLowerCase() === 'pending').length}</div>
+          <div className="metric-value">{setupPendingClients}</div>
           <div className="metric-foot">
-            <span className="trend-down">Action required</span>
+            <span className={setupPendingClients > 0 ? 'trend-down' : 'trend-up'}>
+              {setupPendingClients > 0 ? 'Channels not connected' : 'All setup'}
+            </span>
           </div>
         </div>
       </div>
 
       {/* All Clients Section */}
       <section className="panel">
-        <div className="panel-header">
+        <div className="panel-header" style={{ flexWrap: 'wrap', gap: '12px' }}>
           <div className="panel-title">
             <h3>All clients</h3>
-            <p>Select a workspace to view or manage it</p>
+            <p>Select a workspace to manage its channels and campaigns</p>
           </div>
-          <div className="panel-actions">
+          <div className="panel-actions" style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Filter Tabs */}
+            <div style={{ display: 'inline-flex', background: '#f1f5f9', borderRadius: '8px', padding: '3px', gap: '2px' }}>
+              <button
+                type="button"
+                onClick={() => setStatusFilter('all')}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  border: 'none',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  background: statusFilter === 'all' ? '#ffffff' : 'transparent',
+                  color: statusFilter === 'all' ? '#0f172a' : '#64748b',
+                  boxShadow: statusFilter === 'all' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+                }}
+              >
+                All ({totalClients})
+              </button>
+              <button
+                type="button"
+                onClick={() => setStatusFilter('active')}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  border: 'none',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  background: statusFilter === 'active' ? '#ffffff' : 'transparent',
+                  color: statusFilter === 'active' ? '#0f172a' : '#64748b',
+                  boxShadow: statusFilter === 'active' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+                }}
+              >
+                Active ({activeClients})
+              </button>
+              <button
+                type="button"
+                onClick={() => setStatusFilter('setup_pending')}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  border: 'none',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  background: statusFilter === 'setup_pending' ? '#ffffff' : 'transparent',
+                  color: statusFilter === 'setup_pending' ? '#0f172a' : '#64748b',
+                  boxShadow: statusFilter === 'setup_pending' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+                }}
+              >
+                Setup Pending ({setupPendingClients})
+              </button>
+            </div>
+
+            {/* Search input */}
             <div className="search-box">
               <span style={{ display: 'inline-flex', alignItems: 'center' }}><Search size={16} /></span>
               <input
                 type="search"
-                placeholder="Search client or industry"
+                placeholder="Search client, contact, industry..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
@@ -222,16 +287,19 @@ export default function ClientsPage() {
         {/* Client Cards Grid */}
         <div className="client-card-grid">
           {loadingWorkspaces ? (
-            <p style={{ color: '#64748b' }}>Loading client workspaces...</p>
+            <p style={{ color: '#64748b', padding: '24px 0' }}>Loading client workspaces...</p>
           ) : filteredWorkspaces.length === 0 ? (
-            <p style={{ color: '#64748b' }}>No client workspaces found.</p>
+            <div style={{ padding: '36px 0', textAlign: 'center', color: '#64748b', width: '100%' }}>
+              <Building2 size={36} color="#94a3b8" style={{ margin: '0 auto 8px', display: 'block' }} />
+              <p style={{ margin: 0, fontWeight: 600 }}>No client workspaces match your filter.</p>
+            </div>
           ) : (
             filteredWorkspaces.map((ws) => {
               const initials = getInitials(ws.name);
-              const m = workspaceMetrics[ws.id];
-              const reachVal = m ? formatNum(m.reach) : (metricsLoading ? '...' : '—');
-              const leadsVal = m ? m.leads : (metricsLoading ? '...' : 0);
-              const channelsVal = m ? m.channels : (metricsLoading ? '...' : 0);
+              const channelCount = ws.channels_count ?? 0;
+              const leadsCount = ws.leads_count ?? 0;
+              const reachCount = ws.reach_count ?? 0;
+              const connectedChannels = ws.connected_channels || [];
 
               return (
                 <div className="client-card" key={ws.id} style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
@@ -240,27 +308,59 @@ export default function ClientsPage() {
                       <div className="initial" style={{ width: 38, height: 38, borderRadius: 10, display: 'grid', placeItems: 'center', fontWeight: 800, background: '#eaf0ff', color: '#2457e6', fontSize: '0.9rem' }}>
                         {initials}
                       </div>
-                      <span className={getStatusClass(ws.status)} style={{ textTransform: 'capitalize' }}>
-                        {ws.status || 'Active'}
+                      <span className={getStatusClass(ws.status, channelCount)}>
+                        {getStatusLabel(ws.status, channelCount)}
                       </span>
                     </div>
 
                     <h3 style={{ margin: '0 0 4px', fontSize: '1rem', fontWeight: 700 }}>{ws.name}</h3>
-                    <p className="muted" style={{ fontSize: '0.8rem', margin: '0 0 16px' }}>
+                    <p className="muted" style={{ fontSize: '0.8rem', margin: '0 0 12px' }}>
                       {ws.industry || 'General'} • Contact: {ws.primary_contact || 'N/A'}
                     </p>
 
+                    {/* Channel Badges List */}
+                    <div style={{ marginBottom: '14px', minHeight: '22px' }}>
+                      {channelCount === 0 ? (
+                        <span style={{ fontSize: '11px', color: '#d97706', background: '#fffbeb', border: '1px solid #fef3c7', padding: '2px 8px', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          <AlertTriangle size={12} /> 0 Channels connected
+                        </span>
+                      ) : (
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                          {connectedChannels.map((ch, idx) => (
+                            <span
+                              key={idx}
+                              style={{
+                                fontSize: '10px',
+                                fontWeight: '700',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                background: ch === 'Facebook' ? '#eff6ff' : ch === 'Instagram' ? '#fdf2f8' : ch === 'YouTube' ? '#fef2f2' : ch === 'Twitter' ? '#f8fafc' : '#f0fdf4',
+                                color: ch === 'Facebook' ? '#1d4ed8' : ch === 'Instagram' ? '#be185d' : ch === 'YouTube' ? '#dc2626' : ch === 'Twitter' ? '#0f172a' : '#16a34a',
+                                border: '1px solid currentColor',
+                                opacity: 0.85,
+                              }}
+                            >
+                              {ch}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Metrics Grid */}
                     <div className="client-card-metrics" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, margin: '14px 0' }}>
                       <div className="client-mini" style={{ background: '#f8fafc', padding: 8, borderRadius: 8, textAlign: 'center' }}>
-                        <strong style={{ display: 'block', fontSize: '0.9rem', color: '#0f172a' }}>{reachVal}</strong>
+                        <strong style={{ display: 'block', fontSize: '0.9rem', color: '#0f172a' }}>{formatNum(reachCount)}</strong>
                         <span style={{ fontSize: '0.7rem', color: '#64748b' }}>Reach</span>
                       </div>
                       <div className="client-mini" style={{ background: '#f8fafc', padding: 8, borderRadius: 8, textAlign: 'center' }}>
-                        <strong style={{ display: 'block', fontSize: '0.9rem', color: '#0f172a' }}>{leadsVal}</strong>
+                        <strong style={{ display: 'block', fontSize: '0.9rem', color: '#0f172a' }}>{leadsCount}</strong>
                         <span style={{ fontSize: '0.7rem', color: '#64748b' }}>Leads</span>
                       </div>
                       <div className="client-mini" style={{ background: '#f8fafc', padding: 8, borderRadius: 8, textAlign: 'center' }}>
-                        <strong style={{ display: 'block', fontSize: '0.9rem', color: '#0f172a' }}>{channelsVal}</strong>
+                        <strong style={{ display: 'block', fontSize: '0.9rem', color: channelCount === 0 ? '#d97706' : '#0f172a' }}>
+                          {channelCount}
+                        </strong>
                         <span style={{ fontSize: '0.7rem', color: '#64748b' }}>Channels</span>
                       </div>
                     </div>
@@ -270,9 +370,9 @@ export default function ClientsPage() {
                     type="button"
                     className="btn btn-secondary btn-block"
                     onClick={() => handleOpenWorkspace(ws.id)}
-                    style={{ marginTop: 12, width: '100%', fontWeight: 600 }}
+                    style={{ marginTop: 12, width: '100%', fontWeight: 600, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
                   >
-                    Open workspace
+                    Open workspace <ArrowRight size={14} />
                   </button>
                 </div>
               );
@@ -310,15 +410,16 @@ export default function ClientsPage() {
                 )}
 
                 <div className="form-grid">
-                  <div className="form-field">
-                    <label className="form-label" htmlFor="newClientName">Client / business name</label>
+                  <div className="form-field full">
+                    <label className="form-label" htmlFor="newClientName">Client / Business Name *</label>
                     <input
                       className="input"
                       id="newClientName"
                       name="name"
                       value={form.name}
                       onChange={handleChange}
-                      placeholder="Example: ABC Retail"
+                      placeholder="e.g. Acme Corporation"
+                      required
                     />
                   </div>
                   <div className="form-field">
@@ -329,48 +430,43 @@ export default function ClientsPage() {
                       name="industry"
                       value={form.industry}
                       onChange={handleChange}
-                      placeholder="Example: Retail"
+                      placeholder="e.g. Software, Retail, Healthcare"
                     />
                   </div>
                   <div className="form-field">
-                    <label className="form-label" htmlFor="newClientOwner">Primary contact</label>
+                    <label className="form-label" htmlFor="newClientOwner">Primary Contact Person</label>
                     <input
                       className="input"
                       id="newClientOwner"
                       name="primary_contact"
                       value={form.primary_contact}
                       onChange={handleChange}
-                      placeholder="Contact person name"
+                      placeholder="e.g. John Doe"
                     />
                   </div>
                   <div className="form-field">
-                    <label className="form-label" htmlFor="newClientTeam">Assigned team member</label>
-                    <select
-                      className="select"
-                      id="newClientTeam"
-                      name="assigned_team"
-                      value={form.assigned_team || 'Nisha V'}
+                    <label className="form-label" htmlFor="newClientEmail">Primary Contact Email</label>
+                    <input
+                      type="email"
+                      className="input"
+                      id="newClientEmail"
+                      name="primary_contact_email"
+                      value={form.primary_contact_email}
                       onChange={handleChange}
-                    >
-                      <option value="Nisha V">Nisha V</option>
-                      <option value="Kavin R">Kavin R</option>
-                      <option value="Vijay M">Vijay M</option>
-                    </select>
+                      placeholder="e.g. contact@client.com"
+                    />
                   </div>
-                  <div className="form-field full">
-                    <label className="form-label">Required channels</label>
-                    <div className="check-grid">
-                      {CHANNELS.map((ch) => (
-                        <label key={ch} className="check-card">
-                          <input
-                            type="checkbox"
-                            checked={form.channels.includes(ch)}
-                            onChange={() => handleChannelToggle(ch)}
-                          />
-                          {ch}
-                        </label>
-                      ))}
-                    </div>
+                  <div className="form-field">
+                    <label className="form-label" htmlFor="newClientBudget">Monthly Marketing Budget</label>
+                    <input
+                      type="number"
+                      className="input"
+                      id="newClientBudget"
+                      name="budget"
+                      value={form.budget}
+                      onChange={handleChange}
+                      placeholder="e.g. 15000"
+                    />
                   </div>
                 </div>
               </div>

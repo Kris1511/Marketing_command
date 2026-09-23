@@ -12,10 +12,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('user_id')->constrained('users')->onDelete('cascade');
             $table->foreignId('workspace_id')->constrained('workspaces')->onDelete('cascade');
-            $table->enum('type', [
-                'lead_assigned', 'post_published', 'campaign_milestone',
-                'integration_error', 'team_invite', 'lead_converted', 'report_ready'
-            ]);
+            $table->string('type', 100);
             $table->string('title');
             $table->text('message')->nullable();
             $table->string('related_entity')->nullable();

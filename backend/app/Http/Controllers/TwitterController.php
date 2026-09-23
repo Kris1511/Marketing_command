@@ -27,6 +27,35 @@ class TwitterController extends Controller
         Log::info('Twitter connect endpoint hit', $request->all());
         try {
             $workspaceId = $request->query('workspace_id', 1);
+            $force       = $request->boolean('force') || $request->boolean('reconnect');
+
+            if (!$force) {
+                $existing = Integration::where('workspace_id', $workspaceId)
+                    ->where('platform', 'twitter')
+                    ->where('is_connected', true)
+                    ->first();
+
+                if ($existing && !empty($existing->account_name)) {
+                    if ($request->wantsJson()) {
+                        return response()->json([
+                            'success'           => true,
+                            'already_connected' => true,
+                            'message'           => "X (Twitter) profile '@{$existing->account_name}' is already connected.",
+                            'data'              => [
+                                'account_name' => '@' . $existing->account_name,
+                            ],
+                        ]);
+                    }
+
+                    return $this->renderOAuthResponse(
+                        true,
+                        'Already Connected',
+                        "X (Twitter) profile '@{$existing->account_name}' is already connected and operational. Reusing stored credentials.",
+                        $existing
+                    );
+                }
+            }
+
             $state = base64_encode(json_encode([
                 'workspace_id' => $workspaceId,
                 'time' => time(),
@@ -159,22 +188,18 @@ class TwitterController extends Controller
      */
     public function status(Request $request)
     {
-        $workspaceId = $request->query('workspace_id', 1);
+        $workspaceId = (int)$request->query('workspace_id', 1);
 
         $integration = Integration::where('workspace_id', $workspaceId)
             ->where('platform', 'twitter')
             ->where('is_connected', true)
-            ->first()
-            ?? Integration::where('platform', 'twitter')
-            ->where('is_connected', true)
-            ->latest()
             ->first();
 
         if (!$integration) {
             return response()->json([
                 'success' => true,
                 'connected' => false,
-                'message' => 'X (Twitter) is not connected.',
+                'message' => 'X (Twitter) is not connected for this workspace.',
                 'data' => null,
             ]);
         }
@@ -199,16 +224,16 @@ class TwitterController extends Controller
      */
     public function disconnect(Request $request)
     {
-        $workspaceId = $request->input('workspace_id', 1);
+        $workspaceId = (int)$request->input('workspace_id', 1);
 
-        Integration::withTrashed()
-            ->where('workspace_id', $workspaceId)
+        Integration::where('workspace_id', $workspaceId)
             ->where('platform', 'twitter')
-            ->forceDelete();
-
-        Integration::withTrashed()
-            ->where('platform', 'twitter')
-            ->forceDelete();
+            ->update([
+                'is_connected' => false,
+                'access_token' => null,
+                'refresh_token' => null,
+                'connection_status' => 'pending_auth'
+            ]);
 
         return response()->json([
             'success' => true,

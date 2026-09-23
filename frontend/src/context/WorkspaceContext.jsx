@@ -23,15 +23,16 @@ export function WorkspaceProvider({ children }) {
         const list = res.data.data;
         setWorkspaces(list);
 
-        // If no workspace is selected or selected workspace isn't valid, select first one
+        // If no workspace is selected or selected workspace isn't valid, select best one
         if (list.length > 0) {
           const storedId = localStorage.getItem('selectedWorkspaceId') || localStorage.getItem('activeWorkspaceId');
           const isValidStored = storedId && (storedId === 'all' || list.some((w) => String(w.id) === String(storedId)));
           if (!isValidStored) {
-            const firstId = String(list[0].id);
-            setSelectedWorkspaceIdState(firstId);
-            localStorage.setItem('selectedWorkspaceId', firstId);
-            localStorage.setItem('activeWorkspaceId', firstId);
+            const bestWs = list.find((w) => (w.channels_count || 0) > 0) || list[0];
+            const chosenId = String(bestWs.id);
+            setSelectedWorkspaceIdState(chosenId);
+            localStorage.setItem('selectedWorkspaceId', chosenId);
+            localStorage.setItem('activeWorkspaceId', chosenId);
           }
         }
       }
@@ -53,7 +54,8 @@ export function WorkspaceProvider({ children }) {
     localStorage.setItem('activeWorkspaceId', stringId);
   };
 
-  const selectedWorkspace = workspaces.find((w) => String(w.id) === String(selectedWorkspaceId)) || workspaces[0] || null;
+  const selectedWorkspace =
+    workspaces.find((w) => String(w.id) === String(selectedWorkspaceId)) || null;
 
   return (
     <WorkspaceContext.Provider

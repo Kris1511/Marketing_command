@@ -36,11 +36,12 @@ return [
     ],
 
     'facebook' => [
-        'client_id'     => env('FACEBOOK_APP_ID', '1390717679611716'),
+        'client_id'     => env('FACEBOOK_APP_ID'),
         'client_secret' => env('FACEBOOK_APP_SECRET'),
         'redirect'      => env('FACEBOOK_REDIRECT_URI', 'http://localhost:8000/api/v1/auth/facebook/callback'),
-        'scopes'        => env('FACEBOOK_OAUTH_SCOPES', 'public_profile,pages_show_list,pages_read_engagement,pages_manage_posts,pages_read_user_content,read_insights'),
+        'scopes'        => env('FACEBOOK_OAUTH_SCOPES', 'public_profile,pages_show_list,pages_read_engagement,pages_read_user_content,pages_manage_metadata,pages_messaging,instagram_basic,instagram_manage_insights,instagram_manage_comments,instagram_content_publish,instagram_manage_messages,read_insights'),
         'graph_version' => env('FACEBOOK_GRAPH_VERSION', 'v23.0'),
+        'webhook_verify_token' => env('FACEBOOK_WEBHOOK_VERIFY_TOKEN', env('META_WEBHOOK_VERIFY_TOKEN', '')),
     ],
 
     'google' => [
@@ -53,6 +54,28 @@ return [
         'client_id'     => env('TWITTER_CLIENT_ID'),
         'client_secret' => env('TWITTER_CLIENT_SECRET'),
         'redirect'      => env('TWITTER_REDIRECT_URI', 'http://localhost:8000/api/twitter/callback'),
+    ],
+
+    'google_analytics' => [
+        'client_id'     => env('GOOGLE_ANALYTICS_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_ANALYTICS_CLIENT_SECRET'),
+        'redirect_uri'  => env('GOOGLE_ANALYTICS_REDIRECT_URI', 'http://localhost:8000/api/v1/google-analytics/callback'),
+        'scopes'        => [
+            'https://www.googleapis.com/auth/analytics.readonly',
+            'https://www.googleapis.com/auth/userinfo.email',
+            'https://www.googleapis.com/auth/userinfo.profile',
+        ],
+    ],
+
+    'google_search_console' => [
+        'client_id'     => env('GOOGLE_SEARCH_CONSOLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_SEARCH_CONSOLE_CLIENT_SECRET'),
+        'redirect_uri'  => env('GOOGLE_SEARCH_CONSOLE_REDIRECT_URI', 'http://localhost:8000/api/v1/search-console/callback'),
+        'scopes'        => [
+            'https://www.googleapis.com/auth/webmasters.readonly',
+            'https://www.googleapis.com/auth/userinfo.email',
+            'https://www.googleapis.com/auth/userinfo.profile',
+        ],
     ],
 
 ];

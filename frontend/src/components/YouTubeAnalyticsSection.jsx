@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axiosInstance from '../api/axiosInstance';
+import { useWorkspace } from '../context/WorkspaceContext';
 import {
   Eye,
   ThumbsUp,
@@ -12,7 +13,8 @@ import {
   Calendar,
   ExternalLink,
   CheckCircle2,
-  Lock
+  Lock,
+  Clock
 } from 'lucide-react';
 
 /**
@@ -57,6 +59,7 @@ const getDateRangePresets = () => {
 };
 
 export default function YouTubeAnalyticsSection() {
+  const { selectedWorkspaceId } = useWorkspace();
   const presets = getDateRangePresets();
   const [selectedRangeKey, setSelectedRangeKey] = useState('last28');
   const [customStartDate, setCustomStartDate] = useState(presets.last28.startDate);
@@ -66,17 +69,21 @@ export default function YouTubeAnalyticsSection() {
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);
 
-  const fetchAnalytics = (start, end) => {
+  const fetchAnalytics = (start, end, forceRefresh = false) => {
     setLoading(true);
     setError(null);
 
+    const params = {
+      workspace_id: selectedWorkspaceId,
+      start_date: start,
+      end_date: end,
+    };
+    if (forceRefresh) {
+      params.force_refresh = 1;
+    }
+
     axiosInstance
-      .get('/youtube/analytics/overview', {
-        params: {
-          start_date: start,
-          end_date: end,
-        },
-      })
+      .get('/youtube/analytics/overview', { params })
       .then((res) => {
         if (res.data) {
           setData(res.data);
@@ -84,13 +91,31 @@ export default function YouTubeAnalyticsSection() {
       })
       .catch((err) => {
         console.error('Error fetching YouTube analytics overview:', err);
-        const msg = err.response?.data?.message || err.message || 'Failed to load YouTube Analytics.';
-        setError(msg);
+        const resData = err.response?.data;
+        if (resData && (resData.reauthorization_required || resData.error_type === 'token_invalid')) {
+          setData(resData);
+        } else {
+          const msg = resData?.message || err.message || 'Failed to load YouTube Analytics.';
+          setError(msg);
+        }
       })
       .finally(() => {
         setLoading(false);
       });
   };
+
+  // Listen for OAuth popup completion to refresh automatically
+  useEffect(() => {
+    const handleOAuthMessage = (event) => {
+      if (event.data?.type === 'YOUTUBE_OAUTH_RESULT') {
+        if (event.data.success) {
+          fetchAnalytics(customStartDate, customEndDate);
+        }
+      }
+    };
+    window.addEventListener('message', handleOAuthMessage);
+    return () => window.removeEventListener('message', handleOAuthMessage);
+  }, [customStartDate, customEndDate, selectedWorkspaceId]);
 
   // Trigger fetch when date range selection changes
   useEffect(() => {
@@ -105,7 +130,7 @@ export default function YouTubeAnalyticsSection() {
     }
 
     fetchAnalytics(start, end);
-  }, [selectedRangeKey]);
+  }, [selectedRangeKey, selectedWorkspaceId]);
 
   const handleApplyCustomRange = (e) => {
     e.preventDefault();
@@ -118,10 +143,13 @@ export default function YouTubeAnalyticsSection() {
     const width = 600;
     const height = 700;
     const left = window.screen.width / 2 - width / 2;
-    const top = window.screen.height / 2 - height / 2;
+    if (!selectedWorkspaceId) {
+      alert('Please select a workspace before connecting YouTube.');
+      return;
+    }
 
     window.open(
-      'http://localhost:8000/api/youtube/connect',
+      `http://localhost:8000/api/youtube/connect?workspace_id=${selectedWorkspaceId}`,
       'YouTube OAuth Login',
       `width=${width},height=${height},top=${top},left=${left}`
     );
@@ -129,11 +157,12 @@ export default function YouTubeAnalyticsSection() {
 
   const channel = data?.channel;
   const isConnected = data?.connected !== false;
-  const isReauthRequired = data?.reauthorization_required === true;
+  const isReauthRequired = data?.reauthorization_required === true && data?.has_refresh_token === false;
   const views = data?.views ?? data?.data?.views ?? 0;
   const likes = data?.likes ?? data?.data?.likes ?? 0;
   const comments = data?.comments ?? data?.data?.comments ?? 0;
   const shares = data?.shares ?? data?.data?.shares ?? 0;
+  const watchTimeHours = data?.watch_time_hours ?? data?.data?.watch_time_hours ?? 0;
 
   return (
     <div className="panel mb-18" style={{ marginBottom: '24px' }}>
@@ -224,7 +253,7 @@ export default function YouTubeAnalyticsSection() {
           <button
             type="button"
             className="btn btn-outline-white"
-            onClick={() => fetchAnalytics(customStartDate, customEndDate)}
+            onClick={() => fetchAnalytics(customStartDate, customEndDate, true)}
             disabled={loading}
             style={{ padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '4px' }}
             title="Refresh YouTube Analytics"
@@ -449,6 +478,26 @@ export default function YouTubeAnalyticsSection() {
             <div className="metric-foot">
               <span style={{ fontSize: '11px', color: '#6b7280' }}>
                 YouTube Analytics Shares
+              </span>
+            </div>
+          </div>
+
+          {/* Card 5: Watch Time */}
+          <div className="metric-card" style={{ borderLeft: '4px solid #d97706' }}>
+            <div className="metric-top">
+              <span className="metric-label" style={{ fontWeight: '600', color: '#374151' }}>
+                ⏱ Watch Time
+              </span>
+              <div className="metric-icon" style={{ background: '#fef3c7' }}>
+                <Clock size={20} color="#d97706" />
+              </div>
+            </div>
+            <div className="metric-value" style={{ fontSize: '24px', color: '#111827' }} title={`${watchTimeHours} hours`}>
+              {watchTimeHours} hrs
+            </div>
+            <div className="metric-foot">
+              <span style={{ fontSize: '11px', color: '#6b7280' }}>
+                Estimated Watch Hours
               </span>
             </div>
           </div>

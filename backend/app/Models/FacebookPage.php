@@ -25,7 +25,7 @@ class FacebookPage extends Model
 
     protected $casts = [
         'followers_count' => 'integer',
-        'fan_count' => 'integer',
+        'fan_count'       => 'integer',
         'connected_since' => 'datetime',
     ];
 
