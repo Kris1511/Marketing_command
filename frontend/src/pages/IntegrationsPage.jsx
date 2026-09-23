@@ -14,7 +14,7 @@ import {
   AlertTriangle,
   RotateCw,
 } from 'lucide-react';
-import axiosInstance from '../api/axiosInstance';
+import axiosInstance, { BACKEND_URL, API_BASE_URL } from '../api/axiosInstance';
 import { useWorkspace } from '../context/WorkspaceContext';
 
 const PLATFORM_CONFIGS = [
@@ -320,7 +320,7 @@ export default function IntegrationsPage() {
 
     if (item.key === 'facebook' || item.key === 'instagram') {
       const popup = window.open(
-        `http://localhost:8000/api/v1/auth/facebook?workspace_id=${wsId}`,
+        `${API_BASE_URL}/auth/facebook?workspace_id=${wsId}`,
         'MetaOAuthPopup',
         'width=650,height=750,scrollbars=yes'
       );
@@ -334,7 +334,7 @@ export default function IntegrationsPage() {
 
     if (item.key === 'youtube') {
       const popup = window.open(
-        `http://localhost:8000/api/youtube/connect?workspace_id=${wsId}`,
+        `${BACKEND_URL}/api/youtube/connect?workspace_id=${wsId}`,
         'GoogleYouTubeOAuth',
         'width=600,height=700,scrollbars=yes'
       );
@@ -348,7 +348,7 @@ export default function IntegrationsPage() {
 
     if (item.key === 'twitter') {
       const popup = window.open(
-        `http://localhost:8000/api/twitter/connect?workspace_id=${wsId}`,
+        `${BACKEND_URL}/api/twitter/connect?workspace_id=${wsId}`,
         'TwitterOAuth',
         'width=600,height=700,scrollbars=yes'
       );
@@ -362,7 +362,7 @@ export default function IntegrationsPage() {
 
     if (item.key === 'google_analytics') {
       const popup = window.open(
-        `http://localhost:8000/api/v1/google-analytics/connect?workspace_id=${wsId}`,
+        `${API_BASE_URL}/google-analytics/connect?workspace_id=${wsId}`,
         'GoogleAnalyticsOAuth',
         'width=600,height=700,scrollbars=yes'
       );
@@ -376,7 +376,7 @@ export default function IntegrationsPage() {
 
     if (item.key === 'search_console') {
       const popup = window.open(
-        `http://localhost:8000/api/v1/search-console/connect?workspace_id=${wsId}`,
+        `${API_BASE_URL}/search-console/connect?workspace_id=${wsId}`,
         'GoogleSearchConsoleOAuth',
         'width=600,height=700,scrollbars=yes'
       );
@@ -402,7 +402,7 @@ export default function IntegrationsPage() {
 
     if (item.key === 'facebook' || item.key === 'instagram') {
       const popup = window.open(
-        `http://localhost:8000/api/v1/auth/facebook?workspace_id=${wsId}&reconnect=true&force=true`,
+        `${API_BASE_URL}/auth/facebook?workspace_id=${wsId}&reconnect=true&force=true`,
         'MetaOAuthPopup',
         'width=650,height=750,scrollbars=yes'
       );
@@ -416,7 +416,7 @@ export default function IntegrationsPage() {
 
     if (item.key === 'youtube') {
       const popup = window.open(
-        `http://localhost:8000/api/youtube/connect?workspace_id=${wsId}&reconnect=true&force=true`,
+        `${BACKEND_URL}/api/youtube/connect?workspace_id=${wsId}&reconnect=true&force=true`,
         'GoogleYouTubeOAuth',
         'width=600,height=700,scrollbars=yes'
       );
@@ -430,7 +430,7 @@ export default function IntegrationsPage() {
 
     if (item.key === 'twitter') {
       const popup = window.open(
-        `http://localhost:8000/api/twitter/connect?workspace_id=${wsId}&reconnect=true&force=true`,
+        `${BACKEND_URL}/api/twitter/connect?workspace_id=${wsId}&reconnect=true&force=true`,
         'TwitterOAuth',
         'width=600,height=700,scrollbars=yes'
       );
@@ -444,7 +444,7 @@ export default function IntegrationsPage() {
 
     if (item.key === 'google_analytics') {
       const popup = window.open(
-        `http://localhost:8000/api/v1/google-analytics/connect?workspace_id=${wsId}&reconnect=true&force=true`,
+        `${API_BASE_URL}/google-analytics/connect?workspace_id=${wsId}&reconnect=true&force=true`,
         'GoogleAnalyticsOAuth',
         'width=600,height=700,scrollbars=yes'
       );
@@ -458,7 +458,7 @@ export default function IntegrationsPage() {
 
     if (item.key === 'search_console') {
       const popup = window.open(
-        `http://localhost:8000/api/v1/search-console/connect?workspace_id=${wsId}&reconnect=true&force=true`,
+        `${API_BASE_URL}/search-console/connect?workspace_id=${wsId}&reconnect=true&force=true`,
         'GoogleSearchConsoleOAuth',
         'width=600,height=700,scrollbars=yes'
       );

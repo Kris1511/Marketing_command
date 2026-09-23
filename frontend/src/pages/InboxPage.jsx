@@ -11,7 +11,7 @@ import {
   Send,
   X,
 } from 'lucide-react';
-import axiosInstance from '../api/axiosInstance';
+import axiosInstance, { BACKEND_URL, API_BASE_URL } from '../api/axiosInstance';
 import { useWorkspace } from '../context/WorkspaceContext';
 
 const INITIAL_CONVERSATION_LIMIT = 10;
@@ -579,7 +579,7 @@ export default function InboxPage() {
   // Reconnect Meta account for Instagram permissions
   const handleReconnectInstagram = () => {
     const wsId = selectedWorkspaceId || 1;
-    const targetUrl = `http://localhost:8000/api/v1/auth/facebook?workspace_id=${wsId}&reconnect=true&force=true`;
+    const targetUrl = `${API_BASE_URL}/auth/facebook?workspace_id=${wsId}&reconnect=true&force=true`;
 
     const popup = window.open(
       targetUrl,
@@ -594,7 +594,7 @@ export default function InboxPage() {
   // Reconnect Google account for YouTube permissions
   const handleReconnectYouTube = () => {
     const wsId = selectedWorkspaceId || 1;
-    const targetUrl = `http://localhost:8000/api/youtube/connect?workspace_id=${wsId}&reconnect=true&force=true`;
+    const targetUrl = `${BACKEND_URL}/api/youtube/connect?workspace_id=${wsId}&reconnect=true&force=true`;
 
     const popup = window.open(
       targetUrl,

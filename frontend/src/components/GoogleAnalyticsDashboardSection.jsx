@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import axiosInstance from '../api/axiosInstance';
+import axiosInstance, { API_BASE_URL } from '../api/axiosInstance';
 import {
   Users,
   UserPlus,
@@ -95,7 +95,7 @@ export default function GoogleAnalyticsDashboardSection({
     const left = window.screen.width / 2 - width / 2;
     const top = window.screen.height / 2 - height / 2;
     window.open(
-      `http://localhost:8000/api/v1/google-analytics/connect?workspace_id=${wsId}&reconnect=true&force=true`,
+      `${API_BASE_URL}/google-analytics/connect?workspace_id=${wsId}&reconnect=true&force=true`,
       'Connect Google Analytics',
       `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
     );

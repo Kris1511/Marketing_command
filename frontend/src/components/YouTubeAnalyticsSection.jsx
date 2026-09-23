@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axiosInstance from '../api/axiosInstance';
+import axiosInstance, { BACKEND_URL } from '../api/axiosInstance';
 import { useWorkspace } from '../context/WorkspaceContext';
 import {
   Eye,
@@ -149,7 +149,7 @@ export default function YouTubeAnalyticsSection() {
     }
 
     window.open(
-      `http://localhost:8000/api/youtube/connect?workspace_id=${selectedWorkspaceId}`,
+      `${BACKEND_URL}/api/youtube/connect?workspace_id=${selectedWorkspaceId}`,
       'YouTube OAuth Login',
       `width=${width},height=${height},top=${top},left=${left}`
     );

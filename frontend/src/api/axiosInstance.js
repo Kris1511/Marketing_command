@@ -1,11 +1,21 @@
 import axios from 'axios';
 
+export const BACKEND_URL = (
+  import.meta.env.VITE_BACKEND_URL ||
+  (import.meta.env.VITE_API_BASE_URL
+    ? import.meta.env.VITE_API_BASE_URL.replace(/\/api(\/v1)?\/?$/, '')
+    : 'http://localhost:8000')
+).replace(/\/+$/, '');
+
+export const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || `${BACKEND_URL}/api/v1`;
+
 const axiosInstance = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1',
+  baseURL: API_BASE_URL,
   withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
-    'Accept': 'application/json',
+    Accept: 'application/json',
   },
 });
 

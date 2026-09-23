@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import axios from 'axios';
-import axiosInstance from '../api/axiosInstance';
+import axiosInstance, { BACKEND_URL } from '../api/axiosInstance';
 import { useWorkspace } from '../context/WorkspaceContext';
 import {
   Eye,
@@ -398,7 +398,7 @@ export default function YouTubeStudioPerformanceSection({
     const left = window.screen.width / 2 - width / 2;
     const top = window.screen.height / 2 - height / 2;
     window.open(
-      `http://localhost:8000/api/youtube/connect?workspace_id=${effectiveWorkspaceId || 1}&force=true`,
+      `${BACKEND_URL}/api/youtube/connect?workspace_id=${effectiveWorkspaceId || 1}&force=true`,
       'GoogleYouTubeOAuth',
       `width=${width},height=${height},top=${top},left=${left}`
     );

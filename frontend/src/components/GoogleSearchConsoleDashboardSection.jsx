@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import axiosInstance from '../api/axiosInstance';
+import axiosInstance, { API_BASE_URL } from '../api/axiosInstance';
 import {
   Search,
   MousePointer,
@@ -85,7 +85,7 @@ export default function GoogleSearchConsoleDashboardSection({
     const left = window.screen.width / 2 - width / 2;
     const top = window.screen.height / 2 - height / 2;
     window.open(
-      `http://localhost:8000/api/v1/search-console/connect?workspace_id=${wsId}&reconnect=true&force=true`,
+      `${API_BASE_URL}/search-console/connect?workspace_id=${wsId}&reconnect=true&force=true`,
       'Connect Google Search Console',
       `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
     );
