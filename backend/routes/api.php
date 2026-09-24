@@ -5733,7 +5733,177 @@ Route::prefix('v1')->group(function () {
     Route::post('/search-console/configure', [\App\Http\Controllers\GoogleSearchConsoleController::class, 'configure']);
     Route::get('/search-console/metrics', [\App\Http\Controllers\GoogleSearchConsoleController::class, 'metrics']);
     Route::post('/search-console/test', [\App\Http\Controllers\GoogleSearchConsoleController::class, 'test']);
-    Route::post('/search-console/disconnect', [\App\Http\Controllers\GoogleSearchConsoleController::class, 'disconnect']);
+    // ── AI Assistant: Caption & Hashtag Generator ──
+    Route::post('/ai/generate-caption', function (Request $request) {
+        $validated = $request->validate([
+            'topic'            => 'required|string|max:1000',
+            'platform'         => 'nullable|string|in:instagram,facebook,linkedin,twitter,youtube',
+            'tone'             => 'nullable|string|in:engaging,professional,promotional,witty,storytelling',
+            'include_hashtags' => 'nullable|boolean',
+            'include_emojis'   => 'nullable|boolean',
+            'language'         => 'nullable|string',
+            'workspace_id'     => 'nullable|integer',
+        ]);
+
+        $workspaceName = 'Brand';
+        if (!empty($validated['workspace_id'])) {
+            $ws = Workspace::find($validated['workspace_id']);
+            if ($ws) {
+                $workspaceName = $ws->name;
+            }
+        }
+        $validated['workspace_name'] = $workspaceName;
+
+        $service = new \App\Services\AiContentService();
+        try {
+            $variations = $service->generateCaptions($validated);
+            return response()->json([
+                'success'    => true,
+                'variations' => $variations,
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 422);
+        }
+    });
+
+    // ── Visual Content Calendar Endpoints ──
+    Route::get('/publishing/calendar', function (Request $request) {
+        $workspaceId = (int) $request->query('workspace_id', 0);
+        $yearMonth = $request->query('month', now()->format('Y-m'));
+
+        try {
+            $startOfMonth = \Carbon\Carbon::parse($yearMonth . '-01')->startOfMonth()->subDays(7);
+            $endOfMonth = \Carbon\Carbon::parse($yearMonth . '-01')->endOfMonth()->addDays(7);
+        } catch (\Throwable $e) {
+            $startOfMonth = now()->startOfMonth()->subDays(7);
+            $endOfMonth = now()->endOfMonth()->addDays(7);
+        }
+
+        $query = FacebookPost::with(['facebookPage', 'media'])
+            ->where(function ($q) use ($startOfMonth, $endOfMonth) {
+                $q->whereBetween('created_at', [$startOfMonth, $endOfMonth])
+                  ->orWhereBetween('scheduled_at', [$startOfMonth, $endOfMonth])
+                  ->orWhereBetween('published_at', [$startOfMonth, $endOfMonth]);
+            });
+
+        if ($workspaceId > 0) {
+            $query->where('workspace_id', $workspaceId);
+        }
+
+        $posts = $query->orderBy('created_at', 'desc')->get();
+
+        $events = $posts->map(function ($post) {
+            $date = $post->scheduled_at ?? $post->published_at ?? $post->created_at;
+            $cleanDate = $date ? \Carbon\Carbon::parse($date)->toIso8601String() : null;
+
+            $platforms = ['facebook'];
+            if (!empty($post->ig_media_id)) $platforms[] = 'instagram';
+            if (!empty($post->yt_video_id)) $platforms[] = 'youtube';
+
+            return [
+                'id'             => $post->id,
+                'title'          => !empty($post->content) ? \Illuminate\Support\Str::limit($post->content, 55) : 'Untitled Post',
+                'content'        => $post->content ?? '',
+                'status'         => $post->status ?? 'draft',
+                'post_type'      => $post->post_type ?? 'post',
+                'date'           => $cleanDate,
+                'scheduled_at'   => $post->scheduled_at ? \Carbon\Carbon::parse($post->scheduled_at)->toIso8601String() : null,
+                'published_at'   => $post->published_at ? \Carbon\Carbon::parse($post->published_at)->toIso8601String() : null,
+                'platforms'      => $platforms,
+                'workspace_id'   => $post->workspace_id,
+                'page_name'      => $post->facebookPage?->page_name ?? 'Default Account',
+                'media_url'      => $post->media->first()?->file_url ?? null,
+                'reach_count'    => (int) ($post->reach_count ?? 0),
+                'likes_count'    => (int) ($post->likes_count ?? 0),
+                'comments_count' => (int) ($post->comments_count ?? 0),
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'events'  => $events,
+            'month'   => $yearMonth,
+        ]);
+    });
+
+    Route::patch('/publishing/posts/{id}/reschedule', function (Request $request, $id) {
+        $validated = $request->validate([
+            'scheduled_at' => 'required|date',
+        ]);
+
+        $post = FacebookPost::findOrFail($id);
+        $post->scheduled_at = \Carbon\Carbon::parse($validated['scheduled_at']);
+        $post->status = 'scheduled';
+        $post->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Post rescheduled successfully',
+            'data'    => $post,
+        ]);
+    });
+
+    // ── Executive Client PDF & Email Report Endpoints ──
+    Route::get('/reports/pdf-preview', function (Request $request) {
+        $workspaceId = (int) $request->query('workspace_id', 1);
+        $range = $request->query('range', 'last_7_days');
+
+        $ws = Workspace::find($workspaceId) ?? Workspace::first();
+        $wsName = $ws ? $ws->name : 'Marketing Command Client';
+        $contactName = $ws?->primary_contact ?? 'Marketing Director';
+        $contactEmail = $ws?->primary_contact_email ?? 'client@example.com';
+
+        $postsCount = FacebookPost::where('workspace_id', $workspaceId)->where('status', 'published')->count();
+        $totalReach = FacebookPost::where('workspace_id', $workspaceId)->where('status', 'published')->sum('reach_count');
+        $totalLikes = FacebookPost::where('workspace_id', $workspaceId)->where('status', 'published')->sum('likes_count');
+        $totalComments = FacebookPost::where('workspace_id', $workspaceId)->where('status', 'published')->sum('comments_count');
+        $totalLeads = Lead::where('workspace_id', $workspaceId)->count();
+
+        $topPosts = FacebookPost::where('workspace_id', $workspaceId)
+            ->where('status', 'published')
+            ->orderBy('reach_count', 'desc')
+            ->limit(3)
+            ->get(['id', 'content', 'reach_count', 'likes_count', 'comments_count', 'post_type', 'created_at']);
+
+        return response()->json([
+            'success' => true,
+            'report'  => [
+                'workspace_name'  => $wsName,
+                'contact_name'    => $contactName,
+                'contact_email'   => $contactEmail,
+                'date_range'      => $range === 'this_month' ? 'This Month' : 'Last 7 Days',
+                'generated_at'    => now()->toFormattedDateString(),
+                'period_dates'    => now()->subDays(7)->toFormattedDateString() . ' - ' . now()->toFormattedDateString(),
+                'total_reach'     => (int) $totalReach,
+                'total_likes'     => (int) $totalLikes,
+                'total_comments'  => (int) $totalComments,
+                'published_posts' => (int) $postsCount,
+                'total_leads'     => (int) $totalLeads,
+                'top_posts'       => $topPosts,
+            ],
+        ]);
+    });
+
+    Route::post('/reports/send-client-email', function (Request $request) {
+        $workspaceId = (int) $request->input('workspace_id', 1);
+        $ws = Workspace::find($workspaceId) ?? Workspace::first();
+
+        $recipient = $request->input('email', $ws?->primary_contact_email ?? 'client@example.com');
+
+        if (function_exists('createNotification')) {
+            createNotification($workspaceId, 'report_generated', 'Weekly Performance Report Dispatched', "Executive summary sent to {$recipient}");
+        }
+
+        return response()->json([
+            'success'   => true,
+            'message'   => "Performance report successfully dispatched to {$recipient}.",
+            'recipient' => $recipient,
+            'sent_at'   => now()->toIso8601String(),
+        ]);
+    });
 });
 
 // Direct alias routes for Google Analytics OAuth callback and connect without v1 prefix

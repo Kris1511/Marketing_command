@@ -30,7 +30,9 @@ import {
   MessageSquare,
   ThumbsUp,
   Sparkles,
+  FileText,
 } from 'lucide-react';
+import ExecutiveReportModal from '../components/ExecutiveReportModal';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -95,6 +97,7 @@ function computePercentChange(current, previous) {
 
 export default function ReportsPage() {
   const { selectedWorkspaceId, selectedWorkspace } = useWorkspace();
+  const [showExecutiveReport, setShowExecutiveReport] = useState(false);
 
   // Filters
   const [platform, setPlatform] = useState('all');
@@ -705,10 +708,33 @@ export default function ReportsPage() {
           <button
             type="button"
             className="btn btn-primary"
+            onClick={() => setShowExecutiveReport(true)}
+            style={{
+              background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+              border: 'none',
+              color: '#ffffff',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 16px',
+              fontSize: '13px',
+              fontWeight: '700',
+              borderRadius: '10px',
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)',
+            }}
+          >
+            <FileText size={15} />
+            Executive PDF Report
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-secondary"
             onClick={() => window.print()}
             style={{
-              background: '#2563eb',
-              borderColor: '#1d4ed8',
+              background: 'rgba(255, 255, 255, 0.1)',
+              borderColor: 'rgba(255, 255, 255, 0.2)',
               color: '#ffffff',
               display: 'inline-flex',
               alignItems: 'center',
@@ -716,7 +742,6 @@ export default function ReportsPage() {
               padding: '8px 16px',
               fontSize: '13px',
               fontWeight: '600',
-              boxShadow: '0 2px 6px rgba(37, 99, 235, 0.4)',
             }}
           >
             <Printer size={14} /> Print Report
@@ -1987,6 +2012,13 @@ export default function ReportsPage() {
           </div>
         )}
       </div>
+
+      {/* Executive Client PDF Report Modal */}
+      <ExecutiveReportModal
+        isOpen={showExecutiveReport}
+        onClose={() => setShowExecutiveReport(false)}
+        workspaceId={selectedWorkspaceId}
+      />
     </div>
   );
 }

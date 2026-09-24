@@ -23,11 +23,17 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
-  Loader2
+  Loader2,
+  Sparkles,
+  LayoutGrid,
 } from 'lucide-react';
+import AiCaptionModal from '../components/AiCaptionModal';
+import VisualContentCalendar from '../components/VisualContentCalendar';
 
 export default function PublishingPage() {
   const { selectedWorkspaceId, selectedWorkspace } = useWorkspace();
+  const [activeTab, setActiveTab] = useState('composer'); // 'composer' | 'calendar'
+  const [showAiModal, setShowAiModal] = useState(false);
   const navigate = useNavigate();
 
   // Publishing is enabled for this workspace
@@ -888,6 +894,47 @@ export default function PublishingPage() {
           <p style={{ marginTop: '4px' }}>
             Create and publish content across Facebook, Instagram, and YouTube (<strong>{selectedWorkspace?.name || 'Selected Workspace'}</strong>).
           </p>
+          {/* View Switcher Tabs */}
+          <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+            <button
+              type="button"
+              onClick={() => setActiveTab('composer')}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '8px',
+                fontSize: '12.5px',
+                fontWeight: '700',
+                border: activeTab === 'composer' ? '1px solid #2563eb' : '1px solid #cbd5e1',
+                background: activeTab === 'composer' ? '#eff6ff' : '#ffffff',
+                color: activeTab === 'composer' ? '#1d4ed8' : '#64748b',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <LayoutGrid size={14} /> Composer & Drafts
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('calendar')}
+              style={{
+                padding: '6px 14px',
+                borderRadius: '8px',
+                fontSize: '12.5px',
+                fontWeight: '700',
+                border: activeTab === 'calendar' ? '1px solid #2563eb' : '1px solid #cbd5e1',
+                background: activeTab === 'calendar' ? '#eff6ff' : '#ffffff',
+                color: activeTab === 'calendar' ? '#1d4ed8' : '#64748b',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <CalendarIcon size={14} /> 📅 Visual Calendar
+            </button>
+          </div>
         </div>
         <div className="toolbar" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button
@@ -1057,8 +1104,18 @@ export default function PublishingPage() {
         </div>
       )}
 
-      {/* 2. Main Publisher Layout (Form + Preview) */}
-      <div className="publisher-layout">
+      {/* 2. Main Publisher Layout (Form + Preview OR Calendar) */}
+      {activeTab === 'calendar' ? (
+        <VisualContentCalendar
+          onNewPostClick={() => setActiveTab('composer')}
+          onSelectPost={(post) => {
+            if (post.content) setPostCaption(post.content);
+            setActiveTab('composer');
+          }}
+        />
+      ) : (
+        <>
+          <div className="publisher-layout">
         {/* Left Form Panel */}
         <section className="panel">
           <div className="panel-header">
@@ -1323,9 +1380,30 @@ export default function PublishingPage() {
             {/* Caption / post message */}
             <div className="form-field full">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                <label htmlFor="postCaption" className="form-label" style={{ marginBottom: 0 }}>
-                  Caption / Post message *
-                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <label htmlFor="postCaption" className="form-label" style={{ marginBottom: 0 }}>
+                    Caption / Post message *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowAiModal(true)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '3px 10px',
+                      borderRadius: '6px',
+                      background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
+                      border: '1px solid #bfdbfe',
+                      color: '#1d4ed8',
+                      fontSize: '11.5px',
+                      fontWeight: '700',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <Sparkles size={13} color="#2563eb" /> ✨ AI Caption Assistant
+                  </button>
+                </div>
                 <span
                   style={{
                     fontSize: '11px',
@@ -2399,6 +2477,21 @@ export default function PublishingPage() {
           </div>
         )}
       </section>
+        </>
+      )}
+
+      {/* AI Caption & Hashtag Generator Modal */}
+      <AiCaptionModal
+        isOpen={showAiModal}
+        onClose={() => setShowAiModal(false)}
+        workspaceId={selectedWorkspaceId}
+        initialTopic={postTitle || postCaption}
+        onApplyCaption={({ caption, hashtags, fullText }) => {
+          setPostCaption(caption);
+          if (hashtags) setPostHashtags(hashtags);
+          setIsDirty(true);
+        }}
+      />
     </div>
   );
 }
