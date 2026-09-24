@@ -351,11 +351,20 @@ class FacebookGraphService
                 $response = $responses[$postId] ?? null;
                 $cacheKey = $this->postMediaViewsCacheKey($postId, $startDate, $endDate);
 
-                if (!$response || !$response->successful()) {
+                if ($response instanceof \Throwable) {
+                    \Illuminate\Support\Facades\Log::warning('[FACEBOOK POSTS VIEWS] post_media_view request failed', [
+                        'post_id' => $postId,
+                        'error'   => $response->getMessage(),
+                    ]);
+                    \Illuminate\Support\Facades\Cache::put($cacheKey, '__none__', 300);
+                    continue;
+                }
+
+                if (!$response instanceof \Illuminate\Http\Client\Response || !$response->successful()) {
                     \Illuminate\Support\Facades\Log::warning('[FACEBOOK POSTS VIEWS] post_media_view unavailable', [
                         'post_id' => $postId,
-                        'status'  => $response?->status(),
-                        'error'   => $response?->json('error') ?? $response?->body(),
+                        'status'  => $response instanceof \Illuminate\Http\Client\Response ? $response->status() : null,
+                        'error'   => $response instanceof \Illuminate\Http\Client\Response ? ($response->json('error') ?? $response->body()) : 'No response',
                     ]);
                     \Illuminate\Support\Facades\Cache::put($cacheKey, '__none__', 300);
                     continue;
@@ -1774,7 +1783,17 @@ class FacebookGraphService
 
                     foreach ($poolEndpoints as $key => $req) {
                         $r = $responses[$key] ?? null;
-                        if ($r && $r->successful()) {
+
+                        if ($r instanceof \Throwable) {
+                            \Illuminate\Support\Facades\Log::warning("[FACEBOOK POOL METRICS ERROR] Request failed for {$key}: " . $r->getMessage());
+                            continue;
+                        }
+
+                        if (!$r instanceof \Illuminate\Http\Client\Response) {
+                            continue;
+                        }
+
+                        if ($r->successful()) {
                             $d = $r->json();
                             if (str_starts_with($key, 'vid_')) {
                                 $vId = substr($key, 4);
@@ -2247,7 +2266,17 @@ class FacebookGraphService
 
                 foreach ($poolEndpoints as $key => $req) {
                     $r = $responses[$key] ?? null;
-                    if ($r && $r->successful()) {
+
+                    if ($r instanceof \Throwable) {
+                        \Illuminate\Support\Facades\Log::warning("[FACEBOOK POOL METRICS ERROR] Request failed for {$key}: " . $r->getMessage());
+                        continue;
+                    }
+
+                    if (!$r instanceof \Illuminate\Http\Client\Response) {
+                        continue;
+                    }
+
+                    if ($r->successful()) {
                         $d = $r->json();
                         if (str_starts_with($key, 'vid_')) {
                             $vId = substr($key, 4);
@@ -2279,6 +2308,8 @@ class FacebookGraphService
                                 $postShares[$fId] = (int)$d['shares']['count'];
                             }
                         }
+                    } else {
+                        \Illuminate\Support\Facades\Log::warning("[FACEBOOK POOL METRICS ERROR] Non-200 for {$key}: " . $r->status());
                     }
                 }
             } catch (\Throwable $e) {
