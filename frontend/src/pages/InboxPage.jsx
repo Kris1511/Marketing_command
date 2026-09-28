@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Inbox,
   Key,
   Loader2,
@@ -15,6 +17,7 @@ import axiosInstance, { BACKEND_URL, API_BASE_URL } from '../api/axiosInstance';
 import { useWorkspace } from '../context/WorkspaceContext';
 
 const INITIAL_CONVERSATION_LIMIT = 10;
+const CONVERSATIONS_PER_PAGE = 5;
 
 function FacebookIcon({ size = 18, style = {} }) {
   return (
@@ -97,10 +100,15 @@ export default function InboxPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [error, setError] = useState('');
   const [permissionError, setPermissionError] = useState(null);
+  const [connectedAccount, setConnectedAccount] = useState(null);
   const [realtimeStatus, setRealtimeStatus] = useState('idle');
   const [lastWebhookEventId, setLastWebhookEventId] = useState(() => {
     return Number(localStorage.getItem('inboxLastWebhookEventId') || 0);
   });
+
+  // Independent pagination states for Facebook and Instagram
+  const [fbPage, setFbPage] = useState(1);
+  const [igPage, setIgPage] = useState(1);
 
   const selectedConversationRef = useRef(null);
   const lastWebhookEventIdRef = useRef(lastWebhookEventId);
@@ -122,6 +130,17 @@ export default function InboxPage() {
     lastWebhookEventIdRef.current = lastWebhookEventId;
   }, [lastWebhookEventId]);
 
+  // Resolve dynamic display username for the active Instagram account
+  const displayIgUsername = useMemo(() => {
+    const raw =
+      connectedAccount?.username ||
+      connectedAccount?.name ||
+      permissionError?.account?.username ||
+      '';
+    const cleaned = String(raw).replace(/^@/, '').trim();
+    return cleaned ? `@${cleaned}` : 'your connected Instagram account';
+  }, [connectedAccount, permissionError]);
+
   // Filter conversations by search term
   const filteredConversations = useMemo(() => {
     if (!searchQuery.trim()) return conversations;
@@ -133,6 +152,55 @@ export default function InboxPage() {
       return name.includes(q) || username.includes(q) || msg.includes(q);
     });
   }, [conversations, searchQuery]);
+
+  const currentPlatformPage = platform === 'instagram' ? igPage : fbPage;
+  const setPlatformPage = useCallback(
+    (updater) => {
+      if (platform === 'instagram') {
+        setIgPage((prev) => (typeof updater === 'function' ? updater(prev) : updater));
+      } else {
+        setFbPage((prev) => (typeof updater === 'function' ? updater(prev) : updater));
+      }
+    },
+    [platform]
+  );
+
+  // Search/filter resets the relevant platform's pagination back to page 1
+  useEffect(() => {
+    if (platform === 'instagram') {
+      setIgPage(1);
+    } else {
+      setFbPage(1);
+    }
+  }, [searchQuery, platform]);
+
+  // Workspace switching resets pagination to page 1
+  useEffect(() => {
+    setFbPage(1);
+    setIgPage(1);
+  }, [selectedWorkspaceId]);
+
+  const totalConversations = filteredConversations.length;
+  const totalPages = Math.max(1, Math.ceil(totalConversations / CONVERSATIONS_PER_PAGE));
+  const validPage = Math.min(currentPlatformPage, totalPages);
+
+  // Show exactly 5 conversations per page
+  const paginatedConversations = useMemo(() => {
+    const start = (validPage - 1) * CONVERSATIONS_PER_PAGE;
+    return filteredConversations.slice(start, start + CONVERSATIONS_PER_PAGE);
+  }, [filteredConversations, validPage]);
+
+  const handlePageChange = (newPage) => {
+    const targetPage = Math.max(1, Math.min(totalPages, newPage));
+    setPlatformPage(targetPage);
+    const nextSlice = filteredConversations.slice(
+      (targetPage - 1) * CONVERSATIONS_PER_PAGE,
+      targetPage * CONVERSATIONS_PER_PAGE
+    );
+    if (nextSlice.length > 0 && !nextSlice.some((c) => c.id === selectedConversationId)) {
+      setSelectedConversationId(nextSlice[0].id);
+    }
+  };
 
   const selectedConversation = useMemo(
     () => conversations.find((item) => item.id === selectedConversationId) || null,
@@ -169,6 +237,9 @@ export default function InboxPage() {
         });
 
         const rows = res.data?.data || [];
+        if (res.data?.account) {
+          setConnectedAccount(res.data.account);
+        }
         setConversations((prev) => (append ? [...prev, ...rows] : rows));
         setConversationCursor(res.data?.paging?.after || null);
 
@@ -445,7 +516,8 @@ export default function InboxPage() {
         const pages = event.data?.pages || [];
         const sessId = event.data?.oauth_session_id || '';
         if (pages.length > 0) {
-          const page = pages.find((p) => p.id === '115864121526929') || pages[0];
+          const targetPageId = connectedAccount?.page_id || connectedAccount?.id;
+          const page = (targetPageId ? pages.find((p) => p.id === targetPageId) : null) || pages[0];
           try {
             await axiosInstance.post('/facebook/connect-page', {
               workspace_id: selectedWorkspaceId,
@@ -522,8 +594,11 @@ export default function InboxPage() {
 
   // Reconnect Meta account for Instagram permissions
   const handleReconnectInstagram = () => {
-    const wsId = selectedWorkspaceId || 1;
-    const targetUrl = `${API_BASE_URL}/auth/facebook?workspace_id=${wsId}&reconnect=true&force=true`;
+    if (!isWorkspaceSelected) {
+      alert('Please select a specific workspace first before reconnecting your account.');
+      return;
+    }
+    const targetUrl = `${API_BASE_URL}/auth/facebook?workspace_id=${selectedWorkspaceId}&reconnect=true&force=true`;
 
     const popup = window.open(
       targetUrl,
@@ -968,7 +1043,7 @@ export default function InboxPage() {
                   </button>
                 </div>
               ) : (
-                filteredConversations.map((conversation) => {
+                paginatedConversations.map((conversation) => {
                   const customer = conversation.customer || {};
                   const active = conversation.id === selectedConversationId;
                   const unread = Number(conversation.unread_count || 0);
@@ -1095,18 +1170,134 @@ export default function InboxPage() {
               )}
             </div>
 
-            {conversationCursor && (
-              <div style={{ padding: '12px 16px', borderTop: '1px solid #e2e8f0' }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm btn-block"
-                  onClick={() =>
-                    fetchConversations({ append: true, after: conversationCursor })
-                  }
-                  disabled={loadingConversations}
+            {/* 5-Item Pagination Controls */}
+            {totalConversations > 0 && (
+              <div
+                id={`${platform}-inbox-pagination`}
+                style={{
+                  padding: '12px 14px',
+                  borderTop: '1px solid #e2e8f0',
+                  background: '#ffffff',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px',
+                }}
+              >
+                {/* Showing 1–5 of 10 conversations */}
+                <div
+                  id={`${platform}-inbox-count-info`}
+                  style={{
+                    fontSize: '12px',
+                    color: '#64748b',
+                    textAlign: 'center',
+                  }}
                 >
-                  <ChevronDown size={14} /> Load more
-                </button>
+                  Showing <strong>{(validPage - 1) * CONVERSATIONS_PER_PAGE + 1}</strong>–
+                  <strong>{Math.min(validPage * CONVERSATIONS_PER_PAGE, totalConversations)}</strong> of{' '}
+                  <strong>{totalConversations}</strong> {totalConversations === 1 ? 'conversation' : 'conversations'}
+                </div>
+
+                {/* Previous | 1 / X | Next */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '6px',
+                  }}
+                >
+                  <button
+                    id={`${platform}-inbox-prev-btn`}
+                    type="button"
+                    disabled={validPage <= 1 || loadingConversations}
+                    onClick={() => handlePageChange(validPage - 1)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '5px 12px',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      border: '1px solid',
+                      borderColor: validPage <= 1 || loadingConversations ? '#e2e8f0' : '#cbd5e1',
+                      background: validPage <= 1 || loadingConversations ? '#f8fafc' : '#ffffff',
+                      color: validPage <= 1 || loadingConversations ? '#94a3b8' : '#334155',
+                      cursor: validPage <= 1 || loadingConversations ? 'not-allowed' : 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <ChevronLeft size={13} />
+                    <span>Previous</span>
+                  </button>
+
+                  <div
+                    id={`${platform}-inbox-page-badge`}
+                    style={{
+                      padding: '5px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid #e2e8f0',
+                      background: '#f8fafc',
+                      color: '#0f172a',
+                      fontSize: '12px',
+                      fontWeight: '700',
+                      minWidth: '44px',
+                      textAlign: 'center',
+                    }}
+                  >
+                    {validPage} / {totalPages}
+                  </div>
+
+                  <button
+                    id={`${platform}-inbox-next-btn`}
+                    type="button"
+                    disabled={validPage >= totalPages || loadingConversations}
+                    onClick={() => handlePageChange(validPage + 1)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '5px 12px',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      border: '1px solid',
+                      borderColor:
+                        validPage >= totalPages || loadingConversations
+                          ? '#e2e8f0'
+                          : platform === 'instagram'
+                          ? '#fbcfe8'
+                          : '#bfdbfe',
+                      background: validPage >= totalPages || loadingConversations ? '#f8fafc' : '#ffffff',
+                      color:
+                        validPage >= totalPages || loadingConversations
+                          ? '#94a3b8'
+                          : platform === 'instagram'
+                          ? '#db2777'
+                          : '#2563eb',
+                      cursor: validPage >= totalPages || loadingConversations ? 'not-allowed' : 'pointer',
+                      boxShadow: validPage >= totalPages || loadingConversations ? 'none' : '0 1px 2px rgba(0,0,0,0.05)',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <span>Next</span>
+                    <ChevronRight size={13} />
+                  </button>
+                </div>
+
+                {conversationCursor && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm btn-block"
+                    onClick={() =>
+                      fetchConversations({ append: true, after: conversationCursor })
+                    }
+                    disabled={loadingConversations}
+                    style={{ marginTop: '2px', fontSize: '11px', padding: '3px 8px' }}
+                  >
+                    <ChevronDown size={12} /> Load more from {platform === 'instagram' ? 'Instagram' : 'Facebook'}
+                  </button>
+                )}
               </div>
             )}
           </aside>
@@ -1452,7 +1643,7 @@ export default function InboxPage() {
                           border: '1px solid #fbcfe8',
                         }}
                       >
-                        Account Active: @redmindtechnologies
+                        Account Active: {displayIgUsername}
                       </span>
                     </div>
 
@@ -1481,7 +1672,7 @@ export default function InboxPage() {
                           <strong>Instagram App Setting</strong>: In the mobile app, go to <em>Settings &amp; privacy</em> &rarr; <em>Messages and story replies</em> &rarr; <em>Message controls</em> &rarr; <em>Connected tools</em> &rarr; toggle <strong>Allow access to messages</strong> to <strong>ON</strong>.
                         </li>
                         <li>
-                          <strong>Send a DM</strong>: Send an Instagram direct message to <strong>@redmindtechnologies</strong>. New incoming messages appear in real-time.
+                          <strong>Send a DM</strong>: Send an Instagram direct message to <strong>{displayIgUsername}</strong>. New incoming messages appear in real-time.
                         </li>
                       </ul>
                     </div>

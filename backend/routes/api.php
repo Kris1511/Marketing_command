@@ -47,11 +47,53 @@ if (!function_exists('getOrCreateWorkspaceId')) {
     }
 }
 
+if (!function_exists('resolveNotificationUserId')) {
+    function resolveNotificationUserId(int $workspaceId): ?int {
+        $workspace = \App\Models\Workspace::find($workspaceId);
+        if (!$workspace) {
+            return null;
+        }
+
+        // 1. Workspace owner (if set and user exists)
+        if (!empty($workspace->owner_id)) {
+            if (\App\Models\User::where('id', $workspace->owner_id)->exists()) {
+                return (int) $workspace->owner_id;
+            }
+        }
+
+        // 2. Active user assigned to the workspace via user_workspace_roles
+        $assignedUser = $workspace->users()->where('is_active', true)->first()
+            ?? $workspace->users()->first();
+        if ($assignedUser) {
+            return (int) $assignedUser->id;
+        }
+
+        // 3. Fallback to active admin (in this system, admins manage All Workspaces)
+        $adminUser = \App\Models\User::where('is_active', true)->where('role', 'admin')->orderBy('id', 'asc')->first();
+        if ($adminUser) {
+            return (int) $adminUser->id;
+        }
+
+        // 4. Fallback to any active user or first user in users table
+        $fallbackUser = \App\Models\User::where('is_active', true)->orderBy('id', 'asc')->first()
+            ?? \App\Models\User::orderBy('id', 'asc')->first();
+
+        return $fallbackUser ? (int) $fallbackUser->id : null;
+    }
+}
+
 if (!function_exists('createNotification')) {
     function createNotification($workspaceId, string $type, string $title, string $message, ?string $channel = null): void {
         try {
             $wsId = getOrCreateWorkspaceId($workspaceId);
+            $userId = resolveNotificationUserId($wsId);
+            if (!$userId) {
+                \Illuminate\Support\Facades\Log::warning("[createNotification] Skipping notification insert because no valid user could be resolved for workspace {$wsId}");
+                return;
+            }
+
             \Illuminate\Support\Facades\DB::table('notifications')->insert([
+                'user_id'      => $userId,
                 'workspace_id' => $wsId,
                 'type'         => $type,
                 'title'        => $title,
@@ -3034,8 +3076,11 @@ Route::prefix('v1')->group(function () {
         $status = $validated['status'];
         $publishedAt = ($status === 'published') ? now() : null;
 
+        $targetWorkspaceId = getOrCreateWorkspaceId($validated['workspace_id'] ?? null);
+        $creatorId = $request->user()?->id ?? resolveNotificationUserId($targetWorkspaceId);
+
         $post = Post::create([
-            'workspace_id'    => getOrCreateWorkspaceId($validated['workspace_id'] ?? 1),
+            'workspace_id'    => $targetWorkspaceId,
             'content'         => $validated['content'],
             'platform_list'   => $validated['platform_list'],
             'status'          => $status,
@@ -3043,7 +3088,7 @@ Route::prefix('v1')->group(function () {
             'published_at'    => $publishedAt,
             'media_urls'      => $validated['media_urls'] ?? [],
             'approval_status' => 'approved',
-            'created_by_id'   => $request->user()->id ?? 1,
+            'created_by_id'   => $creatorId,
         ]);
 
         return response()->json([
@@ -3079,7 +3124,7 @@ Route::prefix('v1')->group(function () {
             'refresh_token'  => 'nullable|string',
         ]);
 
-        $workspaceId = getOrCreateWorkspaceId($request->input('workspace_id', 1));
+        $workspaceId = getOrCreateWorkspaceId($request->input('workspace_id'));
 
         // Upsert — if same workspace+platform+account already exists, update it
         $integration = \App\Models\Integration::updateOrCreate(
@@ -3133,7 +3178,7 @@ Route::prefix('v1')->group(function () {
             'account_name'         => 'nullable|string',
         ]);
 
-        $workspaceId = getOrCreateWorkspaceId($request->input('workspace_id', 1));
+        $workspaceId = getOrCreateWorkspaceId($request->input('workspace_id'));
         $accountId   = trim($validated['instagram_account_id']);
         $token       = trim($validated['access_token']);
         $accountName = trim($validated['account_name'] ?? '');
@@ -3141,7 +3186,8 @@ Route::prefix('v1')->group(function () {
         // Try fetching account details from Graph API
         $followers = 0;
         try {
-            $response = Http::withoutVerifying()->timeout(30)->connectTimeout(10)->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])->get("https://graph.facebook.com/v23.0/{$accountId}", [
+            $graphVer = config('services.facebook.graph_version', 'v23.0');
+            $response = Http::withoutVerifying()->timeout(30)->connectTimeout(10)->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])->get("https://graph.facebook.com/{$graphVer}/{$accountId}", [
                 'fields'       => 'id,username,name,followers_count',
                 'access_token' => $token,
             ]);
@@ -3241,7 +3287,7 @@ Route::prefix('v1')->group(function () {
             'video'           => 'nullable|file|mimes:mp4,mov,avi,mkv|max:512000', // 500MB
         ]);
 
-        $workspaceId = getOrCreateWorkspaceId($validated['workspace_id'] ?? 1);
+        $workspaceId = getOrCreateWorkspaceId($validated['workspace_id'] ?? null);
         $status = $validated['status'] ?? 'published';
         $postType = $validated['post_type'] ?? 'text';
         $message = $validated['message'] ?? '';
@@ -4565,11 +4611,12 @@ Route::prefix('v1')->group(function () {
             $params['after'] = $after;
         }
 
+        $graphVer = config('services.facebook.graph_version', 'v23.0');
         $response = Http::withoutVerifying()
             ->timeout(30)
             ->connectTimeout(10)
             ->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
-            ->get("https://graph.facebook.com/v23.0/{$fbPage->page_id}/conversations", $params);
+            ->get("https://graph.facebook.com/{$graphVer}/{$fbPage->page_id}/conversations", $params);
 
         if (!$response->successful()) {
             return response()->json([
@@ -4668,11 +4715,12 @@ Route::prefix('v1')->group(function () {
             $params['after'] = $validated['after'];
         }
 
+        $graphVer = config('services.facebook.graph_version', 'v23.0');
         $response = Http::withoutVerifying()
             ->timeout(30)
             ->connectTimeout(10)
             ->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
-            ->get("https://graph.facebook.com/v23.0/{$conversationId}/messages", $params);
+            ->get("https://graph.facebook.com/{$graphVer}/{$conversationId}/messages", $params);
 
         if (!$response->successful()) {
             return response()->json([
@@ -4730,11 +4778,12 @@ Route::prefix('v1')->group(function () {
             ], 404);
         }
 
+        $graphVer = config('services.facebook.graph_version', 'v23.0');
         $conversationResponse = Http::withoutVerifying()
             ->timeout(30)
             ->connectTimeout(10)
             ->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
-            ->get("https://graph.facebook.com/v23.0/{$conversationId}", [
+            ->get("https://graph.facebook.com/{$graphVer}/{$conversationId}", [
                 'fields'       => 'participants',
                 'access_token' => $fbPage->page_access_token,
             ]);
@@ -4763,11 +4812,12 @@ Route::prefix('v1')->group(function () {
             ], 422);
         }
 
+        $graphVer = config('services.facebook.graph_version', 'v23.0');
         $sendResponse = Http::withoutVerifying()
             ->timeout(30)
             ->connectTimeout(10)
             ->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
-            ->post("https://graph.facebook.com/v23.0/{$fbPage->page_id}/messages", [
+            ->post("https://graph.facebook.com/{$graphVer}/{$fbPage->page_id}/messages", [
                 'recipient'      => ['id' => $recipient['id']],
                 'messaging_type' => 'RESPONSE',
                 'message'        => ['text' => trim($validated['message'])],
@@ -4795,7 +4845,7 @@ Route::prefix('v1')->group(function () {
     });
 
     Route::get('/facebook/analytics', function (Request $request) {
-        $workspaceId    = (int) $request->query('workspace_id', 1);
+        $workspaceId    = (int) ($request->query('workspace_id') ?: getOrCreateWorkspaceId());
         $startDateParam = $request->query('start_date');
         $endDateParam   = $request->query('end_date');
 

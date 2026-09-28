@@ -65,6 +65,11 @@ class CommentNotificationService
         return $this->resolvedUserIds[$cacheKey] = $fallbackUser ? (int) $fallbackUser->id : null;
     }
 
+    protected function getGraphVersion(): string
+    {
+        return (string) config('services.facebook.graph_version', 'v23.0');
+    }
+
     public function __construct()
     {
         $caPath = 'C:\\PHP\\extras\\ssl\\cacert.pem';
@@ -116,7 +121,8 @@ class CommentNotificationService
 
                     // 1. Try published posts with comments
                     try {
-                        $url = "https://graph.facebook.com/v23.0/{$pageId}/published_posts";
+                        $version = $this->getGraphVersion();
+                        $url = "https://graph.facebook.com/{$version}/{$pageId}/published_posts";
                         $res = $this->httpClient->get($url, [
                             'query' => [
                                 'fields'       => 'id,message,created_time,comments{id,message,from,created_time}',
@@ -169,7 +175,8 @@ class CommentNotificationService
 
                     // 2. Fetch comments from uploaded photos (accessible with standard pages_read_engagement)
                     try {
-                        $photosRes = $this->httpClient->get("https://graph.facebook.com/v23.0/{$pageId}/photos", [
+                        $version = $this->getGraphVersion();
+                        $photosRes = $this->httpClient->get("https://graph.facebook.com/{$version}/{$pageId}/photos", [
                             'query' => [
                                 'type'         => 'uploaded',
                                 'fields'       => 'id,name,created_time,picture,source,link,comments{id,message,from,created_time}',
@@ -232,7 +239,8 @@ class CommentNotificationService
 
                     // 3. Fetch comments from uploaded videos (accessible with standard pages_read_engagement)
                     try {
-                        $videosRes = $this->httpClient->get("https://graph.facebook.com/v23.0/{$pageId}/videos", [
+                        $version = $this->getGraphVersion();
+                        $videosRes = $this->httpClient->get("https://graph.facebook.com/{$version}/{$pageId}/videos", [
                             'query' => [
                                 'fields'       => 'id,description,created_time,picture,permalink_url,comments{id,message,from,created_time}',
                                 'limit'        => 25,
@@ -304,7 +312,8 @@ class CommentNotificationService
                         foreach ($dbPosts as $dp) {
                             $dpPostId = $dp->fb_post_id;
                             try {
-                                $cRes = $this->httpClient->get("https://graph.facebook.com/v23.0/{$dpPostId}/comments", [
+                                $version = $this->getGraphVersion();
+                                $cRes = $this->httpClient->get("https://graph.facebook.com/{$version}/{$dpPostId}/comments", [
                                     'query' => [
                                         'fields'       => 'id,message,from,created_time',
                                         'limit'        => 25,
@@ -377,8 +386,9 @@ class CommentNotificationService
                 $token = $integ->refresh_token ?? $integ->access_token;
                 if (empty($token)) continue;
 
+                $version = $this->getGraphVersion();
                 $isIgToken = str_starts_with($token, 'IGAA');
-                $baseUrl = $isIgToken ? 'https://graph.instagram.com/v23.0' : 'https://graph.facebook.com/v23.0';
+                $baseUrl = $isIgToken ? "https://graph.instagram.com/{$version}" : "https://graph.facebook.com/{$version}";
                 $targetNode = (!empty($integ->account_id) && !$isIgToken) ? $integ->account_id : 'me';
 
                 try {
@@ -443,9 +453,22 @@ class CommentNotificationService
                             $username = $c['username'] ?? 'someone';
                             $cTime = !empty($c['timestamp']) ? Carbon::parse($c['timestamp']) : now();
 
-                            $targetWs = $integ->workspace_id ?? $workspaceId;
-                            $userId   = $this->resolveUserIdForWorkspace($targetWs);
-                            if (empty($userId)) continue;
+                            $targetWs = $integ->workspace_id ?: ($workspaceId ?: \App\Models\Workspace::first()?->id);
+                            if (!$targetWs) {
+                                Log::warning('[IG COMMENT SYNC] Skipping comment notification because no valid workspace could be resolved', [
+                                    'comment_id' => $commentId,
+                                ]);
+                                continue;
+                            }
+
+                            $userId = $this->resolveUserIdForWorkspace($targetWs);
+                            if (empty($userId)) {
+                                Log::warning('[IG COMMENT SYNC] Skipping comment notification because no valid user could be resolved for workspace', [
+                                    'workspace_id' => $targetWs,
+                                    'comment_id'   => $commentId,
+                                ]);
+                                continue;
+                            }
 
                             DB::table('notifications')->insert([
                                 'user_id'        => $userId,
@@ -458,10 +481,7 @@ class CommentNotificationService
                                 'created_at'     => $cTime,
                                 'updated_at'     => now(),
                             ]);
-                            $targetWs = $integ->workspace_id ?? $workspaceId ?? 1;
-                            if ($targetWs) {
-                                \Illuminate\Support\Facades\Cache::put("comments_stream_v_{$targetWs}", time(), 86400);
-                            }
+                            \Illuminate\Support\Facades\Cache::put("comments_stream_v_{$targetWs}", time(), 86400);
                         }
                     }
                 } catch (\Throwable $ie) {
@@ -623,7 +643,8 @@ class CommentNotificationService
         }
 
         try {
-            $res = $this->httpClient->post("https://graph.facebook.com/v23.0/{$pageId}/subscribed_apps", [
+            $version = $this->getGraphVersion();
+            $res = $this->httpClient->post("https://graph.facebook.com/{$version}/{$pageId}/subscribed_apps", [
                 'form_params' => [
                     'subscribed_fields' => 'messages,feed',
                     'access_token'      => $token,

@@ -11,6 +11,8 @@ import {
   Compass,
   ArrowUpRight,
   BarChart3,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import {
   Chart as ChartJS,
@@ -59,6 +61,8 @@ export default function GoogleAnalyticsDashboardSection({
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [sourcesPage, setSourcesPage] = useState(1);
+  const SOURCES_PER_PAGE = 5;
 
   const fetchMetrics = useCallback(
     async (isManual = false) => {
@@ -117,9 +121,19 @@ export default function GoogleAnalyticsDashboardSection({
     fetchMetrics();
   }, [fetchMetrics, refreshTrigger]);
 
+  useEffect(() => {
+    setSourcesPage(1);
+  }, [workspaceId, startDate, endDate, data]);
+
   const overview = data?.overview;
   const isAuthRequired = Boolean(data?.auth_required || overview?.auth_required);
   const sources = data?.sources || [];
+  const totalSourcesPages = Math.max(1, Math.ceil(sources.length / SOURCES_PER_PAGE));
+  const currentSourcesPage = Math.min(sourcesPage, totalSourcesPages);
+  const paginatedSources = sources.slice(
+    (currentSourcesPage - 1) * SOURCES_PER_PAGE,
+    currentSourcesPage * SOURCES_PER_PAGE
+  );
   const trend = data?.trend;
 
   // Chart configuration
@@ -672,53 +686,56 @@ export default function GoogleAnalyticsDashboardSection({
               </thead>
               <tbody>
                 {sources.length > 0 ? (
-                  sources.map((src, i) => (
-                    <tr
-                      key={src.source_medium || src.channel || i}
-                      style={{
-                        borderBottom: '1px solid #f1f5f9',
-                        transition: 'background 0.15s ease',
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                    >
-                      <td style={{ padding: '8px 10px', color: '#1e293b', fontWeight: '600' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
-                          <span style={{ fontSize: '11px', color: '#94a3b8', width: '18px', flexShrink: 0 }}>
-                            {i + 1}.
-                          </span>
-                          <span
-                            title={src.source_medium || src.channel || '(not set)'}
-                            style={{
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              display: 'block',
-                            }}
-                          >
-                            {src.source_medium || src.channel || '(not set)'}
-                          </span>
-                        </div>
-                      </td>
-                      <td style={{ padding: '8px 8px', textAlign: 'right', fontWeight: '700', color: '#0f172a', whiteSpace: 'nowrap' }}>
-                        {formatNum(src.sessions)}
-                      </td>
-                      <td style={{ padding: '8px 8px', textAlign: 'right', color: '#64748b', whiteSpace: 'nowrap' }}>
-                        {formatNum(src.key_events ?? 0)}
-                      </td>
-                      <td
+                  paginatedSources.map((src, idx) => {
+                    const i = (currentSourcesPage - 1) * SOURCES_PER_PAGE + idx;
+                    return (
+                      <tr
+                        key={src.source_medium || src.channel || i}
                         style={{
-                          padding: '8px 14px 8px 8px',
-                          textAlign: 'right',
-                          color: '#0f172a',
-                          fontWeight: '600',
-                          whiteSpace: 'nowrap',
+                          borderBottom: '1px solid #f1f5f9',
+                          transition: 'background 0.15s ease',
                         }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                       >
-                        {src.revenue_formatted || (src.total_revenue ? `₹${Number(src.total_revenue).toFixed(2)}` : '₹0.00')}
-                      </td>
-                    </tr>
-                  ))
+                        <td style={{ padding: '8px 10px', color: '#1e293b', fontWeight: '600' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                            <span style={{ fontSize: '11px', color: '#94a3b8', width: '18px', flexShrink: 0 }}>
+                              {i + 1}.
+                            </span>
+                            <span
+                              title={src.source_medium || src.channel || '(not set)'}
+                              style={{
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                display: 'block',
+                              }}
+                            >
+                              {src.source_medium || src.channel || '(not set)'}
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{ padding: '8px 8px', textAlign: 'right', fontWeight: '700', color: '#0f172a', whiteSpace: 'nowrap' }}>
+                          {formatNum(src.sessions)}
+                        </td>
+                        <td style={{ padding: '8px 8px', textAlign: 'right', color: '#64748b', whiteSpace: 'nowrap' }}>
+                          {formatNum(src.key_events ?? 0)}
+                        </td>
+                        <td
+                          style={{
+                            padding: '8px 14px 8px 8px',
+                            textAlign: 'right',
+                            color: '#0f172a',
+                            fontWeight: '600',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {src.revenue_formatted || (src.total_revenue ? `₹${Number(src.total_revenue).toFixed(2)}` : '₹0.00')}
+                        </td>
+                      </tr>
+                    );
+                  })
                 ) : (
                   <tr>
                     <td colSpan={4} style={{ padding: '36px 12px', textAlign: 'center', color: '#94a3b8' }}>
@@ -729,9 +746,96 @@ export default function GoogleAnalyticsDashboardSection({
               </tbody>
             </table>
           </div>
+
+          {/* 5-Item Pagination Controls */}
           {sources.length > 0 && (
-            <div style={{ marginTop: '10px', fontSize: '11.5px', color: '#94a3b8', textAlign: 'right' }}>
-              Showing {sources.length} traffic acquisition sources
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginTop: '12px',
+                paddingTop: '10px',
+                borderTop: '1px solid #f1f5f9',
+                flexWrap: 'wrap',
+                gap: '8px',
+              }}
+            >
+              <div id="ga-traffic-count-info" style={{ fontSize: '11.5px', color: '#64748b' }}>
+                Showing <strong>{(currentSourcesPage - 1) * SOURCES_PER_PAGE + 1}</strong>–
+                <strong>{Math.min(currentSourcesPage * SOURCES_PER_PAGE, sources.length)}</strong> of{' '}
+                <strong>{sources.length}</strong> sources
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <button
+                  id="ga-traffic-prev-btn"
+                  type="button"
+                  disabled={currentSourcesPage <= 1 || loading}
+                  onClick={() => setSourcesPage((prev) => Math.max(1, prev - 1))}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '3px',
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    fontSize: '11.5px',
+                    fontWeight: '600',
+                    border: '1px solid',
+                    borderColor: currentSourcesPage <= 1 || loading ? '#e2e8f0' : '#cbd5e1',
+                    background: currentSourcesPage <= 1 || loading ? '#f8fafc' : '#ffffff',
+                    color: currentSourcesPage <= 1 || loading ? '#94a3b8' : '#334155',
+                    cursor: currentSourcesPage <= 1 || loading ? 'not-allowed' : 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  <ChevronLeft size={13} />
+                  <span>Prev</span>
+                </button>
+
+                <div
+                  id="ga-traffic-page-badge"
+                  style={{
+                    padding: '4px 8px',
+                    borderRadius: '6px',
+                    border: '1px solid #e2e8f0',
+                    background: '#ffffff',
+                    color: '#0f172a',
+                    fontSize: '11.5px',
+                    fontWeight: '700',
+                    minWidth: '44px',
+                    textAlign: 'center',
+                  }}
+                >
+                  {currentSourcesPage} / {totalSourcesPages}
+                </div>
+
+                <button
+                  id="ga-traffic-next-btn"
+                  type="button"
+                  disabled={currentSourcesPage >= totalSourcesPages || loading}
+                  onClick={() => setSourcesPage((prev) => Math.min(totalSourcesPages, prev + 1))}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '3px',
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    fontSize: '11.5px',
+                    fontWeight: '600',
+                    border: '1px solid',
+                    borderColor: currentSourcesPage >= totalSourcesPages || loading ? '#e2e8f0' : '#bfdbfe',
+                    background: currentSourcesPage >= totalSourcesPages || loading ? '#f8fafc' : '#ffffff',
+                    color: currentSourcesPage >= totalSourcesPages || loading ? '#94a3b8' : '#2563eb',
+                    cursor: currentSourcesPage >= totalSourcesPages || loading ? 'not-allowed' : 'pointer',
+                    boxShadow: currentSourcesPage >= totalSourcesPages || loading ? 'none' : '0 1px 2px rgba(37,99,235,0.06)',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  <span>Next</span>
+                  <ChevronRight size={13} />
+                </button>
+              </div>
             </div>
           )}
         </div>

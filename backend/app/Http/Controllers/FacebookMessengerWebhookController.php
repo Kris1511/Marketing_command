@@ -4,6 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Models\FacebookMessengerWebhookEvent;
 use App\Models\FacebookPage;
+use App\Models\Integration;
+use App\Models\User;
+use App\Models\Workspace;
 use App\Services\WorkspaceSocialAccounts;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
@@ -14,6 +17,51 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class FacebookMessengerWebhookController extends Controller
 {
+    /**
+     * Resolve a valid existing user ID for the given workspace.
+     * Follows the application's domain model hierarchy:
+     * 1. Workspace owner (if set and user exists)
+     * 2. Active user assigned to the workspace via user_workspace_roles
+     * 3. Any active administrator (since admins manage workspaces)
+     * 4. First active user or first existing user in the database
+     */
+    protected function resolveUserIdForWorkspace(?int $workspaceId): ?int
+    {
+        if (!$workspaceId) {
+            return null;
+        }
+
+        $workspace = Workspace::find($workspaceId);
+        if (!$workspace) {
+            return null;
+        }
+
+        // 1. Check workspace owner
+        if (!empty($workspace->owner_id)) {
+            if (User::where('id', $workspace->owner_id)->exists()) {
+                return (int) $workspace->owner_id;
+            }
+        }
+
+        // 2. Check users assigned to workspace
+        $assignedUser = $workspace->users()->where('is_active', true)->first()
+            ?? $workspace->users()->first();
+        if ($assignedUser) {
+            return (int) $assignedUser->id;
+        }
+
+        // 3. Fallback to active admin (in this system, admins manage All Workspaces)
+        $adminUser = User::where('is_active', true)->where('role', 'admin')->orderBy('id', 'asc')->first();
+        if ($adminUser) {
+            return (int) $adminUser->id;
+        }
+
+        // 4. Fallback to any active user or first user in users table
+        $fallbackUser = User::where('is_active', true)->orderBy('id', 'asc')->first()
+            ?? User::orderBy('id', 'asc')->first();
+
+        return $fallbackUser ? (int) $fallbackUser->id : null;
+    }
     public function verify(Request $request)
     {
         $mode = $request->query('hub_mode', $request->query('hub.mode'));
@@ -79,14 +127,13 @@ class FacebookMessengerWebhookController extends Controller
                 }
             }
 
-            $effectiveWorkspaceId = $workspaceId ?? $page?->workspace_id ?? 1;
-            $userId = 1;
-            try {
-                $wsUser = \App\Models\Workspace::find($effectiveWorkspaceId)?->users()->first();
-                if ($wsUser) {
-                    $userId = $wsUser->id;
-                }
-            } catch (\Throwable $ue) {}
+            $effectiveWorkspaceId = $workspaceId ?: $page?->workspace_id;
+            if (!$effectiveWorkspaceId) {
+                $effectiveWorkspaceId = FacebookPage::where('page_id', $pageId)->value('workspace_id')
+                    ?: Integration::where('account_id', $pageId)->value('workspace_id');
+            }
+
+            $userId = $this->resolveUserIdForWorkspace($effectiveWorkspaceId);
 
             // ── Handle feed change events (post comments) ────────────────────
             // These arrive when subscribed_fields includes 'feed'.
@@ -123,6 +170,16 @@ class FacebookMessengerWebhookController extends Controller
                     ->exists();
 
                 if ($exists) { $duplicates++; continue; }
+
+                if (!$effectiveWorkspaceId || !$userId) {
+                    Log::warning('[FB WEBHOOK] Skipping comment notification because workspace or valid user could not be resolved', [
+                        'workspace_id' => $effectiveWorkspaceId,
+                        'user_id'      => $userId,
+                        'comment_id'   => $commentId,
+                    ]);
+                    $duplicates++;
+                    continue;
+                }
 
                 try {
                     \Illuminate\Support\Facades\DB::table('notifications')->insert([
@@ -179,6 +236,16 @@ class FacebookMessengerWebhookController extends Controller
 
                 if ($exists) { $duplicates++; continue; }
 
+                if (!$effectiveWorkspaceId || !$userId) {
+                    Log::warning('[IG WEBHOOK] Skipping comment notification because workspace or valid user could not be resolved', [
+                        'workspace_id' => $effectiveWorkspaceId,
+                        'user_id'      => $userId,
+                        'comment_id'   => $commentId,
+                    ]);
+                    $duplicates++;
+                    continue;
+                }
+
                 try {
                     \Illuminate\Support\Facades\DB::table('notifications')->insert([
                         'user_id'        => $userId,
@@ -227,7 +294,7 @@ class FacebookMessengerWebhookController extends Controller
                     $event = FacebookMessengerWebhookEvent::firstOrCreate(
                         ['event_key' => $eventKey],
                         [
-                            'workspace_id'      => $workspaceId,
+                            'workspace_id'      => $effectiveWorkspaceId,
                             'facebook_page_id'  => $page?->id,
                             'page_id'           => $pageId,
                             'sender_id'         => data_get($messaging, 'sender.id'),
@@ -242,9 +309,9 @@ class FacebookMessengerWebhookController extends Controller
 
                     if ($event->wasRecentlyCreated) {
                         $created++;
-                        if ($workspaceId) {
-                            $vKeyFb = "fb_inbox_conv_v_{$workspaceId}";
-                            $vKeyIg = "ig_inbox_conv_v_{$workspaceId}";
+                        if ($effectiveWorkspaceId) {
+                            $vKeyFb = "fb_inbox_conv_v_{$effectiveWorkspaceId}";
+                            $vKeyIg = "ig_inbox_conv_v_{$effectiveWorkspaceId}";
                             Cache::put($vKeyFb, (int) Cache::get($vKeyFb, 1) + 1, now()->addDays(7));
                             Cache::put($vKeyIg, (int) Cache::get($vKeyIg, 1) + 1, now()->addDays(7));
                         }
@@ -290,12 +357,13 @@ class FacebookMessengerWebhookController extends Controller
             ]);
         }
 
+        $version = config('services.facebook.graph_version', 'v23.0');
         $response = Http::withoutVerifying()
             ->asForm()
             ->timeout(30)
             ->connectTimeout(10)
             ->withOptions(['curl' => [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4]])
-            ->post("https://graph.facebook.com/v23.0/{$fbPage->page_id}/subscribed_apps", [
+            ->post("https://graph.facebook.com/{$version}/{$fbPage->page_id}/subscribed_apps", [
                 // Subscribe to messaging events (Messenger & Instagram) in addition to feed comments
                 'subscribed_fields' => 'messages,messaging_postbacks,message_reactions,message_reads,feed',
                 'access_token'      => $fbPage->page_access_token,

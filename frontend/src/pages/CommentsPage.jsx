@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
-import axiosInstance from '../api/axiosInstance';
+import axiosInstance, { API_BASE_URL } from '../api/axiosInstance';
 import {
   Check,
   Search,
@@ -232,7 +232,7 @@ function getCanonicalParentId(item) {
   const parentId = getCommentParentId(item);
   if (!parentId) return null;
 
-  // For Facebook composite IDs like "115864121526929_982499514861065",
+  // For Facebook composite IDs like "{pageId}_{postId}",
   // normalize to the bare post id if it contains an underscore between digits
   if (item?.type === 'facebook_comment' && String(parentId).includes('_')) {
     const subParts = String(parentId).split('_');
@@ -300,9 +300,24 @@ export default function CommentsPage() {
   const [realtimeStatus, setRealtimeStatus] = useState('connecting'); // 'connected' | 'reconnecting' | 'idle'
   const [newCommentAlert, setNewCommentAlert] = useState(0);
 
-  // Pagination states
-  const [page, setPage] = useState(1);
-  const perPage = 10;
+  // Independent pagination states for each platform (5 comments per page)
+  const [pageByPlatform, setPageByPlatform] = useState({
+    facebook: 1,
+    instagram: 1,
+    youtube: 1,
+  });
+  const perPage = 5;
+
+  const setPage = useCallback((updater) => {
+    setPageByPlatform((prev) => {
+      const current = prev[platform] || 1;
+      const next = typeof updater === 'function' ? updater(current) : updater;
+      return {
+        ...prev,
+        [platform]: Math.max(1, next),
+      };
+    });
+  }, [platform]);
 
   // Cached related posts/media/videos
   const postsCacheRef = useRef({
@@ -316,19 +331,24 @@ export default function CommentsPage() {
   const [igPosts, setIgPosts] = useState([]);
   const [ytVideos, setYtVideos] = useState([]);
 
-  // Debounce search query
+  // Debounce search query - resets current platform pagination to page 1
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(searchQuery);
-      setPage(1);
+      setPageByPlatform((prev) => ({ ...prev, [platform]: 1 }));
     }, 300);
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, platform]);
 
-  // Reset page when platform, workspace, or date changes
+  // Reset pagination to page 1 on workspace change
   useEffect(() => {
-    setPage(1);
-  }, [platform, selectedWorkspaceId, startDate, endDate]);
+    setPageByPlatform({ facebook: 1, instagram: 1, youtube: 1 });
+  }, [selectedWorkspaceId]);
+
+  // Reset pagination to page 1 on date range change
+  useEffect(() => {
+    setPageByPlatform({ facebook: 1, instagram: 1, youtube: 1 });
+  }, [startDate, endDate]);
 
   // Helper to deduplicate array by id
   const dedupeById = (list) => {
@@ -522,7 +542,7 @@ export default function CommentsPage() {
       if (isUnmounted) return;
 
       try {
-        const baseURL = axiosInstance.defaults.baseURL || 'http://localhost:8000/api/v1';
+        const baseURL = API_BASE_URL || axiosInstance.defaults.baseURL;
         const token = localStorage.getItem('auth_token') || '';
         const params = new URLSearchParams({
           workspace_id: String(selectedWorkspaceId),
@@ -957,10 +977,21 @@ export default function CommentsPage() {
 
   // Pagination calculation
   const totalComments = filteredComments.length;
-  const groupedComments = useMemo(() => {
+  const totalPages = Math.max(1, Math.ceil(totalComments / perPage));
+  const rawCurrentPage = pageByPlatform[platform] || 1;
+  const currentPage = Math.min(Math.max(1, rawCurrentPage), totalPages);
+
+  // Paginate exactly 5 comments at a time for the current platform
+  const paginatedComments = useMemo(() => {
+    const startIdx = (currentPage - 1) * perPage;
+    return filteredComments.slice(startIdx, startIdx + perPage);
+  }, [filteredComments, currentPage, perPage]);
+
+  // Group paginated comments under their parent post/video
+  const paginatedGroups = useMemo(() => {
     const groups = new Map();
 
-    filteredComments.forEach((item) => {
+    paginatedComments.forEach((item) => {
       const groupKey = getCommentGroupKey(item);
       const postMeta = getAssociatedContent(item);
 
@@ -997,28 +1028,8 @@ export default function CommentsPage() {
       });
     });
 
-    const result = Array.from(groups.values()).sort((a, b) => b.newestTime - a.newestTime);
-
-    // Temporary console logging for normalized grouped posts
-    console.log('[DEBUG Grouped Comments Normalized]', result.map((g) => ({
-      platform: g.platform,
-      contentId: g.contentId,
-      title: g.title,
-      thumbnailUrl: g.thumbnailUrl,
-      postUrl: g.postUrl,
-      commentCount: g.comments?.length,
-    })));
-
-    return result;
-  }, [filteredComments, getAssociatedContent]);
-
-  const totalGroups = groupedComments.length;
-  const totalPages = Math.max(1, Math.ceil(totalGroups / perPage));
-  const currentPage = Math.min(page, totalPages);
-  const paginatedGroups = useMemo(() => {
-    const startIdx = (currentPage - 1) * perPage;
-    return groupedComments.slice(startIdx, startIdx + perPage);
-  }, [groupedComments, currentPage, perPage]);
+    return Array.from(groups.values()).sort((a, b) => b.newestTime - a.newestTime);
+  }, [paginatedComments, getAssociatedContent]);
 
   // Reset date range
   const handleClearDates = () => {
@@ -1851,7 +1862,7 @@ export default function CommentsPage() {
       )}
 
       {/* Pagination Footer */}
-      {totalGroups > 0 && (
+      {totalComments > 0 && (
         <div
           className="panel"
           style={{
@@ -1868,9 +1879,8 @@ export default function CommentsPage() {
           }}
         >
           <div style={{ fontSize: '12.5px', color: '#64748b' }}>
-            Showing posts <strong>{(currentPage - 1) * perPage + 1}</strong> to{' '}
-            <strong>{Math.min(currentPage * perPage, totalGroups)}</strong> of{' '}
-            <strong>{totalGroups}</strong> posts ({totalComments} {totalComments === 1 ? 'comment' : 'comments'} total)
+            Showing <strong>{(currentPage - 1) * perPage + 1}–{Math.min(currentPage * perPage, totalComments)}</strong> of{' '}
+            <strong>{totalComments}</strong> {totalComments === 1 ? 'comment' : 'comments'}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

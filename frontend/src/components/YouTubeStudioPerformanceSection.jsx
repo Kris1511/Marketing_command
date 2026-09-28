@@ -23,6 +23,8 @@ import {
   Calendar,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   ArrowUpRight,
   X,
   Maximize2,
@@ -167,7 +169,8 @@ export default function YouTubeStudioPerformanceSection({
   const [error, setError] = useState(null);
   const [selectedMetric, setSelectedMetric] = useState('views'); // views, watch_time, subscribers
   const [activeTab, setActiveTab] = useState('all'); // all, videos, shorts, live, playlists, posts
-  const [contentLimit, setContentLimit] = useState(10); // 10-item pagination limit (shows all 6 Shorts by default)
+  const [contentPage, setContentPage] = useState(1);
+  const CONTENT_PER_PAGE = 5;
   const [hoveredHour, setHoveredHour] = useState(null);
   const [showRealtimeModal, setShowRealtimeModal] = useState(false);
   const [showSearchTermsModal, setShowSearchTermsModal] = useState(false);
@@ -604,18 +607,14 @@ export default function YouTubeStudioPerformanceSection({
     });
   }, [rawItems, activeTab]);
 
-  // 2. Visible items sliced to contentLimit (initially 5, then 10, 15, 20...)
+  // 2. Pagination calculation and visible items sliced to exactly 5 per page
+  const totalContentPages = Math.max(1, Math.ceil(filteredSortedItems.length / CONTENT_PER_PAGE));
+  const currentContentPage = Math.min(contentPage, totalContentPages);
+
   const visibleItems = useMemo(() => {
-    return filteredSortedItems.slice(0, contentLimit);
-  }, [filteredSortedItems, contentLimit]);
-
-  // 3. Whether there are more items available
-  const hasMoreContent = filteredSortedItems.length > contentLimit;
-
-  // 4. Load More handler (reveals next 10 items while keeping previous ones)
-  const handleLoadMore = () => {
-    setContentLimit((prev) => prev + 10);
-  };
+    const start = (currentContentPage - 1) * CONTENT_PER_PAGE;
+    return filteredSortedItems.slice(start, start + CONTENT_PER_PAGE);
+  }, [filteredSortedItems, currentContentPage]);
 
   // Max views in 48h for scaling the hourly bar chart
   const maxHourlyView = useMemo(() => {
@@ -2757,7 +2756,7 @@ export default function YouTubeStudioPerformanceSection({
                 type="button"
                 onClick={() => {
                   setActiveTab(tab.id);
-                  setContentLimit(10);
+                  setContentPage(1);
                 }}
                 style={{
                   display: 'inline-flex',
@@ -3033,41 +3032,95 @@ export default function YouTubeStudioPerformanceSection({
           </div>
         )}
 
-        {/* Load More Button (Loads next 5 items, keeping previous items visible) */}
-        {!loading && hasMoreContent && (
-          <div style={{ display: 'flex', justifyContent: 'center', marginTop: '16px', paddingTop: '4px' }}>
-            <button
-              type="button"
-              id="yt-load-more-btn"
-              onClick={handleLoadMore}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '6px',
-                padding: '8px 24px',
-                background: '#ffffff',
-                color: '#0f172a',
-                border: '1px solid #cbd5e1',
-                borderRadius: '20px',
-                fontSize: '13px',
-                fontWeight: '600',
-                cursor: 'pointer',
-                boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
-                transition: 'all 0.15s ease',
-              }}
-              onMouseOver={(e) => {
-                e.currentTarget.style.background = '#f8fafc';
-                e.currentTarget.style.borderColor = '#94a3b8';
-              }}
-              onMouseOut={(e) => {
-                e.currentTarget.style.background = '#ffffff';
-                e.currentTarget.style.borderColor = '#cbd5e1';
-              }}
-            >
-              <ChevronDown size={14} color="#64748b" />
-              <span>Load more</span>
-            </button>
+        {/* 5-Item Pagination Controls */}
+        {!loading && filteredSortedItems.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginTop: '16px',
+              paddingTop: '12px',
+              borderTop: '1px solid #f1f5f9',
+              flexWrap: 'wrap',
+              gap: '12px',
+            }}
+          >
+            <div id="yt-content-count-info" style={{ fontSize: '12.5px', color: '#64748b' }}>
+              Showing <strong>{(currentContentPage - 1) * CONTENT_PER_PAGE + 1}</strong>–
+              <strong>{Math.min(currentContentPage * CONTENT_PER_PAGE, filteredSortedItems.length)}</strong> of{' '}
+              <strong>{filteredSortedItems.length}</strong> {filteredSortedItems.length === 1 ? 'item' : 'items'}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                id="yt-content-prev-btn"
+                type="button"
+                disabled={currentContentPage <= 1 || loading}
+                onClick={() => setContentPage((prev) => Math.max(1, prev - 1))}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  fontSize: '12.5px',
+                  fontWeight: '600',
+                  border: '1px solid',
+                  borderColor: currentContentPage <= 1 || loading ? '#e2e8f0' : '#cbd5e1',
+                  background: currentContentPage <= 1 || loading ? '#f8fafc' : '#ffffff',
+                  color: currentContentPage <= 1 || loading ? '#94a3b8' : '#334155',
+                  cursor: currentContentPage <= 1 || loading ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <ChevronLeft size={14} />
+                <span>Previous</span>
+              </button>
+
+              <div
+                id="yt-content-page-badge"
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  border: '1px solid #e2e8f0',
+                  background: '#ffffff',
+                  color: '#0f172a',
+                  fontSize: '12.5px',
+                  fontWeight: '700',
+                  minWidth: '54px',
+                  textAlign: 'center',
+                }}
+              >
+                {currentContentPage} / {totalContentPages}
+              </div>
+
+              <button
+                id="yt-content-next-btn"
+                type="button"
+                disabled={currentContentPage >= totalContentPages || loading}
+                onClick={() => setContentPage((prev) => Math.min(totalContentPages, prev + 1))}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '6px 16px',
+                  borderRadius: '6px',
+                  fontSize: '12.5px',
+                  fontWeight: '600',
+                  border: '1px solid',
+                  borderColor: currentContentPage >= totalContentPages || loading ? '#e2e8f0' : '#bfdbfe',
+                  background: currentContentPage >= totalContentPages || loading ? '#f8fafc' : '#ffffff',
+                  color: currentContentPage >= totalContentPages || loading ? '#94a3b8' : '#2563eb',
+                  cursor: currentContentPage >= totalContentPages || loading ? 'not-allowed' : 'pointer',
+                  boxShadow: currentContentPage >= totalContentPages || loading ? 'none' : '0 1px 2px rgba(37,99,235,0.06)',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <span>Next</span>
+                <ChevronRight size={14} />
+              </button>
+            </div>
           </div>
         )}
       </div>

@@ -107,7 +107,17 @@ class FacebookAuthController extends Controller
      */
     public function redirect(Request $request)
     {
-        $workspaceId = $request->query('workspace_id', '1');
+        $workspaceId = $request->query('workspace_id');
+        if (empty($workspaceId) || $workspaceId === 'all') {
+            $workspaceId = \App\Models\Workspace::first()?->id;
+        }
+        if (!$workspaceId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'A valid workspace must be selected or exist to connect Facebook/Instagram.',
+            ], 422);
+        }
+        $workspaceId = (int) $workspaceId;
         $force       = $request->boolean('force') || $request->boolean('reconnect');
 
         // 1. Detect whether an active valid Facebook connection already exists for this workspace or across workspaces
@@ -198,13 +208,28 @@ class FacebookAuthController extends Controller
     {
         $code        = $request->query('code');
         $stateRaw    = $request->query('state', '');
-        $workspaceId = 1;
+        $workspaceId = null;
 
         if ($stateRaw) {
             $decoded = json_decode(base64_decode($stateRaw), true);
-            if (is_array($decoded) && isset($decoded['workspace_id'])) {
-                $workspaceId = $decoded['workspace_id'];
+            if (is_array($decoded) && !empty($decoded['workspace_id'])) {
+                $workspaceId = (int) $decoded['workspace_id'];
             }
+        }
+
+        if (!$workspaceId && $request->filled('workspace_id')) {
+            $workspaceId = (int) $request->query('workspace_id');
+        }
+
+        if (!$workspaceId) {
+            $workspaceId = \App\Models\Workspace::first()?->id;
+        }
+
+        if (!$workspaceId) {
+            return $this->renderErrorPopup(
+                'Workspace Not Found',
+                'Facebook authentication failed because no valid workspace could be resolved from OAuth state or database.'
+            );
         }
 
         $appId       = $this->getAppId();
@@ -760,7 +785,17 @@ class FacebookAuthController extends Controller
      */
     public function pages(Request $request)
     {
-        $workspaceId = $request->query('workspace_id', 1);
+        $workspaceId = $request->query('workspace_id');
+        if (empty($workspaceId) || $workspaceId === 'all') {
+            $workspaceId = \App\Models\Workspace::first()?->id;
+        }
+        if (!$workspaceId) {
+            return response()->json([
+                'success' => true,
+                'data'    => [],
+            ]);
+        }
+        $workspaceId = (int) $workspaceId;
         $pages       = FacebookPage::where('workspace_id', $workspaceId)->get();
 
         if ($pages->isEmpty()) {
@@ -794,8 +829,15 @@ class FacebookAuthController extends Controller
      */
     public function disconnect(Request $request)
     {
-        $workspaceId = $request->input('workspace_id', 1);
+        $workspaceId = $request->input('workspace_id');
+        if (empty($workspaceId) || !is_numeric($workspaceId)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'A valid workspace_id is required to disconnect Facebook.',
+            ], 422);
+        }
 
+        $workspaceId = (int) $workspaceId;
         FacebookPage::where('workspace_id', $workspaceId)->delete();
         Integration::where('workspace_id', $workspaceId)->where('platform', 'facebook')->delete();
 
@@ -811,7 +853,17 @@ class FacebookAuthController extends Controller
      */
     public function testConnection(Request $request)
     {
-        $workspaceId = $request->query('workspace_id', 1);
+        $workspaceId = $request->query('workspace_id');
+        if (empty($workspaceId) || $workspaceId === 'all') {
+            $workspaceId = \App\Models\Workspace::first()?->id;
+        }
+        if (!$workspaceId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No valid workspace found.',
+            ], 404);
+        }
+        $workspaceId = (int) $workspaceId;
         $page        = $this->resolvePage($workspaceId);
 
         if (!$page) {
@@ -928,8 +980,9 @@ HTML;
     /**
      * Render styled HTML response for popup window when connection already exists.
      */
-    protected function renderAlreadyConnectedResponse(string $title, string $message, array $extra = [], $workspaceId = 1)
+    protected function renderAlreadyConnectedResponse(string $title, string $message, array $extra = [], $workspaceId = null)
     {
+        $workspaceId  = $workspaceId ?: \App\Models\Workspace::first()?->id;
         $escapedTitle = htmlspecialchars($title);
         $escapedMsg   = htmlspecialchars($message);
         $jsonPayload  = json_encode(array_merge(['type' => 'FACEBOOK_ALREADY_CONNECTED', 'message' => $message], $extra));

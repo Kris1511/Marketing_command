@@ -10,7 +10,9 @@ import {
   AlertCircle,
   TrendingUp,
   Globe,
-  ExternalLink
+  ExternalLink,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import {
   Chart as ChartJS,
@@ -45,6 +47,8 @@ export default function GoogleSearchConsoleDashboardSection({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [queriesPage, setQueriesPage] = useState(1);
+  const QUERIES_PER_PAGE = 5;
 
   const fetchMetrics = useCallback(async (isManualRefresh = false) => {
     if (!workspaceId) return;
@@ -107,9 +111,19 @@ export default function GoogleSearchConsoleDashboardSection({
     fetchMetrics();
   }, [fetchMetrics, refreshTrigger]);
 
+  useEffect(() => {
+    setQueriesPage(1);
+  }, [workspaceId, startDate, endDate, data]);
+
   const overview = data?.overview || {};
   const isAuthRequired = Boolean(data?.auth_required || overview?.auth_required);
   const queries = data?.queries || [];
+  const totalQueriesPages = Math.max(1, Math.ceil(queries.length / QUERIES_PER_PAGE));
+  const currentQueriesPage = Math.min(queriesPage, totalQueriesPages);
+  const paginatedQueries = queries.slice(
+    (currentQueriesPage - 1) * QUERIES_PER_PAGE,
+    currentQueriesPage * QUERIES_PER_PAGE
+  );
   const trend = data?.trend || {};
 
   // Build Trend Chart Data
@@ -670,64 +684,67 @@ export default function GoogleSearchConsoleDashboardSection({
               </thead>
               <tbody>
                 {queries.length > 0 ? (
-                  queries.map((q, i) => (
-                    <tr
-                      key={q.query || i}
-                      style={{
-                        borderBottom: '1px solid #f1f5f9',
-                        transition: 'background 0.15s ease',
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                    >
-                      <td style={{ padding: '8px 10px', color: '#1e293b', fontWeight: '600' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
-                          <span style={{ fontSize: '11px', color: '#94a3b8', width: '18px', flexShrink: 0 }}>
-                            {i + 1}.
-                          </span>
-                          <span
-                            title={q.query}
-                            style={{
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              display: 'block',
-                            }}
-                          >
-                            {q.query}
-                          </span>
-                        </div>
-                      </td>
-                      <td style={{ padding: '8px 8px', textAlign: 'right', fontWeight: '700', color: '#0284c7', whiteSpace: 'nowrap' }}>
-                        {formatNum(q.clicks)}
-                      </td>
-                      <td style={{ padding: '8px 8px', textAlign: 'right', color: '#475569', whiteSpace: 'nowrap' }}>
-                        {formatNum(q.impressions)}
-                      </td>
-                      <td
+                  paginatedQueries.map((q, idx) => {
+                    const i = (currentQueriesPage - 1) * QUERIES_PER_PAGE + idx;
+                    return (
+                      <tr
+                        key={q.query || i}
                         style={{
-                          padding: '8px 14px 8px 8px',
-                          textAlign: 'right',
-                          color: '#0f172a',
-                          fontWeight: '600',
-                          whiteSpace: 'nowrap',
+                          borderBottom: '1px solid #f1f5f9',
+                          transition: 'background 0.15s ease',
                         }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8fafc')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                       >
-                        <span
+                        <td style={{ padding: '8px 10px', color: '#1e293b', fontWeight: '600' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                            <span style={{ fontSize: '11px', color: '#94a3b8', width: '18px', flexShrink: 0 }}>
+                              {i + 1}.
+                            </span>
+                            <span
+                              title={q.query}
+                              style={{
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                display: 'block',
+                              }}
+                            >
+                              {q.query}
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{ padding: '8px 8px', textAlign: 'right', fontWeight: '700', color: '#0284c7', whiteSpace: 'nowrap' }}>
+                          {formatNum(q.clicks)}
+                        </td>
+                        <td style={{ padding: '8px 8px', textAlign: 'right', color: '#475569', whiteSpace: 'nowrap' }}>
+                          {formatNum(q.impressions)}
+                        </td>
+                        <td
                           style={{
-                            background: q.position <= 3 ? '#dcfce7' : q.position <= 10 ? '#e0f2fe' : '#f1f5f9',
-                            color: q.position <= 3 ? '#15803d' : q.position <= 10 ? '#0369a1' : '#475569',
-                            padding: '2px 6px',
-                            borderRadius: '4px',
-                            fontSize: '11.5px',
-                            fontWeight: '700',
+                            padding: '8px 14px 8px 8px',
+                            textAlign: 'right',
+                            color: '#0f172a',
+                            fontWeight: '600',
+                            whiteSpace: 'nowrap',
                           }}
                         >
-                          #{q.position}
-                        </span>
-                      </td>
-                    </tr>
-                  ))
+                          <span
+                            style={{
+                              background: q.position <= 3 ? '#dcfce7' : q.position <= 10 ? '#e0f2fe' : '#f1f5f9',
+                              color: q.position <= 3 ? '#15803d' : q.position <= 10 ? '#0369a1' : '#475569',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              fontSize: '11.5px',
+                              fontWeight: '700',
+                            }}
+                          >
+                            #{q.position}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })
                 ) : (
                   <tr>
                     <td colSpan={4} style={{ padding: '36px 12px', textAlign: 'center', color: '#94a3b8' }}>
@@ -738,9 +755,96 @@ export default function GoogleSearchConsoleDashboardSection({
               </tbody>
             </table>
           </div>
+
+          {/* 5-Item Pagination Controls */}
           {queries.length > 0 && (
-            <div style={{ marginTop: '10px', fontSize: '11.5px', color: '#94a3b8', textAlign: 'right' }}>
-              Showing {queries.length} search queries
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginTop: '12px',
+                paddingTop: '10px',
+                borderTop: '1px solid #f1f5f9',
+                flexWrap: 'wrap',
+                gap: '8px',
+              }}
+            >
+              <div id="gsc-queries-count-info" style={{ fontSize: '11.5px', color: '#64748b' }}>
+                Showing <strong>{(currentQueriesPage - 1) * QUERIES_PER_PAGE + 1}</strong>–
+                <strong>{Math.min(currentQueriesPage * QUERIES_PER_PAGE, queries.length)}</strong> of{' '}
+                <strong>{queries.length}</strong> queries
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <button
+                  id="gsc-queries-prev-btn"
+                  type="button"
+                  disabled={currentQueriesPage <= 1 || loading}
+                  onClick={() => setQueriesPage((prev) => Math.max(1, prev - 1))}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '3px',
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    fontSize: '11.5px',
+                    fontWeight: '600',
+                    border: '1px solid',
+                    borderColor: currentQueriesPage <= 1 || loading ? '#e2e8f0' : '#cbd5e1',
+                    background: currentQueriesPage <= 1 || loading ? '#f8fafc' : '#ffffff',
+                    color: currentQueriesPage <= 1 || loading ? '#94a3b8' : '#334155',
+                    cursor: currentQueriesPage <= 1 || loading ? 'not-allowed' : 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  <ChevronLeft size={13} />
+                  <span>Prev</span>
+                </button>
+
+                <div
+                  id="gsc-queries-page-badge"
+                  style={{
+                    padding: '4px 8px',
+                    borderRadius: '6px',
+                    border: '1px solid #e2e8f0',
+                    background: '#ffffff',
+                    color: '#0f172a',
+                    fontSize: '11.5px',
+                    fontWeight: '700',
+                    minWidth: '44px',
+                    textAlign: 'center',
+                  }}
+                >
+                  {currentQueriesPage} / {totalQueriesPages}
+                </div>
+
+                <button
+                  id="gsc-queries-next-btn"
+                  type="button"
+                  disabled={currentQueriesPage >= totalQueriesPages || loading}
+                  onClick={() => setQueriesPage((prev) => Math.min(totalQueriesPages, prev + 1))}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '3px',
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    fontSize: '11.5px',
+                    fontWeight: '600',
+                    border: '1px solid',
+                    borderColor: currentQueriesPage >= totalQueriesPages || loading ? '#e2e8f0' : '#bfdbfe',
+                    background: currentQueriesPage >= totalQueriesPages || loading ? '#f8fafc' : '#ffffff',
+                    color: currentQueriesPage >= totalQueriesPages || loading ? '#94a3b8' : '#2563eb',
+                    cursor: currentQueriesPage >= totalQueriesPages || loading ? 'not-allowed' : 'pointer',
+                    boxShadow: currentQueriesPage >= totalQueriesPages || loading ? 'none' : '0 1px 2px rgba(37,99,235,0.06)',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  <span>Next</span>
+                  <ChevronRight size={13} />
+                </button>
+              </div>
             </div>
           )}
         </div>
