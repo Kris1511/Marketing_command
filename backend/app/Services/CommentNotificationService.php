@@ -5,6 +5,8 @@ namespace App\Services;
 use App\Models\FacebookPage;
 use App\Models\Integration;
 use App\Models\YouTubeConnection;
+use App\Models\Workspace;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
@@ -15,6 +17,53 @@ use Google\Service\YouTube as GoogleYouTube;
 class CommentNotificationService
 {
     protected GuzzleClient $httpClient;
+    protected array $resolvedUserIds = [];
+
+    /**
+     * Resolve a valid existing user ID for the given workspace.
+     * Follows the application's domain model hierarchy:
+     * 1. Workspace owner (if set and user exists)
+     * 2. Active user assigned to the workspace via user_workspace_roles
+     * 3. Any active administrator (since admins have access to All Workspaces)
+     * 4. First active user or first existing user in the database
+     */
+    protected function resolveUserIdForWorkspace(?int $workspaceId): ?int
+    {
+        $cacheKey = $workspaceId ?? 0;
+        if (array_key_exists($cacheKey, $this->resolvedUserIds)) {
+            return $this->resolvedUserIds[$cacheKey];
+        }
+
+        $workspace = $workspaceId ? Workspace::find($workspaceId) : null;
+
+        // 1. Check workspace owner
+        if ($workspace && !empty($workspace->owner_id)) {
+            if (User::where('id', $workspace->owner_id)->exists()) {
+                return $this->resolvedUserIds[$cacheKey] = (int) $workspace->owner_id;
+            }
+        }
+
+        // 2. Check users assigned to workspace
+        if ($workspace) {
+            $assignedUser = $workspace->users()->where('is_active', true)->first()
+                ?? $workspace->users()->first();
+            if ($assignedUser) {
+                return $this->resolvedUserIds[$cacheKey] = (int) $assignedUser->id;
+            }
+        }
+
+        // 3. Fallback to active admin (in this system, admins manage All Workspaces)
+        $adminUser = User::where('is_active', true)->where('role', 'admin')->orderBy('id', 'asc')->first();
+        if ($adminUser) {
+            return $this->resolvedUserIds[$cacheKey] = (int) $adminUser->id;
+        }
+
+        // 4. Fallback to any active user or first user in users table
+        $fallbackUser = User::where('is_active', true)->orderBy('id', 'asc')->first()
+            ?? User::orderBy('id', 'asc')->first();
+
+        return $this->resolvedUserIds[$cacheKey] = $fallbackUser ? (int) $fallbackUser->id : null;
+    }
 
     public function __construct()
     {
@@ -97,9 +146,13 @@ class CommentNotificationService
                                 if (empty($msg)) $msg = 'Left a comment';
                                 $createdAt = !empty($c['created_time']) ? Carbon::parse($c['created_time']) : now();
 
+                                $targetWs = $page->workspace_id ?? $workspaceId;
+                                $userId   = $this->resolveUserIdForWorkspace($targetWs);
+                                if (empty($userId)) continue;
+
                                 DB::table('notifications')->insert([
-                                    'user_id'        => $page->user_id ?? 1,
-                                    'workspace_id'   => $page->workspace_id ?? 1,
+                                    'user_id'        => $userId,
+                                    'workspace_id'   => $targetWs,
                                     'type'           => 'facebook_comment',
                                     'title'          => 'Facebook Comment',
                                     'message'        => "{$author} commented on your Facebook post\n\n\"{$msg}\"",
@@ -156,9 +209,13 @@ class CommentNotificationService
                                 if (empty($msg)) $msg = 'Left a comment';
                                 $createdAt = !empty($c['created_time']) ? Carbon::parse($c['created_time']) : now();
 
+                                $targetWs = $page->workspace_id ?? $workspaceId;
+                                $userId   = $this->resolveUserIdForWorkspace($targetWs);
+                                if (empty($userId)) continue;
+
                                 DB::table('notifications')->insert([
-                                    'user_id'        => $page->user_id ?? 1,
-                                    'workspace_id'   => $page->workspace_id ?? 1,
+                                    'user_id'        => $userId,
+                                    'workspace_id'   => $targetWs,
                                     'type'           => 'facebook_comment',
                                     'title'          => 'Facebook Comment',
                                     'message'        => "{$author} commented on your Facebook photo\n\n\"{$msg}\"",
@@ -214,9 +271,13 @@ class CommentNotificationService
                                 if (empty($msg)) $msg = 'Left a comment';
                                 $createdAt = !empty($c['created_time']) ? Carbon::parse($c['created_time']) : now();
 
+                                $targetWs = $page->workspace_id ?? $workspaceId;
+                                $userId   = $this->resolveUserIdForWorkspace($targetWs);
+                                if (empty($userId)) continue;
+
                                 DB::table('notifications')->insert([
-                                    'user_id'        => $page->user_id ?? 1,
-                                    'workspace_id'   => $page->workspace_id ?? 1,
+                                    'user_id'        => $userId,
+                                    'workspace_id'   => $targetWs,
                                     'type'           => 'facebook_comment',
                                     'title'          => 'Facebook Comment',
                                     'message'        => "{$author} commented on your Facebook video\n\n\"{$msg}\"",
@@ -267,9 +328,13 @@ class CommentNotificationService
                                     if (empty($msg)) $msg = 'Left a comment';
                                     $createdAt = !empty($c['created_time']) ? Carbon::parse($c['created_time']) : now();
 
+                                    $targetWs = $page->workspace_id ?? $workspaceId;
+                                    $userId   = $this->resolveUserIdForWorkspace($targetWs);
+                                    if (empty($userId)) continue;
+
                                     DB::table('notifications')->insert([
-                                        'user_id'        => $page->user_id ?? 1,
-                                        'workspace_id'   => $page->workspace_id ?? 1,
+                                        'user_id'        => $userId,
+                                        'workspace_id'   => $targetWs,
                                         'type'           => 'facebook_comment',
                                         'title'          => 'Facebook Comment',
                                         'message'        => "{$author} commented on your Facebook post\n\n\"{$msg}\"",
@@ -378,9 +443,13 @@ class CommentNotificationService
                             $username = $c['username'] ?? 'someone';
                             $cTime = !empty($c['timestamp']) ? Carbon::parse($c['timestamp']) : now();
 
+                            $targetWs = $integ->workspace_id ?? $workspaceId;
+                            $userId   = $this->resolveUserIdForWorkspace($targetWs);
+                            if (empty($userId)) continue;
+
                             DB::table('notifications')->insert([
-                                'user_id'        => $integ->user_id ?? 1,
-                                'workspace_id'   => $integ->workspace_id ?? $workspaceId ?? 1,
+                                'user_id'        => $userId,
+                                'workspace_id'   => $targetWs,
                                 'type'           => 'instagram_comment',
                                 'title'          => 'Instagram Comment',
                                 'message'        => "@{$username} commented on your Instagram post\n\n\"{$text}\"",
@@ -502,10 +571,14 @@ class CommentNotificationService
 
                         $publishedAt = $snippet?->getPublishedAt();
                         $createdAt = $publishedAt ? Carbon::parse($publishedAt) : now();
-                        $targetWs = $conn->workspace_id ?? $workspaceId ?? 1;
+                        $targetWs = $conn->workspace_id ?? $workspaceId;
+                        $userId   = (!empty($conn->user_id) && User::where('id', $conn->user_id)->exists())
+                            ? (int) $conn->user_id
+                            : $this->resolveUserIdForWorkspace($targetWs);
+                        if (empty($userId)) continue;
 
                         DB::table('notifications')->insert([
-                            'user_id'        => $conn->user_id ?? 1,
+                            'user_id'        => $userId,
                             'workspace_id'   => $targetWs,
                             'type'           => 'youtube_comment',
                             'title'          => 'YouTube Comment',
