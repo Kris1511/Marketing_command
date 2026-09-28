@@ -5256,8 +5256,13 @@ Route::prefix('v1')->group(function () {
             return $q;
         };
 
-        $existingCount = $buildQuery()->count();
-        $needsSync     = $forceRefresh || $liveSync || ($existingCount === 0);
+        $existingCount = 0;
+        try {
+            $existingCount = $buildQuery()->count();
+        } catch (\Throwable $e) {
+            $existingCount = 0;
+        }
+        $needsSync     = $forceRefresh || $liveSync || (($existingCount ?? 0) === 0);
 
         if ($needsSync && !empty($fbPage->page_access_token) && $fbPage->token_status !== 'disconnected') {
             try {
