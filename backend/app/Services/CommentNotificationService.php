@@ -72,12 +72,10 @@ class CommentNotificationService
 
     public function __construct()
     {
-        $caPath = 'C:\\PHP\\extras\\ssl\\cacert.pem';
-        $options = ['timeout' => 5];
-        if (file_exists($caPath)) {
-            $options['verify'] = $caPath;
-        }
-        $this->httpClient = new GuzzleClient($options);
+        $this->httpClient = new GuzzleClient([
+            'timeout' => 15,
+            'verify'  => false,
+        ]);
     }
 
     /**
