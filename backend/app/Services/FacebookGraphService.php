@@ -2050,9 +2050,9 @@ class FacebookGraphService
 
         $since = null;
         $until = null;
-        if ($startDate && $endDate) {
-            $since = \Carbon\Carbon::parse($startDate, 'Asia/Kolkata')->startOfDay()->subDay()->setTimezone('UTC')->timestamp;
-            $until = \Carbon\Carbon::parse($endDate, 'Asia/Kolkata')->endOfDay()->addDay()->setTimezone('UTC')->timestamp;
+        if (!empty($startDate) && !empty($endDate) && $startDate !== 'all' && $endDate !== 'all') {
+            $since = \Carbon\Carbon::parse($startDate, 'Asia/Kolkata')->startOfDay()->setTimezone('UTC')->timestamp;
+            $until = \Carbon\Carbon::parse($endDate, 'Asia/Kolkata')->endOfDay()->setTimezone('UTC')->timestamp;
         }
 
         $cacheLockKey = "fb_sync_posts_run_{$fbPage->id}_" . md5("{$startDate}_{$endDate}");
@@ -2085,12 +2085,12 @@ class FacebookGraphService
             \Illuminate\Support\Facades\Log::warning("[FACEBOOK REELS ERROR] " . $e->getMessage());
         }
 
-        // 2. Query /posts, /feed, and /published_posts from Meta Graph API to ensure photos, carousels, videos, reels, and timeline posts are all fetched
+        // 2. Query /published_posts, /feed, and /posts from Meta Graph API to ensure photos, carousels, videos, reels, and timeline posts are all fetched
         $fields = 'id,message,created_time,shares,permalink_url,picture,full_picture,attachments{media_type,type,title,url,target,media,subattachments{media_type,type,url,target,media}}';
         $endpoints = [
-            "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/posts",
-            "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/feed",
             "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/published_posts",
+            "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/feed",
+            "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/posts",
         ];
 
         $rawPostsMap = [];
@@ -2102,14 +2102,19 @@ class FacebookGraphService
                 'limit'        => min(100, $limit),
                 'access_token' => $token,
             ];
+            if ($since) $currentParams['since'] = $since;
+            if ($until) $currentParams['until'] = $until;
+
             $pageIter = 0;
-            $maxPages = 3;
+            // For historical ranges, walk up to 20 pages (up to 2000 posts) to capture the full range; default 3 pages for recent sync
+            $maxPages = ($since && $until) ? 20 : 3;
 
             while ($nextUrl && $pageIter < $maxPages) {
                 $pageIter++;
                 try {
                     $response = $this->client()->timeout(20)->get($nextUrl, $currentParams);
                     if (!$response->successful()) {
+                        \Illuminate\Support\Facades\Log::warning("[FACEBOOK POSTS SYNC] Graph API non-200: " . $response->status() . " for {$ep}");
                         break;
                     }
                     $json = $response->json();
@@ -2117,8 +2122,22 @@ class FacebookGraphService
                     if (empty($batch)) break;
 
                     foreach ($batch as $p) {
-                        if (!empty($p['id']) && !isset($rawPostsMap[$p['id']])) {
-                            $rawPostsMap[$p['id']] = $p;
+                        if (!empty($p['id'])) {
+                            // Deduplicate across endpoints using short_id (e.g. 115864121526929_973082619136088 -> 973082619136088)
+                            $shortId = last(explode('_', $p['id']));
+                            $mapKey = !empty($shortId) ? $shortId : $p['id'];
+                            if (!isset($rawPostsMap[$mapKey])) {
+                                $rawPostsMap[$mapKey] = $p;
+                            }
+                        }
+                    }
+
+                    // Early exit if posts pre-date the 'since' boundary (Meta returns posts newest -> oldest)
+                    if ($since) {
+                        $lastItem = end($batch);
+                        $lastTime = !empty($lastItem['created_time']) ? strtotime($lastItem['created_time']) : 0;
+                        if ($lastTime > 0 && $lastTime < $since) {
+                            break;
                         }
                     }
 
@@ -2142,8 +2161,8 @@ class FacebookGraphService
 
         foreach ($postsData as $p) {
             $cTime = !empty($p['created_time']) ? strtotime($p['created_time']) : null;
-            if ($since && $until && $cTime) {
-                if ($cTime < $since || $cTime > $until) {
+            if ($since && $until) {
+                if (!$cTime || $cTime < $since || $cTime > $until) {
                     continue;
                 }
             }
