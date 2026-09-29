@@ -31,6 +31,8 @@ import {
   ThumbsUp,
   Sparkles,
   FileText,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import ExecutiveReportModal from '../components/ExecutiveReportModal';
 import {
@@ -114,8 +116,15 @@ export default function ReportsPage() {
     end: '',
   });
 
-  // Top content platform filter tab
+  // Top content platform filter tab & pagination (5 items per page)
   const [contentPlatformFilter, setContentPlatformFilter] = useState('all');
+  const [contentPage, setContentPage] = useState(1);
+  const contentPerPage = 5;
+
+  // Reset top content pagination to page 1 on filter, date range, or workspace changes
+  useEffect(() => {
+    setContentPage(1);
+  }, [platform, contentPlatformFilter, period, appliedCustomDates, selectedWorkspaceId]);
 
   // State
   const [analytics, setAnalytics] = useState(null);
@@ -483,13 +492,21 @@ export default function ReportsPage() {
     };
   }, [analytics, platform]);
 
-  // 4. Filtered Top Content
+  // 4. Filtered Top Content with pagination (5 items per page)
   const filteredContent = useMemo(() => {
     const items = analytics?.top_content || [];
     const activeFilter = platform !== 'all' ? platform : contentPlatformFilter;
     if (activeFilter === 'all') return items;
     return items.filter((item) => item.platform === activeFilter);
   }, [analytics, platform, contentPlatformFilter]);
+
+  const totalContentPages = Math.max(1, Math.ceil(filteredContent.length / contentPerPage));
+  const currentContentPage = Math.min(Math.max(1, contentPage), totalContentPages);
+
+  const paginatedContent = useMemo(() => {
+    const start = (currentContentPage - 1) * contentPerPage;
+    return filteredContent.slice(start, start + contentPerPage);
+  }, [filteredContent, currentContentPage, contentPerPage]);
 
   // 5. Download Comprehensive CSV Handler
   const handleDownloadCsv = () => {
@@ -1870,7 +1887,10 @@ export default function ReportsPage() {
                   <button
                     key={pKey}
                     type="button"
-                    onClick={() => setContentPlatformFilter(pKey)}
+                    onClick={() => {
+                      setContentPlatformFilter(pKey);
+                      setContentPage(1);
+                    }}
                     style={{
                       padding: '4px 12px',
                       borderRadius: '16px',
@@ -1891,7 +1911,8 @@ export default function ReportsPage() {
         </div>
 
         {filteredContent.length > 0 ? (
-          <div style={{ overflowX: 'auto' }}>
+          <>
+            <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
               <thead>
                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0', textAlign: 'left' }}>
@@ -1907,7 +1928,7 @@ export default function ReportsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredContent.slice(0, 15).map((item, idx) => {
+                {paginatedContent.map((item, idx) => {
                   const platColor =
                     item.platform === 'facebook'
                       ? '#1877f2'
@@ -2006,7 +2027,97 @@ export default function ReportsPage() {
               </tbody>
             </table>
           </div>
-        ) : (
+
+          {/* Pagination Controls */}
+          <div
+            className="no-print"
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '14px 4px 4px 4px',
+              borderTop: '1px solid #e2e8f0',
+              marginTop: '14px',
+              flexWrap: 'wrap',
+              gap: '12px',
+            }}
+          >
+            <div style={{ fontSize: '12.5px', color: '#64748b' }}>
+              Showing <strong>{(currentContentPage - 1) * contentPerPage + 1}–{Math.min(currentContentPage * contentPerPage, filteredContent.length)}</strong> of{' '}
+              <strong>{filteredContent.length}</strong> {filteredContent.length === 1 ? 'content item' : 'content items'}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                id="top-content-prev-btn"
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setContentPage((p) => Math.max(1, p - 1))}
+                disabled={currentContentPage <= 1}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '6px 12px',
+                  fontSize: '12.5px',
+                  fontWeight: '600',
+                  borderRadius: '6px',
+                  border: '1px solid',
+                  borderColor: currentContentPage <= 1 ? '#e2e8f0' : '#cbd5e1',
+                  background: currentContentPage <= 1 ? '#f8fafc' : '#ffffff',
+                  color: currentContentPage <= 1 ? '#94a3b8' : '#334155',
+                  cursor: currentContentPage <= 1 ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <ChevronLeft size={14} /> Previous
+              </button>
+
+              <div
+                id="top-content-page-badge"
+                style={{
+                  fontSize: '12.5px',
+                  fontWeight: '700',
+                  padding: '5px 12px',
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '6px',
+                  color: '#0f172a',
+                  minWidth: '50px',
+                  textAlign: 'center',
+                }}
+              >
+                {currentContentPage} / {totalContentPages}
+              </div>
+
+              <button
+                id="top-content-next-btn"
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setContentPage((p) => Math.min(totalContentPages, p + 1))}
+                disabled={currentContentPage >= totalContentPages}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '6px 12px',
+                  fontSize: '12.5px',
+                  fontWeight: '600',
+                  borderRadius: '6px',
+                  border: '1px solid',
+                  borderColor: currentContentPage >= totalContentPages ? '#e2e8f0' : '#cbd5e1',
+                  background: currentContentPage >= totalContentPages ? '#f8fafc' : '#ffffff',
+                  color: currentContentPage >= totalContentPages ? '#94a3b8' : '#334155',
+                  cursor: currentContentPage >= totalContentPages ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                Next <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+        </>
+      ) : (
           <div style={{ padding: '30px 0', textAlign: 'center', color: '#94a3b8', fontSize: '13.5px' }}>
             No content published during this period.
           </div>

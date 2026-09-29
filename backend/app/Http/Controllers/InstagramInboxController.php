@@ -24,6 +24,14 @@ class InstagramInboxController extends Controller
     }
 
     /**
+     * Resolve configured Meta Graph API version.
+     */
+    protected function graphVersion(): string
+    {
+        return (string) config('services.facebook.graph_version', 'v23.0');
+    }
+
+    /**
      * GET /api/v1/instagram/inbox/conversations
      * Fetch real Instagram Direct Message conversations from Meta Graph API
      * and merge with local webhook/reply events in database.
@@ -84,7 +92,8 @@ class InstagramInboxController extends Controller
             $params['after'] = $after;
         }
 
-        $response = $this->client()->get("https://graph.facebook.com/v23.0/{$targetNode}/conversations", $params);
+        $version = $this->graphVersion();
+        $response = $this->client()->get("https://graph.facebook.com/{$version}/{$targetNode}/conversations", $params);
 
         if (!$response->successful()) {
             $errorCode = (int) $response->json('error.code');
@@ -231,6 +240,11 @@ class InstagramInboxController extends Controller
         $responseData = [
             'success'  => true,
             'platform' => 'instagram',
+            'account'  => [
+                'id'       => $igAccountId,
+                'name'     => $igIntegration?->account_name,
+                'username' => ltrim((string) ($igIntegration?->account_name), '@'),
+            ],
             'data'     => $sortedConversations,
             'paging'   => [
                 'before' => $response->json('paging.cursors.before'),
@@ -282,7 +296,8 @@ class InstagramInboxController extends Controller
                 $params['after'] = $validated['after'];
             }
 
-            $response = $this->client()->get("https://graph.facebook.com/v23.0/{$conversationId}/messages", $params);
+            $version = $this->graphVersion();
+            $response = $this->client()->get("https://graph.facebook.com/{$version}/{$conversationId}/messages", $params);
 
             if ($response->successful()) {
                 $paging = [
@@ -425,7 +440,8 @@ class InstagramInboxController extends Controller
 
         if (empty($recipientId) && !empty($convId)) {
             // Fetch conversation participants from Meta to resolve recipient IGSID
-            $convResponse = $this->client()->get("https://graph.facebook.com/v23.0/{$convId}", [
+            $version = $this->graphVersion();
+            $convResponse = $this->client()->get("https://graph.facebook.com/{$version}/{$convId}", [
                 'fields'       => 'participants',
                 'access_token' => $token,
             ]);
@@ -461,8 +477,9 @@ class InstagramInboxController extends Controller
         }
 
         // 2. Send reply via Meta Graph API
+        $version = $this->graphVersion();
         $targetNode = !empty($pageId) ? $pageId : (!empty($igAccountId) ? $igAccountId : 'me');
-        $sendResponse = $this->client()->post("https://graph.facebook.com/v23.0/{$targetNode}/messages", [
+        $sendResponse = $this->client()->post("https://graph.facebook.com/{$version}/{$targetNode}/messages", [
             'recipient'      => ['id' => $recipientId],
             'messaging_type' => 'RESPONSE',
             'message'        => ['text' => trim($validated['message'])],

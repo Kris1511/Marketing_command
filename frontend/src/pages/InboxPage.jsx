@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Inbox,
   Key,
   Loader2,
@@ -15,6 +17,7 @@ import axiosInstance, { BACKEND_URL, API_BASE_URL } from '../api/axiosInstance';
 import { useWorkspace } from '../context/WorkspaceContext';
 
 const INITIAL_CONVERSATION_LIMIT = 10;
+const CONVERSATIONS_PER_PAGE = 5;
 
 function FacebookIcon({ size = 18, style = {} }) {
   return (
@@ -49,14 +52,6 @@ function InstagramIcon({ size = 18, style = {} }) {
   );
 }
 
-function YouTubeIcon({ size = 18, style = {} }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={style}>
-      <rect width="24" height="24" rx="6" fill="#FF0000" />
-      <path d="M10 8.5L16 12L10 15.5V8.5Z" fill="white" />
-    </svg>
-  );
-}
 
 function formatTime(iso) {
   if (!iso) return '';
@@ -105,10 +100,15 @@ export default function InboxPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [error, setError] = useState('');
   const [permissionError, setPermissionError] = useState(null);
+  const [connectedAccount, setConnectedAccount] = useState(null);
   const [realtimeStatus, setRealtimeStatus] = useState('idle');
   const [lastWebhookEventId, setLastWebhookEventId] = useState(() => {
     return Number(localStorage.getItem('inboxLastWebhookEventId') || 0);
   });
+
+  // Independent pagination states for Facebook and Instagram
+  const [fbPage, setFbPage] = useState(1);
+  const [igPage, setIgPage] = useState(1);
 
   const selectedConversationRef = useRef(null);
   const lastWebhookEventIdRef = useRef(lastWebhookEventId);
@@ -130,6 +130,17 @@ export default function InboxPage() {
     lastWebhookEventIdRef.current = lastWebhookEventId;
   }, [lastWebhookEventId]);
 
+  // Resolve dynamic display username for the active Instagram account
+  const displayIgUsername = useMemo(() => {
+    const raw =
+      connectedAccount?.username ||
+      connectedAccount?.name ||
+      permissionError?.account?.username ||
+      '';
+    const cleaned = String(raw).replace(/^@/, '').trim();
+    return cleaned ? `@${cleaned}` : 'your connected Instagram account';
+  }, [connectedAccount, permissionError]);
+
   // Filter conversations by search term
   const filteredConversations = useMemo(() => {
     if (!searchQuery.trim()) return conversations;
@@ -141,6 +152,55 @@ export default function InboxPage() {
       return name.includes(q) || username.includes(q) || msg.includes(q);
     });
   }, [conversations, searchQuery]);
+
+  const currentPlatformPage = platform === 'instagram' ? igPage : fbPage;
+  const setPlatformPage = useCallback(
+    (updater) => {
+      if (platform === 'instagram') {
+        setIgPage((prev) => (typeof updater === 'function' ? updater(prev) : updater));
+      } else {
+        setFbPage((prev) => (typeof updater === 'function' ? updater(prev) : updater));
+      }
+    },
+    [platform]
+  );
+
+  // Search/filter resets the relevant platform's pagination back to page 1
+  useEffect(() => {
+    if (platform === 'instagram') {
+      setIgPage(1);
+    } else {
+      setFbPage(1);
+    }
+  }, [searchQuery, platform]);
+
+  // Workspace switching resets pagination to page 1
+  useEffect(() => {
+    setFbPage(1);
+    setIgPage(1);
+  }, [selectedWorkspaceId]);
+
+  const totalConversations = filteredConversations.length;
+  const totalPages = Math.max(1, Math.ceil(totalConversations / CONVERSATIONS_PER_PAGE));
+  const validPage = Math.min(currentPlatformPage, totalPages);
+
+  // Show exactly 5 conversations per page
+  const paginatedConversations = useMemo(() => {
+    const start = (validPage - 1) * CONVERSATIONS_PER_PAGE;
+    return filteredConversations.slice(start, start + CONVERSATIONS_PER_PAGE);
+  }, [filteredConversations, validPage]);
+
+  const handlePageChange = (newPage) => {
+    const targetPage = Math.max(1, Math.min(totalPages, newPage));
+    setPlatformPage(targetPage);
+    const nextSlice = filteredConversations.slice(
+      (targetPage - 1) * CONVERSATIONS_PER_PAGE,
+      targetPage * CONVERSATIONS_PER_PAGE
+    );
+    if (nextSlice.length > 0 && !nextSlice.some((c) => c.id === selectedConversationId)) {
+      setSelectedConversationId(nextSlice[0].id);
+    }
+  };
 
   const selectedConversation = useMemo(
     () => conversations.find((item) => item.id === selectedConversationId) || null,
@@ -163,8 +223,6 @@ export default function InboxPage() {
       const endpoint =
         platformRef.current === 'instagram'
           ? '/instagram/inbox/conversations'
-          : platformRef.current === 'youtube'
-          ? '/youtube/inbox/conversations'
           : '/facebook/inbox/conversations';
 
       try {
@@ -179,6 +237,9 @@ export default function InboxPage() {
         });
 
         const rows = res.data?.data || [];
+        if (res.data?.account) {
+          setConnectedAccount(res.data.account);
+        }
         setConversations((prev) => (append ? [...prev, ...rows] : rows));
         setConversationCursor(res.data?.paging?.after || null);
 
@@ -203,8 +264,6 @@ export default function InboxPage() {
           const platformLabel =
             platformRef.current === 'instagram'
               ? 'Instagram Direct'
-              : platformRef.current === 'youtube'
-              ? 'YouTube'
               : 'Facebook Messenger';
           setError(
             err.response?.data?.message ||
@@ -241,8 +300,6 @@ export default function InboxPage() {
       const endpoint =
         platformRef.current === 'instagram'
           ? `/instagram/inbox/conversations/${conversationId}/messages`
-          : platformRef.current === 'youtube'
-          ? `/youtube/inbox/conversations/${conversationId}/messages`
           : `/facebook/inbox/conversations/${conversationId}/messages`;
 
       try {
@@ -459,7 +516,8 @@ export default function InboxPage() {
         const pages = event.data?.pages || [];
         const sessId = event.data?.oauth_session_id || '';
         if (pages.length > 0) {
-          const page = pages.find((p) => p.id === '115864121526929') || pages[0];
+          const targetPageId = connectedAccount?.page_id || connectedAccount?.id;
+          const page = (targetPageId ? pages.find((p) => p.id === targetPageId) : null) || pages[0];
           try {
             await axiosInstance.post('/facebook/connect-page', {
               workspace_id: selectedWorkspaceId,
@@ -480,35 +538,11 @@ export default function InboxPage() {
         setPermissionError(null);
         setError('');
         fetchConversations({ fresh: true });
-      } else if (
-        event.data?.type === 'YOUTUBE_OAUTH_RESULT' ||
-        event.data?.type === 'YOUTUBE_CONNECTED'
-      ) {
-        if (event.data?.success) {
-          setPermissionError(null);
-          setError('');
-          fetchConversations({ fresh: true });
-        }
       }
     };
     window.addEventListener('message', handleOauthMessage);
     return () => window.removeEventListener('message', handleOauthMessage);
   }, [fetchConversations, selectedWorkspaceId]);
-
-  // Auto-refresh YouTube conversations every 15 seconds to receive latest comments automatically
-  useEffect(() => {
-    if (!isWorkspaceSelected || platform !== 'youtube') return;
-
-    const interval = setInterval(() => {
-      fetchConversations({ fresh: true });
-      const activeId = selectedConversationRef.current;
-      if (activeId) {
-        fetchMessages(activeId);
-      }
-    }, 15000);
-
-    return () => clearInterval(interval);
-  }, [fetchConversations, fetchMessages, isWorkspaceSelected, platform]);
 
   // Send reply handler
   const handleSendReply = async (event) => {
@@ -539,24 +573,6 @@ export default function InboxPage() {
             },
           ]);
         }
-      } else if (platform === 'youtube') {
-        const res = await axiosInstance.post(`/youtube/inbox/conversations/${selectedConversationId}/messages`, {
-          workspace_id: selectedWorkspaceId,
-          message: text,
-        });
-        if (res.data?.data) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: res.data.data.message_id || `temp-${Date.now()}`,
-              message: text,
-              created_time: res.data.data.created_time || new Date().toISOString(),
-              direction: 'outbound',
-              sender_name: res.data.data.sender_name || 'You',
-              attachments: [],
-            },
-          ]);
-        }
       } else {
         await axiosInstance.post(`/facebook/inbox/conversations/${selectedConversationId}/messages`, {
           workspace_id: selectedWorkspaceId,
@@ -569,7 +585,7 @@ export default function InboxPage() {
     } catch (err) {
       setError(
         err.response?.data?.message ||
-          `Unable to send this ${platform === 'instagram' ? 'Instagram Direct' : platform === 'youtube' ? 'YouTube' : 'Messenger'} reply.`
+          `Unable to send this ${platform === 'instagram' ? 'Instagram Direct' : 'Messenger'} reply.`
       );
     } finally {
       setSending(false);
@@ -578,8 +594,11 @@ export default function InboxPage() {
 
   // Reconnect Meta account for Instagram permissions
   const handleReconnectInstagram = () => {
-    const wsId = selectedWorkspaceId || 1;
-    const targetUrl = `${API_BASE_URL}/auth/facebook?workspace_id=${wsId}&reconnect=true&force=true`;
+    if (!isWorkspaceSelected) {
+      alert('Please select a specific workspace first before reconnecting your account.');
+      return;
+    }
+    const targetUrl = `${API_BASE_URL}/auth/facebook?workspace_id=${selectedWorkspaceId}&reconnect=true&force=true`;
 
     const popup = window.open(
       targetUrl,
@@ -588,21 +607,6 @@ export default function InboxPage() {
     );
     if (!popup || popup.closed || typeof popup.closed === 'undefined') {
       alert('Pop-up was blocked. Please allow pop-ups for this site to complete Meta authentication.');
-    }
-  };
-
-  // Reconnect Google account for YouTube permissions
-  const handleReconnectYouTube = () => {
-    const wsId = selectedWorkspaceId || 1;
-    const targetUrl = `${BACKEND_URL}/api/youtube/connect?workspace_id=${wsId}&reconnect=true&force=true`;
-
-    const popup = window.open(
-      targetUrl,
-      'YouTubeOAuthPopup',
-      'width=650,height=750,scrollbars=yes'
-    );
-    if (!popup || popup.closed || typeof popup.closed === 'undefined') {
-      alert('Pop-up was blocked. Please allow pop-ups for this site to complete YouTube authentication.');
     }
   };
 
@@ -616,11 +620,6 @@ export default function InboxPage() {
             {platform === 'instagram' ? (
               <>
                 Instagram Direct Messages for{' '}
-                <strong>{selectedWorkspace?.name || 'Selected Workspace'}</strong>.
-              </>
-            ) : platform === 'youtube' ? (
-              <>
-                YouTube Comments &amp; Replies for{' '}
                 <strong>{selectedWorkspace?.name || 'Selected Workspace'}</strong>.
               </>
             ) : (
@@ -747,36 +746,10 @@ export default function InboxPage() {
             <InstagramIcon size={18} />
             <span>Instagram</span>
           </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={platform === 'youtube'}
-            id="platform-tab-youtube"
-            onClick={() => handlePlatformChange('youtube')}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '8px 18px',
-              borderRadius: '8px',
-              border: 0,
-              cursor: 'pointer',
-              fontWeight: 600,
-              fontSize: '13.5px',
-              background: platform === 'youtube' ? '#ffffff' : 'transparent',
-              color: platform === 'youtube' ? '#dc2626' : '#64748b',
-              boxShadow: platform === 'youtube' ? '0 2px 6px rgba(220, 38, 38, 0.16)' : 'none',
-              transition: 'all 0.15s ease-in-out',
-            }}
-          >
-            <YouTubeIcon size={18} />
-            <span>YouTube</span>
-          </button>
         </div>
 
         <span style={{ fontSize: '12px', color: '#94a3b8', marginLeft: '4px' }}>
-          Viewing {platform === 'instagram' ? 'Instagram Direct' : platform === 'youtube' ? 'YouTube Comments' : 'Facebook Messenger'}
+          Viewing {platform === 'instagram' ? 'Instagram Direct' : 'Facebook Messenger'}
         </span>
       </div>
 
@@ -880,92 +853,6 @@ export default function InboxPage() {
         </div>
       )}
 
-      {/* YouTube Permission / Reauthorization Required Card */}
-      {isWorkspaceSelected && platform === 'youtube' && permissionError && (
-        <div
-          style={{
-            background: 'linear-gradient(135deg, #fff5f5 0%, #fff0f5 100%)',
-            border: '1px solid #fecdd3',
-            borderRadius: '12px',
-            padding: '22px 24px',
-            marginBottom: '16px',
-            boxShadow: '0 2px 10px rgba(220, 38, 38, 0.08)',
-          }}
-        >
-          <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
-            <div
-              style={{
-                width: '46px',
-                height: '46px',
-                borderRadius: '12px',
-                background: '#FF0000',
-                display: 'grid',
-                placeItems: 'center',
-                flexShrink: 0,
-                color: '#ffffff',
-                boxShadow: '0 4px 12px rgba(220, 38, 38, 0.25)',
-              }}
-            >
-              <YouTubeIcon size={26} />
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
-                <h3 style={{ margin: 0, fontSize: '16px', color: '#991b1b', fontWeight: 700 }}>
-                  YouTube Channel Connection Required
-                </h3>
-                {permissionError.account?.name && (
-                  <span
-                    style={{
-                      fontSize: '12px',
-                      padding: '2px 8px',
-                      borderRadius: '20px',
-                      background: '#fee2e2',
-                      color: '#b91c1c',
-                      fontWeight: 600,
-                    }}
-                  >
-                    {permissionError.account.name}
-                  </span>
-                )}
-              </div>
-              <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#7f1d1d', lineHeight: 1.5 }}>
-                {permissionError.message ||
-                  'Your Google YouTube authorization has expired or requires reconnection to view and reply to comments.'}
-              </p>
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={handleReconnectYouTube}
-                  style={{
-                    background: '#FF0000',
-                    border: 'none',
-                    fontWeight: 600,
-                    boxShadow: '0 2px 6px rgba(220, 38, 38, 0.3)',
-                  }}
-                >
-                  <Key size={14} style={{ marginRight: '6px' }} />
-                  Reconnect YouTube Channel
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => fetchConversations({ fresh: true })}
-                  disabled={loadingConversations}
-                >
-                  <RefreshCw
-                    size={13}
-                    className={loadingConversations ? 'spin' : ''}
-                    style={{ marginRight: '4px' }}
-                  />
-                  Retry Check
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Generic Error Alert */}
       {isWorkspaceSelected && error && (
         <div
@@ -1021,7 +908,7 @@ export default function InboxPage() {
                   <h3>Conversations</h3>
                   <p>
                     {conversations.length}{' '}
-                    {platform === 'instagram' ? 'from Instagram' : platform === 'youtube' ? 'from YouTube' : 'from Facebook'}
+                    {platform === 'instagram' ? 'from Instagram' : 'from Facebook'}
                   </p>
                 </div>
                 {loadingConversations && (
@@ -1049,8 +936,6 @@ export default function InboxPage() {
                   placeholder={
                     platform === 'instagram'
                       ? 'Search Instagram user or message...'
-                      : platform === 'youtube'
-                      ? 'Search YouTube commenter or comment...'
                       : 'Search customer or message...'
                   }
                   style={{
@@ -1117,22 +1002,6 @@ export default function InboxPage() {
                     Grant <code>instagram_manage_messages</code> via the Reconnect button above to load Instagram conversations.
                   </p>
                 </div>
-              ) : platform === 'youtube' && permissionError ? (
-                <div
-                  style={{
-                    padding: '28px 16px',
-                    textAlign: 'center',
-                    color: '#991b1b',
-                    fontSize: '13px',
-                  }}
-                >
-                  <p style={{ margin: '0 0 10px', fontWeight: 600 }}>
-                    Reconnection Required
-                  </p>
-                  <p style={{ margin: 0, color: '#94a3b8', fontSize: '12px' }}>
-                    Please reconnect your YouTube channel using the button above to load comments.
-                  </p>
-                </div>
               ) : conversations.length === 0 ? (
                 <div
                   style={{
@@ -1144,8 +1013,6 @@ export default function InboxPage() {
                 >
                   {platform === 'instagram'
                     ? 'No Instagram Direct conversations found for this account.'
-                    : platform === 'youtube'
-                    ? 'No YouTube comment threads found for this channel.'
                     : 'No Messenger conversations returned by Facebook for this Page.'}
                 </div>
               ) : filteredConversations.length === 0 ? (
@@ -1176,20 +1043,16 @@ export default function InboxPage() {
                   </button>
                 </div>
               ) : (
-                filteredConversations.map((conversation) => {
+                paginatedConversations.map((conversation) => {
                   const customer = conversation.customer || {};
                   const active = conversation.id === selectedConversationId;
                   const unread = Number(conversation.unread_count || 0);
                   const isIg = platform === 'instagram';
-                  const isYt = platform === 'youtube';
-                  const displayName =
-                    isIg
-                      ? customer.username
-                        ? `@${customer.username}`
-                        : customer.name || 'Instagram user'
-                      : isYt
-                      ? customer.name || 'YouTube user'
-                      : customer.name || 'Facebook user';
+                  const displayName = isIg
+                    ? customer.username
+                      ? `@${customer.username}`
+                      : customer.name || 'Instagram user'
+                    : customer.name || 'Facebook user';
 
                   const avatarUrl = customer.profile_picture_url || customer.profile_pic;
 
@@ -1205,8 +1068,6 @@ export default function InboxPage() {
                         background: active
                           ? isIg
                             ? '#fdf2f8'
-                            : isYt
-                            ? '#fef2f2'
                             : '#eaf0ff'
                           : '#ffffff',
                         padding: '14px 16px',
@@ -1230,8 +1091,6 @@ export default function InboxPage() {
                             border: active
                               ? isIg
                                 ? '2px solid #db2777'
-                                : isYt
-                                ? '2px solid #dc2626'
                                 : '2px solid #2457e6'
                               : '1px solid #e2e8f0',
                           }}
@@ -1244,20 +1103,14 @@ export default function InboxPage() {
                             background: active
                               ? isIg
                                 ? 'linear-gradient(45deg, #f09433, #dc2743)'
-                                : isYt
-                                ? '#dc2626'
                                 : '#2457e6'
                               : isIg
                               ? '#fdf2f8'
-                              : isYt
-                              ? '#fef2f2'
                               : '#eaf0ff',
                             color: active
                               ? '#ffffff'
                               : isIg
                               ? '#be185d'
-                              : isYt
-                              ? '#b91c1c'
                               : '#173aa3',
                           }}
                         >
@@ -1317,18 +1170,134 @@ export default function InboxPage() {
               )}
             </div>
 
-            {conversationCursor && (
-              <div style={{ padding: '12px 16px', borderTop: '1px solid #e2e8f0' }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm btn-block"
-                  onClick={() =>
-                    fetchConversations({ append: true, after: conversationCursor })
-                  }
-                  disabled={loadingConversations}
+            {/* 5-Item Pagination Controls */}
+            {totalConversations > 0 && (
+              <div
+                id={`${platform}-inbox-pagination`}
+                style={{
+                  padding: '12px 14px',
+                  borderTop: '1px solid #e2e8f0',
+                  background: '#ffffff',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px',
+                }}
+              >
+                {/* Showing 1–5 of 10 conversations */}
+                <div
+                  id={`${platform}-inbox-count-info`}
+                  style={{
+                    fontSize: '12px',
+                    color: '#64748b',
+                    textAlign: 'center',
+                  }}
                 >
-                  <ChevronDown size={14} /> Load more
-                </button>
+                  Showing <strong>{(validPage - 1) * CONVERSATIONS_PER_PAGE + 1}</strong>–
+                  <strong>{Math.min(validPage * CONVERSATIONS_PER_PAGE, totalConversations)}</strong> of{' '}
+                  <strong>{totalConversations}</strong> {totalConversations === 1 ? 'conversation' : 'conversations'}
+                </div>
+
+                {/* Previous | 1 / X | Next */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '6px',
+                  }}
+                >
+                  <button
+                    id={`${platform}-inbox-prev-btn`}
+                    type="button"
+                    disabled={validPage <= 1 || loadingConversations}
+                    onClick={() => handlePageChange(validPage - 1)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '5px 12px',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      border: '1px solid',
+                      borderColor: validPage <= 1 || loadingConversations ? '#e2e8f0' : '#cbd5e1',
+                      background: validPage <= 1 || loadingConversations ? '#f8fafc' : '#ffffff',
+                      color: validPage <= 1 || loadingConversations ? '#94a3b8' : '#334155',
+                      cursor: validPage <= 1 || loadingConversations ? 'not-allowed' : 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <ChevronLeft size={13} />
+                    <span>Previous</span>
+                  </button>
+
+                  <div
+                    id={`${platform}-inbox-page-badge`}
+                    style={{
+                      padding: '5px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid #e2e8f0',
+                      background: '#f8fafc',
+                      color: '#0f172a',
+                      fontSize: '12px',
+                      fontWeight: '700',
+                      minWidth: '44px',
+                      textAlign: 'center',
+                    }}
+                  >
+                    {validPage} / {totalPages}
+                  </div>
+
+                  <button
+                    id={`${platform}-inbox-next-btn`}
+                    type="button"
+                    disabled={validPage >= totalPages || loadingConversations}
+                    onClick={() => handlePageChange(validPage + 1)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '5px 12px',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      border: '1px solid',
+                      borderColor:
+                        validPage >= totalPages || loadingConversations
+                          ? '#e2e8f0'
+                          : platform === 'instagram'
+                          ? '#fbcfe8'
+                          : '#bfdbfe',
+                      background: validPage >= totalPages || loadingConversations ? '#f8fafc' : '#ffffff',
+                      color:
+                        validPage >= totalPages || loadingConversations
+                          ? '#94a3b8'
+                          : platform === 'instagram'
+                          ? '#db2777'
+                          : '#2563eb',
+                      cursor: validPage >= totalPages || loadingConversations ? 'not-allowed' : 'pointer',
+                      boxShadow: validPage >= totalPages || loadingConversations ? 'none' : '0 1px 2px rgba(0,0,0,0.05)',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <span>Next</span>
+                    <ChevronRight size={13} />
+                  </button>
+                </div>
+
+                {conversationCursor && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm btn-block"
+                    onClick={() =>
+                      fetchConversations({ append: true, after: conversationCursor })
+                    }
+                    disabled={loadingConversations}
+                    style={{ marginTop: '2px', fontSize: '11px', padding: '3px 8px' }}
+                  >
+                    <ChevronDown size={12} /> Load more from {platform === 'instagram' ? 'Instagram' : 'Facebook'}
+                  </button>
+                )}
               </div>
             )}
           </aside>
@@ -1397,8 +1366,6 @@ export default function InboxPage() {
                           ? selectedConversation.customer?.username
                             ? `@${selectedConversation.customer.username}`
                             : selectedConversation.customer?.name || 'Instagram user'
-                          : platform === 'youtube'
-                          ? selectedConversation.customer?.name || 'YouTube user'
                           : selectedConversation.customer?.name || 'Facebook user'}
                       </h3>
                       <p style={{ margin: '3px 0 0', color: '#64748b', fontSize: '12px' }}>
@@ -1407,8 +1374,6 @@ export default function InboxPage() {
                           ? `${selectedConversation.message_count} messages`
                           : platform === 'instagram'
                           ? 'Direct Message'
-                          : platform === 'youtube'
-                          ? 'Comment Thread'
                           : 'Messenger'}
                       </p>
                     </div>
@@ -1425,18 +1390,6 @@ export default function InboxPage() {
                       }}
                     >
                       Instagram Direct
-                    </span>
-                  ) : platform === 'youtube' ? (
-                    <span
-                      className="pill"
-                      style={{
-                        background: '#FF0000',
-                        color: '#ffffff',
-                        border: 0,
-                        fontWeight: 600,
-                      }}
-                    >
-                      YouTube
                     </span>
                   ) : (
                     <span className="pill">Messenger</span>
@@ -1496,12 +1449,9 @@ export default function InboxPage() {
                       {messages.map((message) => {
                         const outbound = message.direction === 'outbound';
                         const isIg = platform === 'instagram';
-                        const isYt = platform === 'youtube';
                         const bubbleBg = outbound
                           ? isIg
                             ? 'linear-gradient(135deg, #833ab4 0%, #fd1d1d 50%, #fcb045 100%)'
-                            : isYt
-                            ? '#dc2626'
                             : '#2457e6'
                           : '#ffffff';
 
@@ -1607,8 +1557,6 @@ export default function InboxPage() {
                     placeholder={
                       platform === 'instagram'
                         ? 'Write an Instagram Direct reply...'
-                        : platform === 'youtube'
-                        ? 'Write a reply to this YouTube comment thread...'
                         : 'Write a Messenger reply...'
                     }
                     rows={2}
@@ -1628,11 +1576,9 @@ export default function InboxPage() {
                       background:
                         platform === 'instagram'
                           ? 'linear-gradient(45deg, #f09433 0%, #dc2743 50%, #bc1888 100%)'
-                          : platform === 'youtube'
-                          ? '#dc2626'
                           : undefined,
                       borderColor:
-                        platform === 'instagram' || platform === 'youtube' ? 'transparent' : undefined,
+                        platform === 'instagram' ? 'transparent' : undefined,
                     }}
                   >
                     <Send size={16} />
@@ -1697,7 +1643,7 @@ export default function InboxPage() {
                           border: '1px solid #fbcfe8',
                         }}
                       >
-                        Account Active: @redmindtechnologies
+                        Account Active: {displayIgUsername}
                       </span>
                     </div>
 
@@ -1726,7 +1672,7 @@ export default function InboxPage() {
                           <strong>Instagram App Setting</strong>: In the mobile app, go to <em>Settings &amp; privacy</em> &rarr; <em>Messages and story replies</em> &rarr; <em>Message controls</em> &rarr; <em>Connected tools</em> &rarr; toggle <strong>Allow access to messages</strong> to <strong>ON</strong>.
                         </li>
                         <li>
-                          <strong>Send a DM</strong>: Send an Instagram direct message to <strong>@redmindtechnologies</strong>. New incoming messages appear in real-time.
+                          <strong>Send a DM</strong>: Send an Instagram direct message to <strong>{displayIgUsername}</strong>. New incoming messages appear in real-time.
                         </li>
                       </ul>
                     </div>

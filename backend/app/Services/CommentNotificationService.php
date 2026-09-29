@@ -5,6 +5,8 @@ namespace App\Services;
 use App\Models\FacebookPage;
 use App\Models\Integration;
 use App\Models\YouTubeConnection;
+use App\Models\Workspace;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
@@ -15,6 +17,58 @@ use Google\Service\YouTube as GoogleYouTube;
 class CommentNotificationService
 {
     protected GuzzleClient $httpClient;
+    protected array $resolvedUserIds = [];
+
+    /**
+     * Resolve a valid existing user ID for the given workspace.
+     * Follows the application's domain model hierarchy:
+     * 1. Workspace owner (if set and user exists)
+     * 2. Active user assigned to the workspace via user_workspace_roles
+     * 3. Any active administrator (since admins have access to All Workspaces)
+     * 4. First active user or first existing user in the database
+     */
+    protected function resolveUserIdForWorkspace(?int $workspaceId): ?int
+    {
+        $cacheKey = $workspaceId ?? 0;
+        if (array_key_exists($cacheKey, $this->resolvedUserIds)) {
+            return $this->resolvedUserIds[$cacheKey];
+        }
+
+        $workspace = $workspaceId ? Workspace::find($workspaceId) : null;
+
+        // 1. Check workspace owner
+        if ($workspace && !empty($workspace->owner_id)) {
+            if (User::where('id', $workspace->owner_id)->exists()) {
+                return $this->resolvedUserIds[$cacheKey] = (int) $workspace->owner_id;
+            }
+        }
+
+        // 2. Check users assigned to workspace
+        if ($workspace) {
+            $assignedUser = $workspace->users()->where('is_active', true)->first()
+                ?? $workspace->users()->first();
+            if ($assignedUser) {
+                return $this->resolvedUserIds[$cacheKey] = (int) $assignedUser->id;
+            }
+        }
+
+        // 3. Fallback to active admin (in this system, admins manage All Workspaces)
+        $adminUser = User::where('is_active', true)->where('role', 'admin')->orderBy('id', 'asc')->first();
+        if ($adminUser) {
+            return $this->resolvedUserIds[$cacheKey] = (int) $adminUser->id;
+        }
+
+        // 4. Fallback to any active user or first user in users table
+        $fallbackUser = User::where('is_active', true)->orderBy('id', 'asc')->first()
+            ?? User::orderBy('id', 'asc')->first();
+
+        return $this->resolvedUserIds[$cacheKey] = $fallbackUser ? (int) $fallbackUser->id : null;
+    }
+
+    protected function getGraphVersion(): string
+    {
+        return (string) config('services.facebook.graph_version', 'v23.0');
+    }
 
     public function __construct()
     {
@@ -67,7 +121,8 @@ class CommentNotificationService
 
                     // 1. Try published posts with comments
                     try {
-                        $url = "https://graph.facebook.com/v23.0/{$pageId}/published_posts";
+                        $version = $this->getGraphVersion();
+                        $url = "https://graph.facebook.com/{$version}/{$pageId}/published_posts";
                         $res = $this->httpClient->get($url, [
                             'query' => [
                                 'fields'       => 'id,message,created_time,comments{id,message,from,created_time}',
@@ -97,9 +152,13 @@ class CommentNotificationService
                                 if (empty($msg)) $msg = 'Left a comment';
                                 $createdAt = !empty($c['created_time']) ? Carbon::parse($c['created_time']) : now();
 
+                                $targetWs = $page->workspace_id ?? $workspaceId;
+                                $userId   = $this->resolveUserIdForWorkspace($targetWs);
+                                if (empty($userId)) continue;
+
                                 DB::table('notifications')->insert([
-                                    'user_id'        => $page->user_id ?? 1,
-                                    'workspace_id'   => $page->workspace_id ?? 1,
+                                    'user_id'        => $userId,
+                                    'workspace_id'   => $targetWs,
                                     'type'           => 'facebook_comment',
                                     'title'          => 'Facebook Comment',
                                     'message'        => "{$author} commented on your Facebook post\n\n\"{$msg}\"",
@@ -116,7 +175,8 @@ class CommentNotificationService
 
                     // 2. Fetch comments from uploaded photos (accessible with standard pages_read_engagement)
                     try {
-                        $photosRes = $this->httpClient->get("https://graph.facebook.com/v23.0/{$pageId}/photos", [
+                        $version = $this->getGraphVersion();
+                        $photosRes = $this->httpClient->get("https://graph.facebook.com/{$version}/{$pageId}/photos", [
                             'query' => [
                                 'type'         => 'uploaded',
                                 'fields'       => 'id,name,created_time,picture,source,link,comments{id,message,from,created_time}',
@@ -156,9 +216,13 @@ class CommentNotificationService
                                 if (empty($msg)) $msg = 'Left a comment';
                                 $createdAt = !empty($c['created_time']) ? Carbon::parse($c['created_time']) : now();
 
+                                $targetWs = $page->workspace_id ?? $workspaceId;
+                                $userId   = $this->resolveUserIdForWorkspace($targetWs);
+                                if (empty($userId)) continue;
+
                                 DB::table('notifications')->insert([
-                                    'user_id'        => $page->user_id ?? 1,
-                                    'workspace_id'   => $page->workspace_id ?? 1,
+                                    'user_id'        => $userId,
+                                    'workspace_id'   => $targetWs,
                                     'type'           => 'facebook_comment',
                                     'title'          => 'Facebook Comment',
                                     'message'        => "{$author} commented on your Facebook photo\n\n\"{$msg}\"",
@@ -175,7 +239,8 @@ class CommentNotificationService
 
                     // 3. Fetch comments from uploaded videos (accessible with standard pages_read_engagement)
                     try {
-                        $videosRes = $this->httpClient->get("https://graph.facebook.com/v23.0/{$pageId}/videos", [
+                        $version = $this->getGraphVersion();
+                        $videosRes = $this->httpClient->get("https://graph.facebook.com/{$version}/{$pageId}/videos", [
                             'query' => [
                                 'fields'       => 'id,description,created_time,picture,permalink_url,comments{id,message,from,created_time}',
                                 'limit'        => 25,
@@ -214,9 +279,13 @@ class CommentNotificationService
                                 if (empty($msg)) $msg = 'Left a comment';
                                 $createdAt = !empty($c['created_time']) ? Carbon::parse($c['created_time']) : now();
 
+                                $targetWs = $page->workspace_id ?? $workspaceId;
+                                $userId   = $this->resolveUserIdForWorkspace($targetWs);
+                                if (empty($userId)) continue;
+
                                 DB::table('notifications')->insert([
-                                    'user_id'        => $page->user_id ?? 1,
-                                    'workspace_id'   => $page->workspace_id ?? 1,
+                                    'user_id'        => $userId,
+                                    'workspace_id'   => $targetWs,
                                     'type'           => 'facebook_comment',
                                     'title'          => 'Facebook Comment',
                                     'message'        => "{$author} commented on your Facebook video\n\n\"{$msg}\"",
@@ -243,7 +312,8 @@ class CommentNotificationService
                         foreach ($dbPosts as $dp) {
                             $dpPostId = $dp->fb_post_id;
                             try {
-                                $cRes = $this->httpClient->get("https://graph.facebook.com/v23.0/{$dpPostId}/comments", [
+                                $version = $this->getGraphVersion();
+                                $cRes = $this->httpClient->get("https://graph.facebook.com/{$version}/{$dpPostId}/comments", [
                                     'query' => [
                                         'fields'       => 'id,message,from,created_time',
                                         'limit'        => 25,
@@ -267,9 +337,13 @@ class CommentNotificationService
                                     if (empty($msg)) $msg = 'Left a comment';
                                     $createdAt = !empty($c['created_time']) ? Carbon::parse($c['created_time']) : now();
 
+                                    $targetWs = $page->workspace_id ?? $workspaceId;
+                                    $userId   = $this->resolveUserIdForWorkspace($targetWs);
+                                    if (empty($userId)) continue;
+
                                     DB::table('notifications')->insert([
-                                        'user_id'        => $page->user_id ?? 1,
-                                        'workspace_id'   => $page->workspace_id ?? 1,
+                                        'user_id'        => $userId,
+                                        'workspace_id'   => $targetWs,
                                         'type'           => 'facebook_comment',
                                         'title'          => 'Facebook Comment',
                                         'message'        => "{$author} commented on your Facebook post\n\n\"{$msg}\"",
@@ -312,8 +386,9 @@ class CommentNotificationService
                 $token = $integ->refresh_token ?? $integ->access_token;
                 if (empty($token)) continue;
 
+                $version = $this->getGraphVersion();
                 $isIgToken = str_starts_with($token, 'IGAA');
-                $baseUrl = $isIgToken ? 'https://graph.instagram.com/v23.0' : 'https://graph.facebook.com/v23.0';
+                $baseUrl = $isIgToken ? "https://graph.instagram.com/{$version}" : "https://graph.facebook.com/{$version}";
                 $targetNode = (!empty($integ->account_id) && !$isIgToken) ? $integ->account_id : 'me';
 
                 try {
@@ -378,9 +453,26 @@ class CommentNotificationService
                             $username = $c['username'] ?? 'someone';
                             $cTime = !empty($c['timestamp']) ? Carbon::parse($c['timestamp']) : now();
 
+                            $targetWs = $integ->workspace_id ?: ($workspaceId ?: \App\Models\Workspace::first()?->id);
+                            if (!$targetWs) {
+                                Log::warning('[IG COMMENT SYNC] Skipping comment notification because no valid workspace could be resolved', [
+                                    'comment_id' => $commentId,
+                                ]);
+                                continue;
+                            }
+
+                            $userId = $this->resolveUserIdForWorkspace($targetWs);
+                            if (empty($userId)) {
+                                Log::warning('[IG COMMENT SYNC] Skipping comment notification because no valid user could be resolved for workspace', [
+                                    'workspace_id' => $targetWs,
+                                    'comment_id'   => $commentId,
+                                ]);
+                                continue;
+                            }
+
                             DB::table('notifications')->insert([
-                                'user_id'        => $integ->user_id ?? 1,
-                                'workspace_id'   => $integ->workspace_id ?? $workspaceId ?? 1,
+                                'user_id'        => $userId,
+                                'workspace_id'   => $targetWs,
                                 'type'           => 'instagram_comment',
                                 'title'          => 'Instagram Comment',
                                 'message'        => "@{$username} commented on your Instagram post\n\n\"{$text}\"",
@@ -389,10 +481,7 @@ class CommentNotificationService
                                 'created_at'     => $cTime,
                                 'updated_at'     => now(),
                             ]);
-                            $targetWs = $integ->workspace_id ?? $workspaceId ?? 1;
-                            if ($targetWs) {
-                                \Illuminate\Support\Facades\Cache::put("comments_stream_v_{$targetWs}", time(), 86400);
-                            }
+                            \Illuminate\Support\Facades\Cache::put("comments_stream_v_{$targetWs}", time(), 86400);
                         }
                     }
                 } catch (\Throwable $ie) {
@@ -502,10 +591,14 @@ class CommentNotificationService
 
                         $publishedAt = $snippet?->getPublishedAt();
                         $createdAt = $publishedAt ? Carbon::parse($publishedAt) : now();
-                        $targetWs = $conn->workspace_id ?? $workspaceId ?? 1;
+                        $targetWs = $conn->workspace_id ?? $workspaceId;
+                        $userId   = (!empty($conn->user_id) && User::where('id', $conn->user_id)->exists())
+                            ? (int) $conn->user_id
+                            : $this->resolveUserIdForWorkspace($targetWs);
+                        if (empty($userId)) continue;
 
                         DB::table('notifications')->insert([
-                            'user_id'        => $conn->user_id ?? 1,
+                            'user_id'        => $userId,
                             'workspace_id'   => $targetWs,
                             'type'           => 'youtube_comment',
                             'title'          => 'YouTube Comment',
@@ -550,7 +643,8 @@ class CommentNotificationService
         }
 
         try {
-            $res = $this->httpClient->post("https://graph.facebook.com/v23.0/{$pageId}/subscribed_apps", [
+            $version = $this->getGraphVersion();
+            $res = $this->httpClient->post("https://graph.facebook.com/{$version}/{$pageId}/subscribed_apps", [
                 'form_params' => [
                     'subscribed_fields' => 'messages,feed',
                     'access_token'      => $token,
