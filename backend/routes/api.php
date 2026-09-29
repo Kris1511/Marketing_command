@@ -5265,8 +5265,11 @@ Route::prefix('v1')->group(function () {
             $allPosts ? 'all' : ($endDateParam ?: ''),
         ])) . ($autoSync ? '_live' : '');
 
+        $autoSyncLockKey = "fb_posts_auto_sync_{$fbPage->id}_" . md5(($startDateParam ?: 'all') . '_' . ($endDateParam ?: 'all'));
+
         if ($forceRefresh) {
             \Illuminate\Support\Facades\Cache::forget($postsCacheKey);
+            \Illuminate\Support\Facades\Cache::forget($autoSyncLockKey);
         } elseif (\Illuminate\Support\Facades\Cache::has($postsCacheKey)) {
             return response()->json(\Illuminate\Support\Facades\Cache::get($postsCacheKey));
         }

@@ -2085,9 +2085,10 @@ class FacebookGraphService
             \Illuminate\Support\Facades\Log::warning("[FACEBOOK REELS ERROR] " . $e->getMessage());
         }
 
-        // 2. Query both /feed and /published_posts from Meta Graph API to ensure timeline and cross-posted media are fetched
+        // 2. Query /posts, /feed, and /published_posts from Meta Graph API to ensure photos, carousels, videos, reels, and timeline posts are all fetched
         $fields = 'id,message,created_time,shares,permalink_url,picture,full_picture,attachments{media_type,type,title,url,target,media,subattachments{media_type,type,url,target,media}}';
         $endpoints = [
+            "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/posts",
             "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/feed",
             "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/published_posts",
         ];
