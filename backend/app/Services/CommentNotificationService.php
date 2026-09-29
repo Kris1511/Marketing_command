@@ -119,58 +119,61 @@ class CommentNotificationService
                     // notifications are pushed to the backend in real-time.
                     $this->ensurePageSubscribedToFeedWebhook($pageId, $token);
 
-                    // 1. Try published posts with comments
-                    try {
-                        $version = $this->getGraphVersion();
-                        $url = "https://graph.facebook.com/{$version}/{$pageId}/published_posts";
-                        $res = $this->httpClient->get($url, [
-                            'query' => [
-                                'fields'       => 'id,message,created_time,comments{id,message,from,created_time}',
-                                'limit'        => 25,
-                                'access_token' => $token,
-                            ]
-                        ]);
+                    // 1. Try posts, feed, and published_posts with comments
+                    $feedEndpoints = ['posts', 'feed', 'published_posts'];
+                    foreach ($feedEndpoints as $ep) {
+                        try {
+                            $version = $this->getGraphVersion();
+                            $url = "https://graph.facebook.com/{$version}/{$pageId}/{$ep}";
+                            $res = $this->httpClient->get($url, [
+                                'query' => [
+                                    'fields'       => 'id,message,created_time,comments{id,message,from,created_time}',
+                                    'limit'        => 25,
+                                    'access_token' => $token,
+                                ]
+                            ]);
 
-                        $data = json_decode($res->getBody(), true);
-                        foreach ($data['data'] ?? [] as $post) {
-                            $postId = $post['id'] ?? null;
-                            if (empty($post['comments']['data'])) continue;
+                            $data = json_decode($res->getBody(), true);
+                            foreach ($data['data'] ?? [] as $post) {
+                                $postId = $post['id'] ?? null;
+                                if (empty($post['comments']['data'])) continue;
 
-                            foreach ($post['comments']['data'] as $c) {
-                                $commentId = $c['id'] ?? null;
-                                if (!$commentId) continue;
+                                foreach ($post['comments']['data'] as $c) {
+                                    $commentId = $c['id'] ?? null;
+                                    if (!$commentId) continue;
 
-                                $relKey = "facebook_comment:{$commentId}" . ($postId ? ":{$postId}" : "");
-                                $exists = DB::table('notifications')
-                                    ->where('type', 'facebook_comment')
-                                    ->where('related_entity', 'LIKE', "%{$commentId}%")
-                                    ->exists();
-                                if ($exists) continue;
+                                    $relKey = "facebook_comment:{$commentId}" . ($postId ? ":{$postId}" : "");
+                                    $exists = DB::table('notifications')
+                                        ->where('type', 'facebook_comment')
+                                        ->where('related_entity', 'LIKE', "%{$commentId}%")
+                                        ->exists();
+                                    if ($exists) continue;
 
-                                $author = $c['from']['name'] ?? 'Someone';
-                                $msg = trim($c['message'] ?? '');
-                                if (empty($msg)) $msg = 'Left a comment';
-                                $createdAt = !empty($c['created_time']) ? Carbon::parse($c['created_time']) : now();
+                                    $author = $c['from']['name'] ?? 'Someone';
+                                    $msg = trim($c['message'] ?? '');
+                                    if (empty($msg)) $msg = 'Left a comment';
+                                    $createdAt = !empty($c['created_time']) ? Carbon::parse($c['created_time']) : now();
 
-                                $targetWs = $page->workspace_id ?? $workspaceId;
-                                $userId   = $this->resolveUserIdForWorkspace($targetWs);
-                                if (empty($userId)) continue;
+                                    $targetWs = $page->workspace_id ?? $workspaceId;
+                                    $userId   = $this->resolveUserIdForWorkspace($targetWs);
+                                    if (empty($userId)) continue;
 
-                                DB::table('notifications')->insert([
-                                    'user_id'        => $userId,
-                                    'workspace_id'   => $targetWs,
-                                    'type'           => 'facebook_comment',
-                                    'title'          => 'Facebook Comment',
-                                    'message'        => "{$author} commented on your Facebook post\n\n\"{$msg}\"",
-                                    'related_entity' => $relKey,
-                                    'is_read'        => false,
-                                    'created_at'     => $createdAt,
-                                    'updated_at'     => now(),
-                                ]);
+                                    DB::table('notifications')->insert([
+                                        'user_id'        => $userId,
+                                        'workspace_id'   => $targetWs,
+                                        'type'           => 'facebook_comment',
+                                        'title'          => 'Facebook Comment',
+                                        'message'        => "{$author} commented on your Facebook post\n\n\"{$msg}\"",
+                                        'related_entity' => $relKey,
+                                        'is_read'        => false,
+                                        'created_at'     => $createdAt,
+                                        'updated_at'     => now(),
+                                    ]);
+                                }
                             }
+                        } catch (\Throwable $ppe) {
+                            Log::info("Facebook {$ep} comments check notice", ['page_id' => $pageId, 'note' => $ppe->getMessage()]);
                         }
-                    } catch (\Throwable $ppe) {
-                        Log::info('Facebook published_posts comments check notice', ['page_id' => $pageId, 'note' => $ppe->getMessage()]);
                     }
 
                     // 2. Fetch comments from uploaded photos (accessible with standard pages_read_engagement)
@@ -300,13 +303,13 @@ class CommentNotificationService
                         Log::info('Facebook videos comments check notice', ['page_id' => $pageId, 'note' => $ve->getMessage()]);
                     }
 
-                    // 4. Also check synced FacebookPost records in DB for this workspace if any have comments
+                    // 4. Also check synced FacebookPost records in DB for this workspace directly
                     try {
                         $dbPosts = \App\Models\FacebookPost::where('workspace_id', $page->workspace_id)
                             ->whereNotNull('fb_post_id')
-                            ->where('comments_count', '>', 0)
-                            ->orderBy('published_at', 'desc')
-                            ->take(5)
+                            ->where('fb_post_id', '!=', '')
+                            ->orderByRaw('COALESCE(published_at, created_at) DESC')
+                            ->take(20)
                             ->get();
 
                         foreach ($dbPosts as $dp) {
