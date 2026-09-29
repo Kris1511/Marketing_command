@@ -5048,7 +5048,8 @@ Route::prefix('v1')->group(function () {
         if (!empty($pageIds) && count($pageIds) > 0) {
             $baseQuery->where(function ($q) use ($pageIds, $fbPage) {
                 $q->whereIn('facebook_page_id', $pageIds)
-                  ->orWhere('fb_post_id', 'like', $fbPage->page_id . '\_%');
+                  ->orWhere('fb_post_id', 'like', $fbPage->page_id . '\_%')
+                  ->orWhereNull('facebook_page_id');
             });
         }
 
@@ -5237,10 +5238,14 @@ Route::prefix('v1')->group(function () {
             if (!empty($pageIds) && count($pageIds) > 0) {
                 $q->where(function ($sub) use ($pageIds, $fbPage) {
                     $sub->whereIn('facebook_page_id', $pageIds)
-                        ->orWhere('fb_post_id', 'like', $fbPage->page_id . '\_%');
+                        ->orWhere('fb_post_id', 'like', $fbPage->page_id . '\_%')
+                        ->orWhereNull('facebook_page_id');
                 });
             } else {
-                $q->where('fb_post_id', 'like', $fbPage->page_id . '\_%');
+                $q->where(function ($sub) use ($fbPage) {
+                    $sub->where('fb_post_id', 'like', $fbPage->page_id . '\_%')
+                        ->orWhereNull('facebook_page_id');
+                });
             }
 
             if (!$allPosts && $startDate && $endDate) {
@@ -5256,8 +5261,8 @@ Route::prefix('v1')->group(function () {
             return $q;
         };
 
-        $existingCount = $buildQuery()->count();
-        $needsSync     = $forceRefresh || $liveSync || ($existingCount === 0);
+        $autoSyncLockKey = "fb_posts_auto_sync_{$fbPage->id}_" . md5(($startDateParam ?: 'all') . '_' . ($endDateParam ?: 'all'));
+        $needsSync       = $forceRefresh || $liveSync || ($existingCount === 0) || !\Illuminate\Support\Facades\Cache::has($autoSyncLockKey);
 
         if ($needsSync && !empty($fbPage->page_access_token) && $fbPage->token_status !== 'disconnected') {
             try {
@@ -5269,6 +5274,7 @@ Route::prefix('v1')->group(function () {
                     $forceRefresh,
                     100
                 );
+                \Illuminate\Support\Facades\Cache::put($autoSyncLockKey, true, 60);
             } catch (\Throwable $e) {
                 \Illuminate\Support\Facades\Log::warning('[FACEBOOK POSTS SYNC ERROR] ' . $e->getMessage());
             }

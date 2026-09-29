@@ -2051,8 +2051,8 @@ class FacebookGraphService
         $since = null;
         $until = null;
         if ($startDate && $endDate) {
-            $since = \Carbon\Carbon::parse($startDate, 'Asia/Kolkata')->startOfDay()->setTimezone('UTC')->timestamp;
-            $until = \Carbon\Carbon::parse($endDate, 'Asia/Kolkata')->endOfDay()->setTimezone('UTC')->timestamp;
+            $since = \Carbon\Carbon::parse($startDate, 'Asia/Kolkata')->startOfDay()->subDay()->setTimezone('UTC')->timestamp;
+            $until = \Carbon\Carbon::parse($endDate, 'Asia/Kolkata')->endOfDay()->addDay()->setTimezone('UTC')->timestamp;
         }
 
         $cacheLockKey = "fb_sync_posts_run_{$fbPage->id}_" . md5("{$startDate}_{$endDate}");
@@ -2085,53 +2085,52 @@ class FacebookGraphService
             \Illuminate\Support\Facades\Log::warning("[FACEBOOK REELS ERROR] " . $e->getMessage());
         }
 
-        // 2. Query published_posts from Meta Graph API v23.0 with pagination
+        // 2. Query both /feed and /published_posts from Meta Graph API to ensure timeline and cross-posted media are fetched
         $fields = 'id,message,created_time,shares,permalink_url,picture,full_picture,attachments{media_type,type,title,url,target,media,subattachments{media_type,type,url,target,media}}';
-        $endpoint = "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/published_posts";
-        $params = [
-            'fields'       => $fields,
-            'limit'        => min(100, $limit),
-            'access_token' => $token,
+        $endpoints = [
+            "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/feed",
+            "{$this->baseUrl}/{$this->apiVersion}/{$pageId}/published_posts",
         ];
-        if ($since) $params['since'] = $since;
-        if ($until) $params['until'] = $until;
 
-        $postsData = [];
-        $nextUrl = $endpoint;
-        $currentParams = $params;
-        $pageIter = 0;
-        $maxPages = ($since && $until) ? 10 : 3; // Up to 300-1000 posts max
+        $rawPostsMap = [];
 
-        while ($nextUrl && $pageIter < $maxPages) {
-            $pageIter++;
-            try {
-                $response = $this->client()->timeout(20)->get($nextUrl, $currentParams);
-                if (!$response->successful()) {
-                    \Illuminate\Support\Facades\Log::warning("[FACEBOOK POSTS SYNC] Graph API non-200: " . $response->status());
-                    break;
-                }
-                $json = $response->json();
-                $batch = $json['data'] ?? [];
-                if (empty($batch)) break;
+        foreach ($endpoints as $ep) {
+            $nextUrl = $ep;
+            $currentParams = [
+                'fields'       => $fields,
+                'limit'        => min(100, $limit),
+                'access_token' => $token,
+            ];
+            $pageIter = 0;
+            $maxPages = 3;
 
-                $postsData = array_merge($postsData, $batch);
-
-                // Early exit if posts pre-date the 'since' boundary
-                if ($since) {
-                    $lastItem = end($batch);
-                    $lastTime = !empty($lastItem['created_time']) ? strtotime($lastItem['created_time']) : 0;
-                    if ($lastTime > 0 && $lastTime < $since) {
+            while ($nextUrl && $pageIter < $maxPages) {
+                $pageIter++;
+                try {
+                    $response = $this->client()->timeout(20)->get($nextUrl, $currentParams);
+                    if (!$response->successful()) {
                         break;
                     }
-                }
+                    $json = $response->json();
+                    $batch = $json['data'] ?? [];
+                    if (empty($batch)) break;
 
-                $nextUrl = $json['paging']['next'] ?? null;
-                $currentParams = [];
-            } catch (\Throwable $e) {
-                \Illuminate\Support\Facades\Log::warning("[FACEBOOK POSTS SYNC BATCH ERROR] " . $e->getMessage());
-                break;
+                    foreach ($batch as $p) {
+                        if (!empty($p['id']) && !isset($rawPostsMap[$p['id']])) {
+                            $rawPostsMap[$p['id']] = $p;
+                        }
+                    }
+
+                    $nextUrl = $json['paging']['next'] ?? null;
+                    $currentParams = [];
+                } catch (\Throwable $e) {
+                    \Illuminate\Support\Facades\Log::warning("[FACEBOOK POSTS SYNC BATCH ERROR] " . $e->getMessage());
+                    break;
+                }
             }
         }
+
+        $postsData = array_values($rawPostsMap);
 
         // Resolve Canonical Page ID from permalinks
         $canonicalPageId = $this->resolveCanonicalPageId($pageId, $postsData, $token);
