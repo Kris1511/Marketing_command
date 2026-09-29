@@ -1055,7 +1055,10 @@ Route::prefix('v1')->group(function () {
                 ->leftJoin('workspaces', 'notifications.workspace_id', '=', 'workspaces.id');
 
             if ($workspaceId) {
-                $baseQuery->where('notifications.workspace_id', $workspaceId);
+                $baseQuery->where(function ($q) use ($workspaceId) {
+                    $q->where('notifications.workspace_id', $workspaceId)
+                      ->orWhereNull('notifications.workspace_id');
+                });
             }
 
             // Real workspace-wide summary metrics (before category filtering)

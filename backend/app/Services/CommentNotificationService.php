@@ -152,7 +152,7 @@ class CommentNotificationService
                                     if (empty($msg)) $msg = 'Left a comment';
                                     $createdAt = !empty($c['created_time']) ? Carbon::parse($c['created_time']) : now();
 
-                                    $targetWs = $page->workspace_id ?? $workspaceId;
+                                    $targetWs = $workspaceId ?: ($page->workspace_id ?? 1);
                                     $userId   = $this->resolveUserIdForWorkspace($targetWs);
                                     if (empty($userId)) continue;
 
@@ -217,7 +217,7 @@ class CommentNotificationService
                                 if (empty($msg)) $msg = 'Left a comment';
                                 $createdAt = !empty($c['created_time']) ? Carbon::parse($c['created_time']) : now();
 
-                                $targetWs = $page->workspace_id ?? $workspaceId;
+                                $targetWs = $workspaceId ?: ($page->workspace_id ?? 1);
                                 $userId   = $this->resolveUserIdForWorkspace($targetWs);
                                 if (empty($userId)) continue;
 
@@ -280,7 +280,7 @@ class CommentNotificationService
                                 if (empty($msg)) $msg = 'Left a comment';
                                 $createdAt = !empty($c['created_time']) ? Carbon::parse($c['created_time']) : now();
 
-                                $targetWs = $page->workspace_id ?? $workspaceId;
+                                $targetWs = $workspaceId ?: ($page->workspace_id ?? 1);
                                 $userId   = $this->resolveUserIdForWorkspace($targetWs);
                                 if (empty($userId)) continue;
 
@@ -338,7 +338,7 @@ class CommentNotificationService
                                     if (empty($msg)) $msg = 'Left a comment';
                                     $createdAt = !empty($c['created_time']) ? Carbon::parse($c['created_time']) : now();
 
-                                    $targetWs = $page->workspace_id ?? $workspaceId;
+                                    $targetWs = $workspaceId ?: ($page->workspace_id ?? 1);
                                     $userId   = $this->resolveUserIdForWorkspace($targetWs);
                                     if (empty($userId)) continue;
 
