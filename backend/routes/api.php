@@ -1072,6 +1072,11 @@ Route::prefix('v1')->group(function () {
             $filteredQuery = clone $baseQuery;
 
             if ($filterTab === 'comments') {
+                if ($commentsCount === 0 || $request->boolean('sync') || $request->boolean('refresh')) {
+                    try {
+                        (new \App\Services\CommentNotificationService())->syncAll($workspaceId);
+                    } catch (\Throwable $se) {}
+                }
                 $filteredQuery->whereIn('notifications.type', ['facebook_comment', 'instagram_comment', 'youtube_comment']);
             } elseif ($filterTab === 'unread') {
                 $filteredQuery->where('notifications.is_read', false);

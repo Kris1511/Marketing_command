@@ -100,9 +100,7 @@ class CommentNotificationService
             if ($workspaceId) {
                 $query->where('workspace_id', $workspaceId);
             }
-            $query->where(function ($q) {
-                $q->whereNotIn('token_status', ['disconnected', 'invalid'])->orWhereNull('token_status');
-            });
+            $query->whereNotNull('page_access_token')->where('page_access_token', '!=', '');
             $pages = $query->get();
 
             foreach ($pages as $page) {
