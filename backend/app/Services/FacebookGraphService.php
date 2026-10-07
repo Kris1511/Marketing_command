@@ -1912,33 +1912,35 @@ class FacebookGraphService
 
                 // Upsert into local FacebookPost table for persistent storage & table display
                 if ($fbPage) {
-                    try {
-                        $postType = $pInfo['is_reel'] ? 'reel' : ($pInfo['is_video'] ? 'video' : ($pInfo['is_multi'] ? 'multi_image' : 'single_image'));
-                        FacebookPost::updateOrCreate(
-                            [
-                                'workspace_id' => $fbPage->workspace_id,
-                                'fb_post_id'   => $postId,
-                            ],
-                            [
-                                'facebook_page_id' => $fbPage->id,
-                                'content'          => $p['message'] ?? '',
-                                'post_type'        => $postType,
-                                'link_url'         => $p['permalink_url'] ?? null,
-                                'status'           => 'published',
-                                'published_at'     => $cTime ? \Carbon\Carbon::createFromTimestamp($cTime) : now(),
-                                'created_at'       => $cTime ? \Carbon\Carbon::createFromTimestamp($cTime) : now(),
-                                'views_count'      => $pViews,
-                                'likes_count'      => $pLikes,
-                                'comments_count'   => $pComments,
-                                'shares_count'     => $pShares,
-                                'reactions_count'  => $pLikes,
-                                'engagement_count' => ($pLikes !== null || $pComments !== null || $pShares !== null)
-                                    ? ((int)($pLikes ?? 0) + (int)($pComments ?? 0) + (int)($pShares ?? 0))
-                                    : null,
-                                'last_synced_at'   => now(),
-                            ]
-                        );
-                    } catch (\Throwable $e) {}
+                    $postType = $pInfo['is_reel'] ? 'reel' : ($pInfo['is_video'] ? 'video' : ($pInfo['is_multi'] ? 'multi_image' : 'single_image'));
+                    $imgUrl = $p['full_picture'] ?? $p['picture'] ?? null;
+                    if (!$imgUrl && !empty($pInfo['post']['attachments']['data'][0]['media']['image']['src'])) {
+                        $imgUrl = $pInfo['post']['attachments']['data'][0]['media']['image']['src'];
+                    }
+                    $this->persistFacebookPost(
+                        $fbPage,
+                        $postId,
+                        [
+                            'facebook_page_id' => $fbPage->id,
+                            'content'          => $p['message'] ?? '',
+                            'post_type'        => $postType,
+                            'link_url'         => $p['permalink_url'] ?? null,
+                            'status'           => 'published',
+                            'published_at'     => $cTime ? \Carbon\Carbon::createFromTimestamp($cTime) : now(),
+                            'created_at'       => $cTime ? \Carbon\Carbon::createFromTimestamp($cTime) : now(),
+                            'views_count'      => $pViews,
+                            'likes_count'      => $pLikes,
+                            'comments_count'   => $pComments,
+                            'shares_count'     => $pShares,
+                            'reactions_count'  => $pLikes,
+                            'engagement_count' => ($pLikes !== null || $pComments !== null || $pShares !== null)
+                                ? ((int)($pLikes ?? 0) + (int)($pComments ?? 0) + (int)($pShares ?? 0))
+                                : 0,
+                            'last_synced_at'   => now(),
+                        ],
+                        $imgUrl,
+                        ($pInfo['is_video'] || $pInfo['is_reel'])
+                    );
                 }
 
                 $totalLikes    += (int)$pLikes;
@@ -2026,6 +2028,88 @@ class FacebookGraphService
         }
 
         return $pageId;
+    }
+
+    /**
+     * Safely persist Facebook post and media attachments to database with column constraint fallbacks.
+     */
+    public function persistFacebookPost(
+        FacebookPage $fbPage,
+        string $fbPostId,
+        array $attributes,
+        ?string $imageUrl = null,
+        bool $isVideoOrReel = false
+    ): ?FacebookPost {
+        static $schemaRelaxed = false;
+        if (!$schemaRelaxed) {
+            $schemaRelaxed = true;
+            try {
+                \Illuminate\Support\Facades\DB::statement("ALTER TABLE `facebook_posts` MODIFY `comments_count` INT UNSIGNED NULL DEFAULT NULL");
+            } catch (\Throwable $e) {}
+            try {
+                \Illuminate\Support\Facades\DB::statement("ALTER TABLE `facebook_posts` MODIFY `engagement_count` INT UNSIGNED NULL DEFAULT NULL");
+            } catch (\Throwable $e) {}
+            try {
+                \Illuminate\Support\Facades\DB::statement("ALTER TABLE `facebook_posts` MODIFY `views_count` BIGINT UNSIGNED NULL DEFAULT NULL");
+            } catch (\Throwable $e) {}
+        }
+
+        $dbPost = null;
+        try {
+            $dbPost = FacebookPost::updateOrCreate(
+                [
+                    'workspace_id' => $fbPage->workspace_id,
+                    'fb_post_id'   => $fbPostId,
+                ],
+                $attributes
+            );
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning("[FACEBOOK POST PERSIST WARNING] Initial updateOrCreate failed for {$fbPostId}: " . $e->getMessage());
+
+            // Try running ALTER TABLE in case migration did not run on server
+            try {
+                \Illuminate\Support\Facades\DB::statement("ALTER TABLE `facebook_posts` MODIFY `comments_count` INT UNSIGNED NULL DEFAULT NULL");
+            } catch (\Throwable $ignored) {}
+
+            // Retry with safe fallbacks (comments_count => 0, engagement_count => 0)
+            try {
+                $safeAttributes = $attributes;
+                if (!array_key_exists('comments_count', $safeAttributes) || $safeAttributes['comments_count'] === null) {
+                    $safeAttributes['comments_count'] = 0;
+                }
+                if (!array_key_exists('engagement_count', $safeAttributes) || $safeAttributes['engagement_count'] === null) {
+                    $safeAttributes['engagement_count'] = 0;
+                }
+                $dbPost = FacebookPost::updateOrCreate(
+                    [
+                        'workspace_id' => $fbPage->workspace_id,
+                        'fb_post_id'   => $fbPostId,
+                    ],
+                    $safeAttributes
+                );
+            } catch (\Throwable $retryEx) {
+                \Illuminate\Support\Facades\Log::error("[FACEBOOK POST PERSIST ERROR] Retry updateOrCreate failed for {$fbPostId}: " . $retryEx->getMessage());
+                return null;
+            }
+        }
+
+        if ($dbPost && !empty($imageUrl)) {
+            try {
+                \App\Models\FacebookPostMedia::updateOrCreate(
+                    ['facebook_post_id' => $dbPost->id],
+                    [
+                        'media_type' => $isVideoOrReel ? 'video' : 'image',
+                        'file_url'   => $imageUrl,
+                        'sort_order' => 0,
+                    ]
+                );
+                \Illuminate\Support\Facades\Cache::put("fb_post_pic_{$fbPostId}", $imageUrl, 86400);
+            } catch (\Throwable $medEx) {
+                \Illuminate\Support\Facades\Log::warning("[FACEBOOK POST MEDIA ERROR] Failed to save media for {$fbPostId}: " . $medEx->getMessage());
+            }
+        }
+
+        return $dbPost;
     }
 
     /**
@@ -2412,11 +2496,9 @@ class FacebookGraphService
             $pShares = $postShares[$cId] ?? $postShares[$fullId] ?? $pp['shares'] ?? 0;
 
             $pubDate = $pp['created_time'] ? \Carbon\Carbon::createFromTimestamp($pp['created_time']) : now();
-            $dbPost = FacebookPost::updateOrCreate(
-                [
-                    'workspace_id' => $fbPage->workspace_id,
-                    'fb_post_id'   => $pp['id'],
-                ],
+            $dbPost = $this->persistFacebookPost(
+                $fbPage,
+                $pp['id'],
                 [
                     'facebook_page_id' => $fbPage->id,
                     'content'          => $pp['message'],
@@ -2432,28 +2514,20 @@ class FacebookGraphService
                     'reactions_count'  => $pLikes,
                     'engagement_count' => ($pLikes !== null || $pComments !== null || $pShares !== null)
                         ? ((int)($pLikes ?? 0) + (int)($pComments ?? 0) + (int)($pShares ?? 0))
-                        : null,
+                        : 0,
                     'last_synced_at'   => now(),
-                ]
+                ],
+                $pp['image_url'],
+                ($pp['is_video'] || $pp['is_reel'])
             );
-
-            if ($pp['image_url']) {
-                \App\Models\FacebookPostMedia::updateOrCreate(
-                    ['facebook_post_id' => $dbPost->id],
-                    [
-                        'media_type' => ($pp['is_video'] || $pp['is_reel']) ? 'video' : 'image',
-                        'file_url'   => $pp['image_url'],
-                        'sort_order' => 0,
-                    ]
-                );
-                \Illuminate\Support\Facades\Cache::put("fb_post_pic_{$pp['id']}", $pp['image_url'], 86400);
-            }
 
             if ($pViews !== null) {
                 \Illuminate\Support\Facades\Cache::put("fb_video_views_{$pp['id']}", $pViews, 86400);
             }
 
-            $syncedPostIds[] = $pp['id'];
+            if ($dbPost) {
+                $syncedPostIds[] = $pp['id'];
+            }
         }
 
         // Cache the sync result for 60 seconds
