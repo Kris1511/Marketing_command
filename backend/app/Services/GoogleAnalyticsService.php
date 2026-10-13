@@ -14,11 +14,13 @@ class GoogleAnalyticsService
     protected ?GoogleClient $client = null;
     protected string $credentialsPath;
     protected ?string $defaultPropertyId;
+    protected GoogleOAuthService $oauthService;
 
-    public function __construct()
+    public function __construct(?GoogleOAuthService $oauthService = null)
     {
-        $this->credentialsPath = base_path(env('GOOGLE_ANALYTICS_CREDENTIALS_PATH', 'ga-credentials.json'));
+        $this->credentialsPath   = base_path(env('GOOGLE_ANALYTICS_CREDENTIALS_PATH', 'ga-credentials.json'));
         $this->defaultPropertyId = env('GOOGLE_ANALYTICS_PROPERTY_ID', null);
+        $this->oauthService      = $oauthService ?: app(GoogleOAuthService::class);
     }
 
     /**
@@ -33,6 +35,11 @@ class GoogleAnalyticsService
                 ->first();
 
             if ($integ) {
+                // If the integration is marked expired, it cannot execute live queries
+                if ($integ->isExpired()) {
+                    return false;
+                }
+
                 $hasToken = !empty($integ->refresh_token) || Cache::has("ga4_token_{$workspaceId}") || file_exists($this->credentialsPath);
                 $propId   = (!empty($integ->account_id) && $integ->account_id !== 'pending') ? $integ->account_id : $this->defaultPropertyId;
 
@@ -183,18 +190,23 @@ class GoogleAnalyticsService
             : (count($properties) === 1 ? $properties[0]['name'] : ($userEmail ? "GA4 ({$userEmail})" : "GA4 Property"));
 
         // Save integration
+        $tokenToSave = $refreshToken ?: ($existingInteg && !$existingInteg->isExpired() ? $existingInteg->refresh_token : null);
+        $expiresIn = (int)($tokens['expires_in'] ?? 3600);
+
         Integration::updateOrCreate(
             [
                 'workspace_id' => $workspaceId,
                 'platform'     => 'google_analytics',
             ],
             [
-                'account_id'        => $selectedPropId ?: ($properties[0]['property_id'] ?? 'pending'),
-                'account_name'      => $selectedPropName,
-                'refresh_token'     => $refreshToken ?: ($existingInteg?->refresh_token),
-                'is_connected'      => true,
-                'connection_status' => 'connected',
-                'last_sync_at'      => now(),
+                'account_id'              => $selectedPropId ?: ($properties[0]['property_id'] ?? 'pending'),
+                'account_name'            => $selectedPropName,
+                'refresh_token'           => $tokenToSave,
+                'access_token_expires_at' => now()->addSeconds($expiresIn),
+                'is_connected'            => true,
+                'connection_status'       => 'connected',
+                'error_message'           => null,
+                'last_sync_at'            => now(),
             ]
         );
 
@@ -248,55 +260,16 @@ class GoogleAnalyticsService
     /**
      * Fetch a valid access token for GA4 Data API requests (using OAuth or service account fallback).
      */
-    public function getAccessToken(?int $workspaceId = null): string
+    public function getAccessToken(?int $workspaceId = null, bool $forceRefresh = false): string
     {
-        // 1. Try OAuth token for workspace
         if ($workspaceId) {
-            try {
-                $cached = Cache::get("ga4_token_{$workspaceId}");
-                if (!empty($cached)) {
-                    return $cached;
-                }
-
-                $integ = Integration::where('workspace_id', $workspaceId)
-                    ->where('platform', 'google_analytics')
-                    ->where('is_connected', true)
-                    ->first();
-
-                if ($integ && !empty($integ->refresh_token)) {
-                    $clientId     = config('services.google_analytics.client_id');
-                    $clientSecret = config('services.google_analytics.client_secret');
-
-                    $res = Http::asForm()->timeout(10)->post('https://oauth2.googleapis.com/token', [
-                        'client_id'     => $clientId,
-                        'client_secret' => $clientSecret,
-                        'refresh_token' => $integ->refresh_token,
-                        'grant_type'    => 'refresh_token',
-                    ]);
-
-                    if ($res->successful() && !empty($res->json('access_token'))) {
-                        $newToken = $res->json('access_token');
-                        $expiresIn = (int)($res->json('expires_in') ?? 3600);
-                        Cache::put("ga4_token_{$workspaceId}", $newToken, max(60, $expiresIn - 120));
-                        return $newToken;
-                    }
-
-                    if ($res->json('error') === 'invalid_grant' || str_contains($res->json('error_description') ?? '', 'expired') || str_contains($res->json('error_description') ?? '', 'revoked')) {
-                        $integ->update(['connection_status' => 'expired']);
-                        throw new Exception("Google Analytics token has expired or was revoked. Please reconnect Google Analytics.");
-                    }
-
-                    Log::warning('[GA4 OAUTH REFRESH] Token refresh failed for workspace ' . $workspaceId, [
-                        'response' => $res->body()
-                    ]);
-                }
-            } catch (Exception $e) {
-                if (str_contains($e->getMessage(), 'expired') || str_contains($e->getMessage(), 'revoked')) {
-                    throw $e;
-                }
-            } catch (\Throwable $e) {
-                // Ignore DB errors in unit test environment
-            }
+            return $this->oauthService->getValidAccessToken(
+                'google_analytics',
+                $workspaceId,
+                $this->credentialsPath,
+                ['https://www.googleapis.com/auth/analytics.readonly'],
+                $forceRefresh
+            );
         }
 
         // 2. Fallback to Service Account if present
@@ -316,7 +289,11 @@ class GoogleAnalyticsService
             }
         }
 
-        throw new Exception("No active Google Analytics credentials found for this workspace. Please connect Google Analytics in API Connections.");
+        throw new \App\Exceptions\GoogleOAuthException(
+            "No active Google Analytics credentials found for this workspace. Please connect Google Analytics in API Connections.",
+            'google_analytics',
+            true
+        );
     }
 
     /**
@@ -396,15 +373,28 @@ class GoogleAnalyticsService
         $propId = $this->getPropertyId($workspaceId);
         if (!$propId) {
             return [
-                'connected'                         => false,
-                'active_users'                      => 0,
-                'new_users'                         => 0,
-                'sessions'                          => 0,
-                'average_engagement_time'           => 0,
-                'average_engagement_time_formatted' => '0s',
-                'screen_page_views'                 => 0,
-                'message'                           => 'Google Analytics Property ID not configured for this workspace.',
+                'connected'     => false,
+                'auth_required' => false,
+                'message'       => 'Google Analytics Property ID not configured for this workspace.',
             ];
+        }
+
+        if ($workspaceId) {
+            try {
+                $integ = Integration::where('workspace_id', $workspaceId)
+                    ->where('platform', 'google_analytics')
+                    ->first();
+                if ($integ && $integ->isExpired()) {
+                    return [
+                        'connected'     => false,
+                        'auth_required' => true,
+                        'error'         => $integ->error_message ?: 'Google Analytics session has expired. Reconnection required.',
+                        'property_id'   => $propId,
+                    ];
+                }
+            } catch (\Throwable $dbEx) {
+                // Ignore DB errors in unit tests
+            }
         }
 
         $dateRange = $this->resolveDateRange($startDate, $endDate);
@@ -437,6 +427,7 @@ class GoogleAnalyticsService
 
             return [
                 'connected'                         => true,
+                'auth_required'                     => false,
                 'property_id'                       => $propId,
                 'active_users'                      => $activeUsers,
                 'new_users'                         => $newUsers,
@@ -447,21 +438,17 @@ class GoogleAnalyticsService
             ];
         } catch (\Throwable $e) {
             Log::warning('GA4 getOverview failed', ['error' => $e->getMessage()]);
-            $isAuthError = str_contains(strtolower($e->getMessage()), 'token')
+            $isAuthError = ($e instanceof \App\Exceptions\GoogleOAuthException)
+                || str_contains(strtolower($e->getMessage()), 'token')
                 || str_contains(strtolower($e->getMessage()), 'auth')
                 || str_contains(strtolower($e->getMessage()), 'credential')
                 || str_contains(strtolower($e->getMessage()), 'invalid_grant');
+
             return [
-                'connected'                         => !$isAuthError,
-                'auth_required'                     => $isAuthError,
-                'error'                             => $e->getMessage(),
-                'property_id'                       => $propId,
-                'active_users'                      => 0,
-                'new_users'                         => 0,
-                'sessions'                          => 0,
-                'average_engagement_time'           => 0,
-                'average_engagement_time_formatted' => '0s',
-                'screen_page_views'                 => 0,
+                'connected'     => false,
+                'auth_required' => $isAuthError,
+                'error'         => $e->getMessage(),
+                'property_id'   => $propId,
             ];
         }
     }
@@ -498,6 +485,19 @@ class GoogleAnalyticsService
         $propId = $this->getPropertyId($workspaceId);
         if (!$propId) {
             return [];
+        }
+
+        if ($workspaceId) {
+            try {
+                $integ = Integration::where('workspace_id', $workspaceId)
+                    ->where('platform', 'google_analytics')
+                    ->first();
+                if ($integ && $integ->isExpired()) {
+                    return [];
+                }
+            } catch (\Throwable $e) {
+                // Ignore DB errors
+            }
         }
 
         $dateRange = $this->resolveDateRange($startDate, $endDate);
@@ -570,6 +570,19 @@ class GoogleAnalyticsService
         $propId = $this->getPropertyId($workspaceId);
         if (!$propId) {
             return ['labels' => [], 'active_users' => [], 'sessions' => [], 'has_data' => false];
+        }
+
+        if ($workspaceId) {
+            try {
+                $integ = Integration::where('workspace_id', $workspaceId)
+                    ->where('platform', 'google_analytics')
+                    ->first();
+                if ($integ && $integ->isExpired()) {
+                    return ['labels' => [], 'active_users' => [], 'sessions' => [], 'has_data' => false];
+                }
+            } catch (\Throwable $e) {
+                // Ignore DB errors
+            }
         }
 
         $dateRange = $this->resolveDateRange($startDate, $endDate);

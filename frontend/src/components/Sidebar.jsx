@@ -201,6 +201,24 @@ export default function Sidebar({ isOpen, onClose }) {
             </button>
           </div>
         )}
+
+        <div style={{ marginTop: '14px', textAlign: 'center' }}>
+          <NavLink
+            to="/privacy-policy"
+            onClick={onClose}
+            style={{
+              color: 'rgba(255, 255, 255, 0.55)',
+              fontSize: '11.5px',
+              textDecoration: 'none',
+              transition: 'color 0.15s ease',
+              display: 'inline-block',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = '#93c5fd')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255, 255, 255, 0.55)')}
+          >
+            Privacy Policy &amp; Security
+          </NavLink>
+        </div>
       </aside>
 
       {/* Simple Dashboard Guide Modal */}

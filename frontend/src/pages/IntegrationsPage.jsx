@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import {
   CheckCircle2,
   AlertCircle,
@@ -736,7 +737,10 @@ export default function IntegrationsPage() {
           <h2>API Connections</h2>
           <p>
             Client workspace integrations and verified OAuth credentials for{' '}
-            <strong>{selectedWorkspace?.name || 'Selected Workspace'}</strong>.
+            <strong>{selectedWorkspace?.name || 'Selected Workspace'}</strong>.{' '}
+            <Link to="/privacy-policy" style={{ color: '#2457e6', fontWeight: '600', textDecoration: 'none', marginLeft: '6px' }}>
+              Privacy Policy &rarr;
+            </Link>
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>

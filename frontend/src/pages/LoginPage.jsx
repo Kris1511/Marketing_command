@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { AlertTriangle, KeyRound } from 'lucide-react';
 
@@ -252,6 +252,26 @@ export default function LoginPage() {
             >
               • Manager: manager@example.com / password123
             </button>
+          </div>
+        </div>
+
+        {/* Footer Privacy Policy Link */}
+        <div style={{ marginTop: '22px', textAlign: 'center', fontSize: '12px', color: '#64748b' }}>
+          <Link
+            to="/privacy-policy"
+            style={{
+              color: '#2457e6',
+              textDecoration: 'none',
+              fontWeight: '600',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+          >
+            Privacy Policy &amp; OAuth Disclosure
+          </Link>
+          <div style={{ marginTop: '6px', fontSize: '11px', color: '#94a3b8' }}>
+            &copy; {new Date().getFullYear()} Redmind Technologies
           </div>
         </div>
       </div>

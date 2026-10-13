@@ -39,8 +39,9 @@ function formatNum(n) {
 }
 
 function formatDuration(seconds, formattedStr) {
-  if (formattedStr) return formattedStr;
-  if (seconds === null || seconds === undefined || isNaN(seconds)) return '0s';
+  if (seconds === null || seconds === undefined || isNaN(seconds) || seconds === '') {
+    return formattedStr || '—';
+  }
   const sec = Math.floor(Number(seconds));
   if (sec <= 0) return '0s';
   const h = Math.floor(sec / 3600);
@@ -60,6 +61,7 @@ export default function GoogleAnalyticsDashboardSection({
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
+  const [metaPropertyId, setMetaPropertyId] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [sourcesPage, setSourcesPage] = useState(1);
   const SOURCES_PER_PAGE = 5;
@@ -77,12 +79,18 @@ export default function GoogleAnalyticsDashboardSection({
         if (endDate) params.end_date = endDate;
 
         const res = await axiosInstance.get('/google-analytics/metrics', { params });
+        if (res.data?.property_id) {
+          setMetaPropertyId(res.data.property_id);
+        }
         if (res.data?.success && res.data?.data) {
           setData(res.data.data);
+          setError('');
         } else {
+          setData(null);
           setError(res.data?.message || 'Failed to fetch GA4 metrics.');
         }
       } catch (err) {
+        setData(null);
         setError(err.response?.data?.message || err.message || 'Error fetching Google Analytics data.');
       } finally {
         setLoading(false);
@@ -126,7 +134,13 @@ export default function GoogleAnalyticsDashboardSection({
   }, [workspaceId, startDate, endDate, data]);
 
   const overview = data?.overview;
-  const isAuthRequired = Boolean(data?.auth_required || overview?.auth_required);
+  const isAuthRequired = Boolean(
+    data?.auth_required ||
+    overview?.auth_required ||
+    error?.toLowerCase().includes('expired') ||
+    error?.toLowerCase().includes('reconnect') ||
+    error?.toLowerCase().includes('reauthorization')
+  );
   const sources = data?.sources || [];
   const totalSourcesPages = Math.max(1, Math.ceil(sources.length / SOURCES_PER_PAGE));
   const currentSourcesPage = Math.min(sourcesPage, totalSourcesPages);
@@ -223,7 +237,7 @@ export default function GoogleAnalyticsDashboardSection({
     );
   }
 
-  if (error && !data) {
+  if (error && !data && !isAuthRequired) {
     return (
       <div style={{ padding: '36px', textAlign: 'center', background: '#fff', borderRadius: '12px', border: '1px solid #fee2e2', marginBottom: '24px' }}>
         <AlertCircle size={32} color="#ef4444" style={{ margin: '0 auto 10px' }} />
@@ -298,7 +312,7 @@ export default function GoogleAnalyticsDashboardSection({
                   border: '1px solid #fde68a',
                 }}
               >
-                Property: {overview?.property_id || 'Active'}
+                Property: {overview?.property_id || metaPropertyId || 'Active'}
               </span>
             </div>
             <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>
@@ -576,7 +590,7 @@ export default function GoogleAnalyticsDashboardSection({
               <Line data={chartData} options={chartOptions} />
             ) : (
               <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', fontSize: '13px' }}>
-                No trend data available for this date range.
+                {isAuthRequired ? 'Google Analytics session expired. Reconnect account to view trend.' : 'No trend data available for this date range.'}
               </div>
             )}
           </div>
@@ -739,7 +753,7 @@ export default function GoogleAnalyticsDashboardSection({
                 ) : (
                   <tr>
                     <td colSpan={4} style={{ padding: '36px 12px', textAlign: 'center', color: '#94a3b8' }}>
-                      No acquisition data available for this period.
+                      {isAuthRequired ? 'Google Analytics session expired. Reconnect account to view traffic acquisition.' : 'No acquisition data available for this period.'}
                     </td>
                   </tr>
                 )}

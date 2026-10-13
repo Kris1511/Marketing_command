@@ -16,6 +16,7 @@ import NotificationsPage from './pages/NotificationsPage';
 import InboxPage from './pages/InboxPage';
 import CommentsPage from './pages/CommentsPage';
 import TeamPage from './pages/TeamPage';
+import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
 import './assets/styles.css';
 
 function MainLayout() {
@@ -85,6 +86,7 @@ export default function App() {
         <WorkspaceProvider>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
             <Route path="/*" element={<MainLayout />} />
           </Routes>
         </WorkspaceProvider>

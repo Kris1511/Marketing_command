@@ -14,11 +14,13 @@ class GoogleSearchConsoleService
     protected ?GoogleClient $client = null;
     protected string $credentialsPath;
     protected ?string $defaultSiteUrl;
+    protected GoogleOAuthService $oauthService;
 
-    public function __construct()
+    public function __construct(?GoogleOAuthService $oauthService = null)
     {
         $this->credentialsPath = base_path(env('GOOGLE_SEARCH_CONSOLE_CREDENTIALS_PATH', env('GOOGLE_ANALYTICS_CREDENTIALS_PATH', 'ga-credentials.json')));
-        $this->defaultSiteUrl = env('GOOGLE_SEARCH_CONSOLE_SITE_URL', null);
+        $this->defaultSiteUrl  = env('GOOGLE_SEARCH_CONSOLE_SITE_URL', null);
+        $this->oauthService    = $oauthService ?: app(GoogleOAuthService::class);
     }
 
     /**
@@ -36,6 +38,10 @@ class GoogleSearchConsoleService
                     ->first();
 
                 if ($integ) {
+                    if ($integ->isExpired()) {
+                        return false;
+                    }
+
                     $hasToken = !empty($integ->refresh_token) || $hasOAuth || file_exists($this->credentialsPath);
                     $siteUrl  = (!empty($integ->account_id) && $integ->account_id !== 'pending') ? $integ->account_id : $this->defaultSiteUrl;
 
@@ -188,18 +194,23 @@ class GoogleSearchConsoleService
         $accountName = $selectedSiteUrl ?: ($userEmail ? "Search Console ({$userEmail})" : "Google Search Console");
 
         // Save integration
+        $tokenToSave = $refreshToken ?: ($existingInteg && !$existingInteg->isExpired() ? $existingInteg->refresh_token : null);
+        $expiresIn = (int)($tokens['expires_in'] ?? 3600);
+
         Integration::updateOrCreate(
             [
                 'workspace_id' => $workspaceId,
                 'platform'     => 'search_console',
             ],
             [
-                'account_id'        => $selectedSiteUrl ?: 'pending',
-                'account_name'      => $accountName,
-                'refresh_token'     => $refreshToken ?: ($existingInteg?->refresh_token),
-                'is_connected'      => true,
-                'connection_status' => 'connected',
-                'last_sync_at'      => now(),
+                'account_id'              => $selectedSiteUrl ?: 'pending',
+                'account_name'            => $accountName,
+                'refresh_token'           => $tokenToSave,
+                'access_token_expires_at' => now()->addSeconds($expiresIn),
+                'is_connected'            => true,
+                'connection_status'       => 'connected',
+                'error_message'           => null,
+                'last_sync_at'            => now(),
             ]
         );
 
@@ -248,55 +259,16 @@ class GoogleSearchConsoleService
     /**
      * Fetch a valid access token for Search Console API requests.
      */
-    public function getAccessToken(?int $workspaceId = null): string
+    public function getAccessToken(?int $workspaceId = null, bool $forceRefresh = false): string
     {
-        // 1. Try OAuth token for workspace
         if ($workspaceId) {
-            $cached = Cache::get("gsc_token_{$workspaceId}");
-            if (!empty($cached)) {
-                return $cached;
-            }
-
-            try {
-                $integ = Integration::where('workspace_id', $workspaceId)
-                    ->where('platform', 'search_console')
-                    ->where('is_connected', true)
-                    ->first();
-
-                if ($integ && !empty($integ->refresh_token)) {
-                    $clientId     = config('services.google_search_console.client_id');
-                    $clientSecret = config('services.google_search_console.client_secret');
-
-                    $res = Http::asForm()->timeout(10)->post('https://oauth2.googleapis.com/token', [
-                        'client_id'     => $clientId,
-                        'client_secret' => $clientSecret,
-                        'refresh_token' => $integ->refresh_token,
-                        'grant_type'    => 'refresh_token',
-                    ]);
-
-                    if ($res->successful() && !empty($res->json('access_token'))) {
-                        $newToken = $res->json('access_token');
-                        $expiresIn = (int)($res->json('expires_in') ?? 3600);
-                        Cache::put("gsc_token_{$workspaceId}", $newToken, max(60, $expiresIn - 120));
-                        return $newToken;
-                    }
-
-                    if ($res->json('error') === 'invalid_grant' || str_contains($res->json('error_description') ?? '', 'expired') || str_contains($res->json('error_description') ?? '', 'revoked')) {
-                        $integ->update(['connection_status' => 'expired']);
-                        throw new Exception("Google Search Console token has expired or was revoked. Please reconnect Search Console.");
-                    }
-
-                    Log::warning('[GSC OAUTH REFRESH] Token refresh failed for workspace ' . $workspaceId, [
-                        'response' => $res->body()
-                    ]);
-                }
-            } catch (Exception $e) {
-                if (str_contains($e->getMessage(), 'expired') || str_contains($e->getMessage(), 'revoked')) {
-                    throw $e;
-                }
-            } catch (\Throwable $e) {
-                // Ignore DB errors in test environment
-            }
+            return $this->oauthService->getValidAccessToken(
+                'search_console',
+                $workspaceId,
+                $this->credentialsPath,
+                ['https://www.googleapis.com/auth/webmasters.readonly'],
+                $forceRefresh
+            );
         }
 
         // 2. Service account fallback if credentials file exists
@@ -311,14 +283,18 @@ class GoogleSearchConsoleService
             }
 
             $token = $client->fetchAccessTokenWithAssertion();
-            if (isset($token['error'])) {
-                throw new Exception("Google Search Console Auth Error: " . ($token['error_description'] ?? $token['error']));
+            if (isset($token['error']) || empty($token['access_token'])) {
+                throw new Exception("Google Search Console Auth Error: " . ($token['error_description'] ?? $token['error'] ?? 'Assertion failed'));
             }
 
             return $token['access_token'];
         }
 
-        throw new Exception("No valid Google Search Console OAuth token or credentials file found for workspace {$workspaceId}.");
+        throw new \App\Exceptions\GoogleOAuthException(
+            "No valid Google Search Console OAuth token or credentials file found for workspace {$workspaceId}.",
+            'search_console',
+            true
+        );
     }
 
     /**
@@ -380,15 +356,30 @@ class GoogleSearchConsoleService
     public function getOverview(?string $startDate = null, ?string $endDate = null, ?int $workspaceId = null): array
     {
         $siteUrl = $this->getSiteUrl($workspaceId);
+
+        if ($workspaceId) {
+            try {
+                $integ = Integration::where('workspace_id', $workspaceId)
+                    ->where('platform', 'search_console')
+                    ->first();
+                if ($integ && $integ->isExpired()) {
+                    return [
+                        'connected'     => false,
+                        'auth_required' => true,
+                        'site_url'      => $siteUrl,
+                        'error'         => $integ->error_message ?: 'Google Search Console session expired. Reconnection required.',
+                    ];
+                }
+            } catch (\Throwable $dbEx) {
+                // Ignore DB errors in tests
+            }
+        }
+
         if (!$siteUrl || !$this->isConfigured($workspaceId)) {
             return [
                 'connected'     => false,
                 'auth_required' => true,
                 'site_url'      => $siteUrl,
-                'clicks'        => 0,
-                'impressions'   => 0,
-                'ctr'           => 0,
-                'position'      => 0,
                 'message'       => 'Search Console credentials or Site URL not configured.',
             ];
         }
@@ -434,21 +425,17 @@ class GoogleSearchConsoleService
             ];
         } catch (\Throwable $e) {
             Log::warning('Search Console getOverview failed', ['error' => $e->getMessage()]);
-            $isAuthError = str_contains(strtolower($e->getMessage()), 'token')
+            $isAuthError = ($e instanceof \App\Exceptions\GoogleOAuthException)
+                || str_contains(strtolower($e->getMessage()), 'token')
                 || str_contains(strtolower($e->getMessage()), 'auth')
                 || str_contains(strtolower($e->getMessage()), 'credential')
                 || str_contains(strtolower($e->getMessage()), 'invalid_grant');
+
             return [
-                'connected'     => !$isAuthError,
+                'connected'     => false,
                 'auth_required' => $isAuthError,
                 'error'         => $e->getMessage(),
                 'site_url'      => $siteUrl,
-                'clicks'        => 0,
-                'impressions'   => 0,
-                'ctr'           => 0,
-                'position'      => 0,
-                'start_date'    => $dates['startDate'],
-                'end_date'      => $dates['endDate'],
             ];
         }
     }
@@ -459,6 +446,20 @@ class GoogleSearchConsoleService
     public function getTopQueries(?string $startDate = null, ?string $endDate = null, int $limit = 10, ?int $workspaceId = null): array
     {
         $siteUrl = $this->getSiteUrl($workspaceId);
+
+        if ($workspaceId) {
+            try {
+                $integ = Integration::where('workspace_id', $workspaceId)
+                    ->where('platform', 'search_console')
+                    ->first();
+                if ($integ && $integ->isExpired()) {
+                    return [];
+                }
+            } catch (\Throwable $e) {
+                // Ignore DB errors
+            }
+        }
+
         if (!$siteUrl || !$this->isConfigured($workspaceId)) {
             return [];
         }
@@ -528,6 +529,20 @@ class GoogleSearchConsoleService
     public function getDailyTrend(?string $startDate = null, ?string $endDate = null, ?int $workspaceId = null): array
     {
         $siteUrl = $this->getSiteUrl($workspaceId);
+
+        if ($workspaceId) {
+            try {
+                $integ = Integration::where('workspace_id', $workspaceId)
+                    ->where('platform', 'search_console')
+                    ->first();
+                if ($integ && $integ->isExpired()) {
+                    return ['labels' => [], 'clicks' => [], 'impressions' => [], 'has_data' => false];
+                }
+            } catch (\Throwable $e) {
+                // Ignore DB errors
+            }
+        }
+
         if (!$siteUrl || !$this->isConfigured($workspaceId)) {
             return ['labels' => [], 'clicks' => [], 'impressions' => [], 'has_data' => false];
         }

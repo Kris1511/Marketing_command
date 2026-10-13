@@ -257,11 +257,11 @@ HTML
             ->first();
 
         $isTokenExpired = false;
-        if (!empty($integ?->refresh_token) || Cache::has("gsc_token_{$workspaceId}")) {
+        if ($integ && ($integ->isExpired() || !empty($integ->refresh_token) || Cache::has("gsc_token_{$workspaceId}"))) {
             try {
                 $this->gscService->getAccessToken($workspaceId);
             } catch (\Throwable $te) {
-                if (str_contains(strtolower($te->getMessage()), 'expired') || str_contains(strtolower($te->getMessage()), 'revoked')) {
+                if ($integ->isExpired() || str_contains(strtolower($te->getMessage()), 'expired') || str_contains(strtolower($te->getMessage()), 'revoked')) {
                     $isTokenExpired = true;
                 }
             }
@@ -333,19 +333,29 @@ HTML
 
         try {
             $overview = $this->gscService->getOverview($startDate, $endDate, $workspaceId);
+
+            // If authentication is required or not connected, return honest error without misleading zero metrics
+            if (!empty($overview['auth_required']) || empty($overview['connected'])) {
+                return response()->json([
+                    'success'       => false,
+                    'auth_required' => !empty($overview['auth_required']),
+                    'site_url'      => $this->gscService->getSiteUrl($workspaceId),
+                    'message'       => $overview['error'] ?? 'Google Search Console session has expired. Reconnection required.',
+                    'data'          => null,
+                ], 200);
+            }
+
             $queries  = $this->gscService->getTopQueries($startDate, $endDate, $limit, $workspaceId);
             $trend    = $this->gscService->getDailyTrend($startDate, $endDate, $workspaceId);
 
-            $authRequired = !empty($overview['auth_required']);
-
             return response()->json([
                 'success'       => true,
-                'auth_required' => $authRequired,
+                'auth_required' => false,
                 'data'          => [
                     'overview'      => $overview,
                     'queries'       => $queries,
                     'trend'         => $trend,
-                    'auth_required' => $authRequired,
+                    'auth_required' => false,
                 ]
             ]);
         } catch (Exception $e) {
@@ -354,7 +364,8 @@ HTML
                 'success'       => false,
                 'auth_required' => true,
                 'message'       => $e->getMessage(),
-            ], 500);
+                'data'          => null,
+            ], 200);
         }
     }
 

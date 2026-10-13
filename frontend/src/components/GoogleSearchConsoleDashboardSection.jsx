@@ -31,9 +31,9 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, T
 
 // Number formatter
 function formatNum(n) {
-  if (n === null || n === undefined) return '0';
+  if (n === null || n === undefined) return '—';
   const num = Number(n);
-  if (isNaN(num)) return '0';
+  if (isNaN(num)) return '—';
   return num.toLocaleString();
 }
 
@@ -46,6 +46,7 @@ export default function GoogleSearchConsoleDashboardSection({
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [metaSiteUrl, setMetaSiteUrl] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [queriesPage, setQueriesPage] = useState(1);
   const QUERIES_PER_PAGE = 5;
@@ -65,13 +66,19 @@ export default function GoogleSearchConsoleDashboardSection({
 
       const res = await axiosInstance.get('/search-console/metrics', { params });
 
+      if (res.data?.site_url) {
+        setMetaSiteUrl(res.data.site_url);
+      }
+
       if (res.data?.success && res.data?.data) {
         setData(res.data.data);
       } else {
+        setData(null);
         setError(res.data?.message || 'Failed to load Search Console metrics.');
       }
     } catch (err) {
       console.error('[GSC Dashboard Error]', err);
+      setData(null);
       setError(
         err.response?.data?.message ||
         'Unable to communicate with Google Search Console API. Ensure your property is verified.'
@@ -115,8 +122,14 @@ export default function GoogleSearchConsoleDashboardSection({
     setQueriesPage(1);
   }, [workspaceId, startDate, endDate, data]);
 
-  const overview = data?.overview || {};
-  const isAuthRequired = Boolean(data?.auth_required || overview?.auth_required);
+  const overview = data?.overview;
+  const isAuthRequired = Boolean(
+    data?.auth_required ||
+    overview?.auth_required ||
+    error?.toLowerCase().includes('expired') ||
+    error?.toLowerCase().includes('reconnect') ||
+    error?.toLowerCase().includes('reauthorization')
+  );
   const queries = data?.queries || [];
   const totalQueriesPages = Math.max(1, Math.ceil(queries.length / QUERIES_PER_PAGE));
   const currentQueriesPage = Math.min(queriesPage, totalQueriesPages);
@@ -221,7 +234,7 @@ export default function GoogleSearchConsoleDashboardSection({
     );
   }
 
-  if (error && !data) {
+  if (error && !data && !isAuthRequired) {
     return (
       <div style={{ padding: '36px', textAlign: 'center', background: '#fff', borderRadius: '12px', border: '1px solid #fee2e2', marginBottom: '24px' }}>
         <AlertCircle size={32} color="#ef4444" style={{ margin: '0 auto 10px' }} />
@@ -296,7 +309,7 @@ export default function GoogleSearchConsoleDashboardSection({
                   border: '1px solid #bae6fd',
                 }}
               >
-                Site: {overview?.site_url || 'Active Property'}
+                Site: {overview?.site_url || metaSiteUrl || 'Active Property'}
               </span>
             </div>
             <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>
@@ -497,7 +510,7 @@ export default function GoogleSearchConsoleDashboardSection({
             </div>
           </div>
           <div style={{ fontSize: '26px', fontWeight: '800', color: '#0f172a' }}>
-            {overview?.ctr !== undefined ? `${overview.ctr}%` : '0%'}
+            {overview?.ctr !== undefined && overview?.ctr !== null ? `${overview.ctr}%` : '—'}
           </div>
           <div style={{ fontSize: '11.5px', color: '#10b981', marginTop: '4px', fontWeight: '500' }}>
             Click-through rate
@@ -521,7 +534,7 @@ export default function GoogleSearchConsoleDashboardSection({
             </div>
           </div>
           <div style={{ fontSize: '26px', fontWeight: '800', color: '#0f172a' }}>
-            {overview?.position !== undefined && overview.position > 0 ? overview.position : '—'}
+            {overview?.position !== undefined && overview?.position !== null && overview.position > 0 ? overview.position : '—'}
           </div>
           <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '4px' }}>
             Mean search rank on Google
@@ -574,7 +587,7 @@ export default function GoogleSearchConsoleDashboardSection({
               <Line data={chartData} options={chartOptions} />
             ) : (
               <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', fontSize: '13px' }}>
-                No trend data available for this date range.
+                {isAuthRequired ? 'Google Search Console session expired. Reconnect account to view trend.' : 'No trend data available for this date range.'}
               </div>
             )}
           </div>
@@ -748,7 +761,7 @@ export default function GoogleSearchConsoleDashboardSection({
                 ) : (
                   <tr>
                     <td colSpan={4} style={{ padding: '36px 12px', textAlign: 'center', color: '#94a3b8' }}>
-                      No search query data available for this period.
+                      {isAuthRequired ? 'Google Search Console session expired. Reconnect account to view search queries.' : 'No search query data available for this period.'}
                     </td>
                   </tr>
                 )}

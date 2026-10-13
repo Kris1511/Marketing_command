@@ -57,8 +57,8 @@ return [
     ],
 
     'google_analytics' => [
-        'client_id'     => env('GOOGLE_ANALYTICS_CLIENT_ID'),
-        'client_secret' => env('GOOGLE_ANALYTICS_CLIENT_SECRET'),
+        'client_id'     => env('GOOGLE_ANALYTICS_CLIENT_ID', env('GOOGLE_CLIENT_ID')),
+        'client_secret' => env('GOOGLE_ANALYTICS_CLIENT_SECRET', env('GOOGLE_CLIENT_SECRET')),
         'redirect_uri'  => env('GOOGLE_ANALYTICS_REDIRECT_URI', 'http://localhost:8000/api/v1/google-analytics/callback'),
         'scopes'        => [
             'https://www.googleapis.com/auth/analytics.readonly',
@@ -68,8 +68,8 @@ return [
     ],
 
     'google_search_console' => [
-        'client_id'     => env('GOOGLE_SEARCH_CONSOLE_CLIENT_ID'),
-        'client_secret' => env('GOOGLE_SEARCH_CONSOLE_CLIENT_SECRET'),
+        'client_id'     => env('GOOGLE_SEARCH_CONSOLE_CLIENT_ID', env('GOOGLE_CLIENT_ID')),
+        'client_secret' => env('GOOGLE_SEARCH_CONSOLE_CLIENT_SECRET', env('GOOGLE_CLIENT_SECRET')),
         'redirect_uri'  => env('GOOGLE_SEARCH_CONSOLE_REDIRECT_URI', 'http://localhost:8000/api/v1/search-console/callback'),
         'scopes'        => [
             'https://www.googleapis.com/auth/webmasters.readonly',

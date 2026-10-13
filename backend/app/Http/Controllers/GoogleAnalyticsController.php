@@ -236,11 +236,11 @@ HTML;
             ->first();
 
         $isTokenExpired = false;
-        if ($integ && ($integ->connection_status === 'expired' || !empty($integ->refresh_token))) {
+        if ($integ && ($integ->isExpired() || !empty($integ->refresh_token) || Cache::has("ga4_token_{$workspaceId}"))) {
             try {
                 $this->gaService->getAccessToken($workspaceId);
             } catch (\Throwable $te) {
-                if (str_contains(strtolower($te->getMessage()), 'expired') || str_contains(strtolower($te->getMessage()), 'revoked')) {
+                if ($integ->isExpired() || str_contains(strtolower($te->getMessage()), 'expired') || str_contains(strtolower($te->getMessage()), 'revoked')) {
                     $isTokenExpired = true;
                 }
             }
@@ -311,19 +311,29 @@ HTML;
 
         try {
             $overview = $this->gaService->getOverview($startDate, $endDate, $workspaceId);
-            $sources  = $this->gaService->getTrafficSources($startDate, $endDate, $limit, $workspaceId);
-            $trend    = $this->gaService->getDailyTrend($startDate, $endDate, $workspaceId);
 
-            $authRequired = !empty($overview['auth_required']);
+            // If authentication is required or not connected, return honest error without misleading zero metrics
+            if (!empty($overview['auth_required']) || empty($overview['connected'])) {
+                return response()->json([
+                    'success'       => false,
+                    'auth_required' => !empty($overview['auth_required']),
+                    'property_id'   => $this->gaService->getPropertyId($workspaceId),
+                    'message'       => $overview['error'] ?? 'Google Analytics session has expired. Reconnection required.',
+                    'data'          => null,
+                ], 200);
+            }
+
+            $sources = $this->gaService->getTrafficSources($startDate, $endDate, $limit, $workspaceId);
+            $trend   = $this->gaService->getDailyTrend($startDate, $endDate, $workspaceId);
 
             return response()->json([
                 'success'       => true,
-                'auth_required' => $authRequired,
+                'auth_required' => false,
                 'data'          => [
                     'overview'      => $overview,
                     'sources'       => $sources,
                     'trend'         => $trend,
-                    'auth_required' => $authRequired,
+                    'auth_required' => false,
                 ]
             ]);
         } catch (Exception $e) {
@@ -332,7 +342,8 @@ HTML;
                 'success'       => false,
                 'auth_required' => true,
                 'message'       => $e->getMessage(),
-            ], 500);
+                'data'          => null,
+            ], 200);
         }
     }
 

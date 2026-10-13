@@ -2603,9 +2603,9 @@ Route::prefix('v1')->group(function () {
                         ->where('is_connected', true)
                         ->latest()->first();
 
-                    if ($isConf && $integ) {
-                        $isTokenExpired = false;
-                        if (!empty($integ->refresh_token)) {
+                    if ($integ) {
+                        $isTokenExpired = $integ->isExpired();
+                        if (!$isTokenExpired && !empty($integ->refresh_token)) {
                             try {
                                 $gaService->getAccessToken($workspaceId);
                             } catch (\Throwable $te) {
@@ -2627,9 +2627,9 @@ Route::prefix('v1')->group(function () {
                         ->where('is_connected', true)
                         ->latest()->first();
 
-                    if ($isConf && $integ) {
-                        $isTokenExpired = false;
-                        if (!empty($integ->refresh_token)) {
+                    if ($integ) {
+                        $isTokenExpired = $integ->isExpired();
+                        if (!$isTokenExpired && !empty($integ->refresh_token)) {
                             try {
                                 $gscService->getAccessToken($workspaceId);
                             } catch (\Throwable $te) {
