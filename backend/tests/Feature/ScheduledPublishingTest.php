@@ -547,4 +547,79 @@ class ScheduledPublishingTest extends TestCase
         $delRes = $this->actingAs($userA)->delete("/api/v1/scheduled-posts/{$postB->id}");
         $delRes->assertStatus(403);
     }
+
+    public function test_queue_worker_timeout_exceeds_default_and_retry_after_exceeds_job_timeout()
+    {
+        $job = new PublishScheduledPostJob(1);
+
+        $this->assertGreaterThanOrEqual(600, $job->timeout);
+        $this->assertSame(1, $job->tries);
+        $this->assertTrue($job->failOnTimeout);
+        $this->assertGreaterThan($job->timeout, config('queue.connections.database.retry_after'));
+    }
+
+    public function test_job_failed_handler_recovers_stuck_processing_post_and_keeps_published_checkpoints()
+    {
+        $unpublished = FacebookPost::create([
+            'workspace_id'     => $this->workspace->id,
+            'facebook_page_id' => $this->fbPage->id,
+            'content'          => 'Worker timed out before publish',
+            'status'           => 'processing',
+            'scheduled_at'     => Carbon::now()->subMinutes(1),
+            'post_type'        => 'video',
+            'platforms'        => ['Facebook'],
+            'created_by_id'    => $this->admin->id,
+        ]);
+
+        (new PublishScheduledPostJob($unpublished->id))->failed(new \RuntimeException('Worker exceeded timeout'));
+
+        $unpublished->refresh();
+        $this->assertSame('failed', $unpublished->status);
+        $this->assertStringContainsString('Worker exceeded timeout', (string) $unpublished->error_message);
+
+        $partiallyPublished = FacebookPost::create([
+            'workspace_id'     => $this->workspace->id,
+            'facebook_page_id' => $this->fbPage->id,
+            'content'          => 'Worker timed out after FB succeeded',
+            'status'           => 'processing',
+            'fb_post_id'       => 'fb_partial_999',
+            'scheduled_at'     => Carbon::now()->subMinutes(1),
+            'post_type'        => 'video',
+            'platforms'        => ['Facebook', 'YouTube'],
+            'created_by_id'    => $this->admin->id,
+        ]);
+
+        (new PublishScheduledPostJob($partiallyPublished->id))->failed(new \RuntimeException('YouTube upload timed out'));
+
+        $partiallyPublished->refresh();
+        $this->assertSame('published', $partiallyPublished->status);
+        $this->assertSame('fb_partial_999', $partiallyPublished->fb_post_id);
+        $this->assertNotNull($partiallyPublished->published_at);
+    }
+
+    public function test_dashboard_priorities_formats_scheduled_post_in_asia_kolkata()
+    {
+        // Freeze time at 2026-11-10 08:00 IST (02:30 UTC), schedule a post for 10:30 IST (05:00 UTC)
+        Carbon::setTestNow(Carbon::parse('2026-11-10 08:00:00', 'Asia/Kolkata'));
+        try {
+            FacebookPost::create([
+                'workspace_id'     => $this->workspace->id,
+                'facebook_page_id' => $this->fbPage->id,
+                'content'          => 'IST Dashboard priority post',
+                'status'           => 'scheduled',
+                'scheduled_at'     => Carbon::parse('2026-11-10 10:30:00', 'Asia/Kolkata')->utc(),
+                'post_type'        => 'text',
+                'platforms'        => ['Facebook'],
+                'created_by_id'    => $this->admin->id,
+            ]);
+
+            $response = $this->actingAs($this->admin)->getJson("/api/v1/dashboard/priorities?workspace_id={$this->workspace->id}");
+            $response->assertStatus(200);
+            $item = collect($response->json('data'))->firstWhere('type', 'scheduled_post');
+            $this->assertNotNull($item);
+            $this->assertSame('Nov 10 at 10:30 AM IST', $item['description']);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
 }

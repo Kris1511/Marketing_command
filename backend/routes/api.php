@@ -2408,10 +2408,12 @@ Route::prefix('v1')->group(function () {
             $workspaceId = (int)$request->query('workspace_id');
             $priorities = [];
 
-            // 1. Scheduled posts due today/tomorrow
+            // 1. Scheduled posts due today/tomorrow (computed & displayed in Asia/Kolkata)
+            $istWindowStart = \Carbon\Carbon::now('Asia/Kolkata')->startOfDay()->utc();
+            $istWindowEnd   = \Carbon\Carbon::now('Asia/Kolkata')->addDays(2)->endOfDay()->utc();
             $upcomingPosts = FacebookPost::where('workspace_id', $workspaceId)
                 ->where('status', 'scheduled')
-                ->whereBetween('scheduled_at', [now()->startOfDay(), now()->addDays(2)->endOfDay()])
+                ->whereBetween('scheduled_at', [$istWindowStart, $istWindowEnd])
                 ->orderBy('scheduled_at')
                 ->limit(5)
                 ->get();
@@ -2420,7 +2422,7 @@ Route::prefix('v1')->group(function () {
                 $priorities[] = [
                     'type'        => 'scheduled_post',
                     'title'       => 'Approve scheduled post',
-                    'description' => \Carbon\Carbon::parse($post->scheduled_at)->format('M j \a\t g:i A'),
+                    'description' => \Carbon\Carbon::parse($post->scheduled_at)->setTimezone('Asia/Kolkata')->format('M j \a\t g:i A') . ' IST',
                     'action'      => 'Review',
                     'action_url'  => '/publishing',
                     'due_at'      => $post->scheduled_at,

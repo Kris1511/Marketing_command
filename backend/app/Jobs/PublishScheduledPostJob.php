@@ -25,14 +25,21 @@ class PublishScheduledPostJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     /**
-     * The number of times the job may be attempted by queue workers.
+     * Queue worker attempts: API/transient retries are scheduled in-app via $post->retry_count and delayed
+     * dispatch, so queue workers only execute each dispatched job once.
      */
-    public int $tries = 3;
+    public int $tries = 1;
 
     /**
-     * The number of seconds to wait before retrying the job.
+     * Maximum seconds a worker may spend publishing a post (multi-platform video + Instagram Reel polling
+     * exceeds Laravel's 60s default and would otherwise receive SIGALRM on Linux).
      */
-    public int $backoff = 300; // 5 minutes
+    public int $timeout = 600;
+
+    /**
+     * Mark the job failed immediately on timeout instead of leaving the post stuck in "processing".
+     */
+    public bool $failOnTimeout = true;
 
     /**
      * Create a new job instance.
@@ -104,22 +111,38 @@ class PublishScheduledPostJob implements ShouldQueue
             // Failed-job safety: an unexpected error must never leave the post stuck in "processing" (or let a
             // queue retry publish it again). Platform IDs already saved by the checkpoints are kept.
             Log::error("[PublishScheduledPostJob] Unexpected error while publishing post #{$this->postId}: " . $e->getMessage());
-            try {
-                // Plain column read/update (no relations): whatever broke must not break the recovery as well.
-                $row = DB::table('facebook_posts')->where('id', $this->postId)->first(['status', 'fb_post_id', 'ig_media_id', 'yt_video_id', 'published_at']);
-                if ($row && $row->status === 'processing') {
-                    $alreadyPublished = !empty($row->fb_post_id) || !empty($row->ig_media_id) || !empty($row->yt_video_id);
-                    DB::table('facebook_posts')->where('id', $this->postId)->where('status', 'processing')->update([
-                        'status'        => $alreadyPublished ? 'published' : 'failed',
-                        'published_at'  => $alreadyPublished ? ($row->published_at ?? now()) : $row->published_at,
-                        'error_message' => 'Publishing stopped unexpectedly: ' . \Illuminate\Support\Str::limit($e->getMessage(), 300),
-                        'updated_at'    => now(),
-                    ]);
-                }
-            } catch (\Throwable $recoveryError) {
-                // Last resort: the scheduler marks posts stuck in "processing" as failed after 60 minutes.
-                Log::error("[PublishScheduledPostJob] Could not record the failure of post #{$this->postId}: " . $recoveryError->getMessage());
+            $this->recoverInterruptedPost($e->getMessage());
+        }
+    }
+
+    /**
+     * Handle a worker-level failure (such as a Linux pcntl SIGALRM timeout) so the post does not stay stuck
+     * in "processing" for 60 minutes. Preserves any platform IDs already saved by checkpoints.
+     */
+    public function failed(?\Throwable $exception): void
+    {
+        $reason = $exception ? $exception->getMessage() : 'Queue worker terminated unexpectedly.';
+        Log::error("[PublishScheduledPostJob] Queue worker failed for post #{$this->postId}: {$reason}");
+        $this->recoverInterruptedPost($reason);
+    }
+
+    protected function recoverInterruptedPost(string $reason): void
+    {
+        try {
+            // Plain column read/update (no relations): whatever broke must not break the recovery as well.
+            $row = DB::table('facebook_posts')->where('id', $this->postId)->first(['status', 'fb_post_id', 'ig_media_id', 'yt_video_id', 'published_at']);
+            if ($row && $row->status === 'processing') {
+                $alreadyPublished = !empty($row->fb_post_id) || !empty($row->ig_media_id) || !empty($row->yt_video_id);
+                DB::table('facebook_posts')->where('id', $this->postId)->where('status', 'processing')->update([
+                    'status'        => $alreadyPublished ? 'published' : 'failed',
+                    'published_at'  => $alreadyPublished ? ($row->published_at ?? now()) : $row->published_at,
+                    'error_message' => 'Publishing stopped unexpectedly: ' . \Illuminate\Support\Str::limit($reason, 300),
+                    'updated_at'    => now(),
+                ]);
             }
+        } catch (\Throwable $recoveryError) {
+            // Last resort: the scheduler marks posts stuck in "processing" as failed after 60 minutes.
+            Log::error("[PublishScheduledPostJob] Could not record the failure of post #{$this->postId}: " . $recoveryError->getMessage());
         }
     }
 
