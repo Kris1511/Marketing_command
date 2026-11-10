@@ -22,10 +22,7 @@ Artisan::command('inspire', function () {
 */
 
 // Process due scheduled posts every minute.
-// withoutOverlapping() prevents two runs from processing the same post simultaneously.
 // Times are entered and shown in IST; scheduled_at is stored in UTC and compared in UTC, so the check is exact.
 Schedule::command('posts:process-scheduled')
     ->everyMinute()
-    ->timezone('Asia/Kolkata')
-    ->withoutOverlapping(5)   // lock expires after 5 minutes (prevents stuck locks)
-    ->runInBackground();
+    ->timezone('Asia/Kolkata');
