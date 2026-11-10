@@ -88,7 +88,7 @@ class FacebookGraphServiceMockTest extends TestCase
                         'caption'        => 'Test office post',
                         'media_type'     => 'IMAGE',
                         'permalink'      => 'https://instagram.com/p/test',
-                        'timestamp'      => '2026-08-30T10:00:00+0000',
+                        'timestamp'      => \Carbon\Carbon::now('UTC')->subDays(5)->format('Y-m-d\TH:i:sO'),
                         'like_count'     => 5,
                         'comments_count' => 2,
                     ]
@@ -126,7 +126,7 @@ class FacebookGraphServiceMockTest extends TestCase
                     [
                         'id'           => '115864121526929_1001',
                         'message'      => 'Real post without like breakdown',
-                        'created_time' => '2026-08-25T10:00:00+0000',
+                        'created_time' => \Carbon\Carbon::now('UTC')->subDays(10)->format('Y-m-d\TH:i:sO'),
                         'shares'       => ['count' => 0],
                         'permalink_url'=> 'https://facebook.com/1001',
                         'attachments'  => [
@@ -156,7 +156,7 @@ class FacebookGraphServiceMockTest extends TestCase
                     [
                         'id'           => '1001_video',
                         'views'        => 250,
-                        'created_time' => '2026-08-20T10:00:00+0000',
+                        'created_time' => \Carbon\Carbon::now('UTC')->subDays(15)->format('Y-m-d\TH:i:sO'),
                     ]
                 ]
             ], 200),

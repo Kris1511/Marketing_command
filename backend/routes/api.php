@@ -22,6 +22,7 @@ use App\Http\Controllers\YouTubeController;
 use App\Http\Controllers\TwitterController;
 use App\Http\Controllers\FacebookAuthController;
 use App\Http\Controllers\FacebookMessengerWebhookController;
+use App\Http\Controllers\FacebookDataDeletionController;
 use App\Http\Controllers\InstagramInboxController;
 use App\Http\Controllers\YouTubeInboxController;
 
@@ -115,55 +116,68 @@ if (!function_exists('createNotification')) {
 */
 
 // YouTube Data API v3 Routes (Direct /api/youtube/...)
+// OAuth connect/callback are browser redirects and must stay public; everything else requires a Sanctum token.
 Route::get('/youtube/connect', [YouTubeController::class, 'connect']);
 Route::get('/youtube/callback', [YouTubeController::class, 'callback']);
-Route::get('/youtube/status', [YouTubeController::class, 'status']);
-Route::get('/youtube/channel', [YouTubeController::class, 'channel']);
-Route::get('/youtube/analytics/overview', [YouTubeController::class, 'analyticsOverview']);
-Route::post('/youtube/disconnect', [YouTubeController::class, 'disconnect']);
-Route::post('/youtube/videos', [YouTubeController::class, 'uploadVideo']);
-Route::get('/youtube/videos/{id}', [YouTubeController::class, 'videoDetails']);
-Route::get('/youtube/videos/{id}/analytics', [YouTubeController::class, 'videoAnalytics']);
-Route::get('/youtube/video-analytics', [YouTubeController::class, 'videoAnalytics']);
-Route::post('/youtube/videos/{id}/thumbnail', [YouTubeController::class, 'uploadThumbnail']);
-Route::get('/youtube/playlists', [YouTubeController::class, 'playlists']);
-Route::post('/youtube/playlists', [YouTubeController::class, 'createPlaylist']);
-Route::post('/youtube/playlists/add-video', [YouTubeController::class, 'addVideoToPlaylist']);
-Route::get('/youtube/content', [YouTubeController::class, 'content']);
+Route::middleware(['auth:sanctum', 'role.permissions'])->group(function () {
+    Route::get('/youtube/status', [YouTubeController::class, 'status']);
+    Route::get('/youtube/channel', [YouTubeController::class, 'channel']);
+    Route::get('/youtube/analytics/overview', [YouTubeController::class, 'analyticsOverview']);
+    Route::post('/youtube/disconnect', [YouTubeController::class, 'disconnect']);
+    Route::post('/youtube/videos', [YouTubeController::class, 'uploadVideo']);
+    Route::get('/youtube/videos/{id}', [YouTubeController::class, 'videoDetails']);
+    Route::get('/youtube/videos/{id}/analytics', [YouTubeController::class, 'videoAnalytics']);
+    Route::get('/youtube/video-analytics', [YouTubeController::class, 'videoAnalytics']);
+    Route::post('/youtube/videos/{id}/thumbnail', [YouTubeController::class, 'uploadThumbnail']);
+    Route::get('/youtube/playlists', [YouTubeController::class, 'playlists']);
+    Route::post('/youtube/playlists', [YouTubeController::class, 'createPlaylist']);
+    Route::post('/youtube/playlists/add-video', [YouTubeController::class, 'addVideoToPlaylist']);
+    Route::get('/youtube/content', [YouTubeController::class, 'content']);
+});
 // Twitter Direct OAuth Routes (Direct /api/twitter/...)
 Route::get('/twitter/connect', [TwitterController::class, 'connect'])->name('twitter.connect');
 Route::get('/twitter/callback', [TwitterController::class, 'callback'])->name('twitter.callback');
-Route::get('/twitter/status', [TwitterController::class, 'status']);
-Route::post('/twitter/disconnect', [TwitterController::class, 'disconnect']);
+Route::middleware(['auth:sanctum', 'role.permissions'])->group(function () {
+    Route::get('/twitter/status', [TwitterController::class, 'status']);
+    Route::post('/twitter/disconnect', [TwitterController::class, 'disconnect']);
+});
 
 Route::prefix('v1')->group(function () {
 
     // YouTube API Routes (Aliased under /api/v1/youtube/...)
     Route::prefix('youtube')->group(function () {
+        // OAuth redirects (opened in a browser popup, cannot carry a Bearer token)
         Route::get('/connect', [YouTubeController::class, 'connect']);
         Route::get('/callback', [YouTubeController::class, 'callback']);
-        Route::get('/status', [YouTubeController::class, 'status']);
-        Route::get('/channel', [YouTubeController::class, 'channel']);
-        Route::get('/analytics/overview', [YouTubeController::class, 'analyticsOverview']);
-        Route::get('/content', [YouTubeController::class, 'content']);
-        Route::post('/disconnect', [YouTubeController::class, 'disconnect']);
-        Route::post('/videos', [YouTubeController::class, 'uploadVideo']);
-        Route::get('/videos/{id}', [YouTubeController::class, 'videoDetails']);
-        Route::get('/videos/{id}/analytics', [YouTubeController::class, 'videoAnalytics']);
-        Route::get('/video-analytics', [YouTubeController::class, 'videoAnalytics']);
-        Route::post('/videos/{id}/thumbnail', [YouTubeController::class, 'uploadThumbnail']);
-        Route::get('/playlists', [YouTubeController::class, 'playlists']);
-        Route::post('/playlists', [YouTubeController::class, 'createPlaylist']);
-        Route::post('/playlists/add-video', [YouTubeController::class, 'addVideoToPlaylist']);
+
+        Route::middleware(['auth:sanctum', 'role.permissions'])->group(function () {
+            Route::get('/status', [YouTubeController::class, 'status']);
+            Route::get('/channel', [YouTubeController::class, 'channel']);
+            Route::get('/analytics/overview', [YouTubeController::class, 'analyticsOverview']);
+            Route::get('/content', [YouTubeController::class, 'content']);
+            Route::post('/disconnect', [YouTubeController::class, 'disconnect']);
+            Route::post('/videos', [YouTubeController::class, 'uploadVideo']);
+            Route::get('/videos/{id}', [YouTubeController::class, 'videoDetails']);
+            Route::get('/videos/{id}/analytics', [YouTubeController::class, 'videoAnalytics']);
+            Route::get('/video-analytics', [YouTubeController::class, 'videoAnalytics']);
+            Route::post('/videos/{id}/thumbnail', [YouTubeController::class, 'uploadThumbnail']);
+            Route::get('/playlists', [YouTubeController::class, 'playlists']);
+            Route::post('/playlists', [YouTubeController::class, 'createPlaylist']);
+            Route::post('/playlists/add-video', [YouTubeController::class, 'addVideoToPlaylist']);
+        });
     });
 
     // Twitter API Routes (Aliased under /api/v1/twitter/...)
     Route::prefix('twitter')->group(function () {
+        // OAuth redirects (opened in a browser popup, cannot carry a Bearer token)
         Route::get('/connect', [TwitterController::class, 'connect']);
         Route::get('/callback', [TwitterController::class, 'callback']);
-        Route::get('/status', [TwitterController::class, 'status']);
-        Route::post('/disconnect', [TwitterController::class, 'disconnect']);
-        Route::post('/connect-mock', [TwitterController::class, 'connectMock']);
+
+        Route::middleware(['auth:sanctum', 'role.permissions'])->group(function () {
+            Route::get('/status', [TwitterController::class, 'status']);
+            Route::post('/disconnect', [TwitterController::class, 'disconnect']);
+            Route::post('/connect-mock', [TwitterController::class, 'connectMock']);
+        });
     });
 
     // Handle OPTIONS Preflight CORS Requests
@@ -193,18 +207,33 @@ Route::prefix('v1')->group(function () {
 
     // Public Healthcheck Endpoint
     Route::get('/health', function () {
+        try {
+            \Illuminate\Support\Facades\DB::connection()->getPdo();
+            $database = 'Connected (' . \Illuminate\Support\Facades\DB::connection()->getDriverName() . ')';
+            $healthy = true;
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('[health] database connection failed: ' . $e->getMessage());
+            $database = 'Unavailable';
+            $healthy = false;
+        }
+
         return response()->json([
-            'status' => 'ok',
+            'status' => $healthy ? 'ok' : 'degraded',
             'service' => 'Marketing Command API',
-            'database' => 'Connected (MySQL WAMP)',
+            'database' => $database,
             'timestamp' => now()->toIso8601String(),
-        ]);
+        ], $healthy ? 200 : 503);
     });
 
     Route::get('/webhook/facebook', [FacebookMessengerWebhookController::class, 'verify']);
     Route::post('/webhook/facebook', [FacebookMessengerWebhookController::class, 'receive']);
     Route::get('/webhook/instagram', [FacebookMessengerWebhookController::class, 'verify']);
     Route::post('/webhook/instagram', [FacebookMessengerWebhookController::class, 'receive']);
+
+    // Facebook Data Deletion (Meta "Data Deletion Request Callback"). Public on purpose: Meta calls it
+    // server-to-server and authenticates with a signed_request signature, not a bearer token.
+    Route::post('/facebook/data-deletion', [FacebookDataDeletionController::class, 'callback'])->middleware('throttle:60,1');
+    Route::get('/facebook/data-deletion/status/{code}', [FacebookDataDeletionController::class, 'status'])->middleware('throttle:60,1');
 
     // Public Auth Routes
     Route::post('/login', function (Request $request) {
@@ -236,6 +265,18 @@ Route::prefix('v1')->group(function () {
     });
 
     Route::post('/register', function (Request $request) {
+        // Registration creates admin accounts, so it is only open while no users exist (first-run bootstrap).
+        // Afterwards only an authenticated administrator may create accounts.
+        if (User::query()->exists()) {
+            $caller = Auth::guard('sanctum')->user();
+            if (!$caller) {
+                return response()->json(['success' => false, 'message' => 'Unauthenticated.'], 401);
+            }
+            if ($caller->role !== 'admin') {
+                return response()->json(['success' => false, 'message' => 'Only administrators can create accounts.'], 403);
+            }
+        }
+
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|email|max:255|unique:users',
@@ -616,7 +657,7 @@ Route::prefix('v1')->group(function () {
     });
 
     // Authenticated API Routes
-    Route::middleware('auth:sanctum')->group(function () {
+    Route::middleware(['auth:sanctum', 'role.permissions'])->group(function () {
 
         Route::get('/user', function (Request $request) {
             $user = $request->user();
@@ -828,10 +869,15 @@ Route::prefix('v1')->group(function () {
                 'name' => 'required|string|max:255',
                 'industry' => 'nullable|string|max:255',
                 'primary_contact' => 'nullable|string|max:255',
-                'primary_contact_email' => 'nullable|string|max:255',
-                'budget' => 'nullable|numeric',
-                'status' => 'nullable|string|in:active,setup,pending,inactive',
+                'primary_contact_email' => 'nullable|email|max:255',
+                'budget' => 'nullable|numeric|min:0|max:9999999999.99',
+                'status' => 'nullable|string|in:active,setup,pending,paused,archived,inactive',
             ]);
+
+            // "setup" is a UI label; the workspaces.status enum stores it as "pending".
+            if (($validated['status'] ?? null) === 'setup') {
+                $validated['status'] = 'pending';
+            }
 
             $workspace = Workspace::create([
                 'name' => $validated['name'],
@@ -970,8 +1016,11 @@ Route::prefix('v1')->group(function () {
         });
 
         // CRM Leads API
-        Route::get('/leads', function () {
-            $leads = Lead::with('workspace', 'campaign')->orderBy('created_at', 'desc')->get();
+        Route::get('/leads', function (Request $request) {
+            $leads = Lead::with('workspace', 'campaign', 'assignedTo:id,name')
+                ->when($request->query('workspace_id'), fn ($q, $workspaceId) => $q->where('workspace_id', (int) $workspaceId))
+                ->orderBy('created_at', 'desc')
+                ->get();
             return response()->json([
                 'success' => true,
                 'data' => $leads
@@ -980,9 +1029,10 @@ Route::prefix('v1')->group(function () {
 
         Route::post('/leads', function (Request $request) {
             $validated = $request->validate([
+                'workspace_id' => 'nullable|integer|exists:workspaces,id',
                 'name' => 'required|string|max:255',
-                'email' => 'nullable|string|max:255',
-                'phone' => 'nullable|string|max:255',
+                'email' => 'nullable|email|max:255',
+                'phone' => 'nullable|string|max:20',
                 'source' => 'nullable|string|max:255',
                 'notes' => 'nullable|string',
                 'campaign_name' => 'nullable|string',
@@ -1000,10 +1050,10 @@ Route::prefix('v1')->group(function () {
             $sourceVal = $sourceMap[$request->input('source')] ?? 'manual_entry';
 
             $lead = Lead::create([
-                'workspace_id' => getOrCreateWorkspaceId(1),
+                'workspace_id' => getOrCreateWorkspaceId($validated['workspace_id'] ?? null),
                 'name' => $validated['name'],
                 'email' => $validated['email'] ?? (strtolower(preg_replace('/[^a-zA-Z0-9]/', '', $validated['name'])) . '@example.com'),
-                'phone' => $validated['phone'] ?? '+91 98765 00000',
+                'phone' => $validated['phone'] ?? null,
                 'status' => 'new',
                 'source' => $sourceVal,
                 'notes' => $validated['notes'] ?? null,
@@ -1017,9 +1067,19 @@ Route::prefix('v1')->group(function () {
         });
 
         Route::patch('/leads/{id}', function (Request $request, $id) {
+            $validated = $request->validate([
+                'status' => 'sometimes|required|string|in:new,contacted,qualified,proposal_sent,converted,lost,ignored',
+            ]);
+
             $lead = Lead::findOrFail($id);
-            if ($request->has('status')) {
-                $lead->status = $request->input('status');
+            if (isset($validated['status'])) {
+                $lead->status = $validated['status'];
+                if ($validated['status'] === 'contacted' && !$lead->contacted_at) {
+                    $lead->contacted_at = now();
+                }
+                if ($validated['status'] === 'converted' && !$lead->converted_at) {
+                    $lead->converted_at = now();
+                }
             }
             $lead->save();
 
@@ -1455,7 +1515,7 @@ Route::prefix('v1')->group(function () {
             $validated = $request->validate([
                 'name'            => 'required|string|max:255',
                 'email'           => 'required|email|max:255|unique:users,email',
-                'role'            => 'required|string',
+                'role'            => 'required|string|in:Administrator,Marketing Manager,Executive,Viewer,admin,manager,executive,viewer',
                 'workspace_ids'   => 'nullable|array',
                 'workspace_ids.*' => 'integer',
             ]);
@@ -1523,7 +1583,7 @@ Route::prefix('v1')->group(function () {
 
             $validated = $request->validate([
                 'name'            => 'sometimes|required|string|max:255',
-                'role'            => 'sometimes|required|string',
+                'role'            => 'sometimes|required|string|in:Administrator,Marketing Manager,Executive,Viewer,admin,manager,executive,viewer',
                 'is_active'       => 'sometimes|boolean',
                 'workspace_ids'   => 'nullable|array',
                 'workspace_ids.*' => 'integer',
@@ -1795,21 +1855,30 @@ Route::prefix('v1')->group(function () {
             $igMediaItems = [];
             $igPeriodFollowers = 0;
 
-            if ($igInteg && !empty($igInteg->refresh_token) && !$isLightMode) {
+            // The Instagram tab requests light mode, but its header card (views, reach, likes, comments, shares)
+            // is built from exactly these Instagram metrics, so light mode only skips them for other platforms.
+            if ($igInteg && !empty($igInteg->refresh_token) && (!$isLightMode || $requestedPlatform === 'instagram')) {
                 try {
                     $graphService = $graphService ?? new FacebookGraphService();
                     $igTtl = ($autoSync || $forceRefresh) ? 30 : 300;
-                    $igCacheKey = "ig_overview_v2_{$workspaceId}_{$igInteg->account_id}_{$startDate->format('Ymd')}_{$endDate->format('Ymd')}" . ($igTtl < 300 ? "_{$igTtl}" : "");
+                    $igVersion = FacebookGraphService::instagramDashboardCacheVersion((string) $igInteg->account_id);
+                    $igCacheKey = "ig_overview_v3_{$workspaceId}_{$igInteg->account_id}_{$startDate->format('Ymd')}_{$endDate->format('Ymd')}_v{$igVersion}" . ($igTtl < 300 ? "_{$igTtl}" : "");
                     if ($forceRefresh) {
                         \Illuminate\Support\Facades\Cache::forget($igCacheKey);
                     }
                     $igCached = \Illuminate\Support\Facades\Cache::remember($igCacheKey, $igTtl, function () use ($graphService, $igInteg, $days, $startDateParam, $endDateParam, $forceRefresh, $autoSync) {
                         return [
                             'insights'        => $graphService->getInstagramAccountInsights($igInteg->refresh_token, $igInteg->account_id, $days, $startDateParam, $endDateParam),
-                            'mediaItems'      => $graphService->getInstagramMediaList($igInteg->refresh_token, $igInteg->account_id, 50, $forceRefresh, $startDateParam, $endDateParam, $autoSync ? 30 : null),
+                            // Pagination stops once media is older than the range start, so this cap only bounds "all time".
+                            'mediaItems'      => $graphService->getInstagramMediaList($igInteg->refresh_token, $igInteg->account_id, 1000, $forceRefresh, $startDateParam, $endDateParam, $autoSync ? 30 : null),
+                            'mediaError'      => $graphService->lastInstagramMediaListError(),
                             'periodFollowers' => $graphService->getInstagramFollowersGained($igInteg->refresh_token, $igInteg->account_id, $days, $startDateParam, $endDateParam),
                         ];
                     });
+                    if (!empty($igCached['mediaError'])) {
+                        // Do not keep a failed Meta fetch cached as "no media".
+                        \Illuminate\Support\Facades\Cache::forget($igCacheKey);
+                    }
                     $igAccountInsights = $igCached['insights'] ?? [];
                     $igMediaItems      = $igCached['mediaItems'] ?? [];
                     $igPeriodFollowers = (int)($igCached['periodFollowers'] ?? 0);
@@ -2672,6 +2741,7 @@ Route::prefix('v1')->group(function () {
 
         // ── Disconnect Integration (Non-destructive soft disconnect) ─────────────
         Route::post('/integrations/disconnect', function (Request $request) {
+            $request->validate(['platform' => 'required|string|max:50']);
             $workspaceId = (int)$request->input('workspace_id', 1);
             $platform    = strtolower(trim($request->input('platform', '')));
             $accountId   = $request->input('account_id');
@@ -2800,6 +2870,7 @@ Route::prefix('v1')->group(function () {
 
         // ── Real API Connection Testing Endpoint ─────────────────────────────────
         Route::post('/integrations/test', function (Request $request) {
+            $request->validate(['platform' => 'required|string|max:50']);
             $workspaceId = (int)$request->input('workspace_id', 1);
             $platform    = strtolower(trim($request->input('platform', '')));
 
@@ -3058,6 +3129,11 @@ Route::prefix('v1')->group(function () {
     });
 
     // Posts / Social Publishing API
+    // ── Authenticated API routes (posts, integrations, social platforms, inbox, analytics, reports) ──
+    // OAuth redirect/callback routes and the SSE inbox stream opt out below because browsers cannot send a
+    // Bearer header for them; the SSE stream authenticates itself with a `token` query parameter.
+    Route::middleware(['auth:sanctum', 'role.permissions'])->group(function () {
+
     Route::get('/posts', function (Request $request) {
         $query = Post::with('workspace', 'creator')->orderBy('created_at', 'desc');
         if ($request->has('workspace_id')) {
@@ -3167,9 +3243,10 @@ Route::prefix('v1')->group(function () {
     // ── Facebook OAuth & Graph API Endpoints ─────────────────────────────────────
 
     // Facebook OAuth Initialization & Callbacks
-    Route::get('/auth/facebook', [FacebookAuthController::class, 'redirect']);
-    Route::get('/auth/facebook/redirect', [FacebookAuthController::class, 'redirect']);
-    Route::get('/auth/facebook/callback', [FacebookAuthController::class, 'callback']);
+    Route::get('/auth/facebook', [FacebookAuthController::class, 'redirect'])->withoutMiddleware('auth:sanctum');
+    Route::get('/auth/facebook/redirect', [FacebookAuthController::class, 'redirect'])->withoutMiddleware('auth:sanctum');
+    Route::get('/auth/facebook/callback', [FacebookAuthController::class, 'callback'])->withoutMiddleware('auth:sanctum');
+    Route::get('/auth/facebook/diagnose', [FacebookAuthController::class, 'diagnose']);
 
     // Facebook Page Management
     Route::get('/facebook/pages', [FacebookAuthController::class, 'pages']);
@@ -3279,26 +3356,67 @@ Route::prefix('v1')->group(function () {
     });
 
     // POST /v1/facebook/publish-post (Production Publishing for Facebook, Instagram, and YouTube)
-    Route::post('/facebook/publish-post', function (Request $request) {
+    $publishPostHandler = function (Request $request) {
+        // B3/B14: a single, explicit client workspace the caller is allowed to use ("all" is rejected).
+        if ($denied = \App\Support\WorkspaceAccess::guard($request, $request->input('workspace_id'))) {
+            return $denied;
+        }
+
         $validated = $request->validate([
-            'workspace_id'    => 'nullable|integer',
+            'workspace_id'    => 'required|integer',
+            'draft_id'        => 'nullable|integer',
             'post_type'       => 'nullable|in:text,single_image,multi_image,video,link',
-            'message'         => 'nullable|string',
+            'message'         => 'nullable|string|max:63206',
+            'internal_title'  => 'nullable|string|max:150',
+            'cta'             => 'nullable|string|max:50',
+            'hashtags'        => 'nullable|string|max:2000',
             'video_title'     => 'nullable|string|max:100',
             'link_url'        => 'nullable|url',
             'page_id'         => 'nullable|string',
-            'status'          => 'nullable|in:draft,scheduled,published',
+            // B1: the caller must say what it wants; a missing status never means "publish".
+            'status'          => 'required|in:draft,scheduled,published',
             'scheduled_at'    => 'nullable|date',
             'platforms'       => 'nullable',
             'youtube_privacy' => 'nullable|in:public,unlisted,private',
-            'images.*'        => 'nullable|file|image|max:20480',
-            'video'           => 'nullable|file|mimes:mp4,mov,avi,mkv|max:512000', // 500MB
+            'clear_media'     => 'nullable|boolean',
+            'images'          => 'nullable|array|max:' . \App\Support\PublishingRules::CAROUSEL_MAX,
+            'images.*'        => 'nullable|file|image|max:' . (\App\Support\PublishingRules::MAX_IMAGE_MB * 1024),
+            'video'           => 'nullable|file|mimes:mp4,mov,avi,mkv|max:' . (\App\Support\PublishingRules::MAX_VIDEO_MB * 1024),
+            // Custom video thumbnail / Reel cover (stored separately from the video)
+            'thumbnail'        => 'nullable|file|mimes:jpg,jpeg,png|max:' . (\App\Support\PublishingRules::THUMBNAIL_MAX_MB * 1024),
+            'remove_thumbnail' => 'nullable|boolean',
+            // New order of a saved draft's carousel images (first = cover), as media ids
+            'media_order'      => 'nullable|array|max:' . \App\Support\PublishingRules::CAROUSEL_MAX,
+            'media_order.*'    => 'integer',
+        ], [
+            'thumbnail.mimes' => 'The thumbnail must be a JPG or PNG image.',
+            'thumbnail.max'   => 'The thumbnail must be ' . \App\Support\PublishingRules::THUMBNAIL_MAX_MB . ' MB or smaller.',
+            'status.required' => 'An explicit status (draft, scheduled or published) is required.',
+            'images.max'      => 'A carousel can contain at most ' . \App\Support\PublishingRules::CAROUSEL_MAX . ' images.',
+            'images.*.max'    => 'Each image must be ' . \App\Support\PublishingRules::MAX_IMAGE_MB . ' MB or smaller.',
+            'images.*.image'  => 'Only image files (JPG, PNG, GIF, WebP) can be attached as images.',
+            'video.max'       => 'The video must be ' . \App\Support\PublishingRules::MAX_VIDEO_MB . ' MB or smaller.',
+            'video.mimes'     => 'The video must be an MP4, MOV, AVI or MKV file.',
         ]);
 
-        $workspaceId = getOrCreateWorkspaceId($validated['workspace_id'] ?? null);
-        $status = $validated['status'] ?? 'published';
-        $postType = $validated['post_type'] ?? 'text';
+        $workspaceId = (int) $validated['workspace_id'];
+        $status = $validated['status'];
+        $postType = $validated['post_type'] ?? null;
         $message = $validated['message'] ?? '';
+        $hashtagsText = \App\Support\PublishingRules::normalizeHashtags($validated['hashtags'] ?? null);
+
+        // B4: editing an existing draft updates it in place (scoped to the authorised workspace).
+        $draft = null;
+        if (!empty($validated['draft_id'])) {
+            $draft = FacebookPost::with('media')
+                ->where('id', $validated['draft_id'])
+                ->where('workspace_id', $workspaceId)
+                ->whereIn('status', ['draft', 'scheduled', 'failed'])
+                ->first();
+            if (!$draft) {
+                return response()->json(['success' => false, 'message' => 'Post not found in this workspace.'], 404);
+            }
+        }
         $youtubePrivacy = in_array($validated['youtube_privacy'] ?? '', ['public', 'unlisted', 'private']) ? $validated['youtube_privacy'] : 'unlisted';
         $videoTitle = !empty($validated['video_title']) ? $validated['video_title'] : (!empty($message) ? mb_substr($message, 0, 60) : 'Uploaded Video');
 
@@ -3321,6 +3439,96 @@ Route::prefix('v1')->group(function () {
                 'message' => 'Please select at least one target platform (Facebook, Instagram, or YouTube).',
             ], 400);
         }
+        $targetPlatforms = array_values(array_filter(
+            ['Facebook', 'Instagram', 'YouTube'],
+            fn ($p) => in_array($p, $targetPlatforms, true)
+        ));
+
+        // B9/B15: composition rules are enforced here as well, so the API never trusts the UI.
+        $newImages = $request->hasFile('images') ? \Illuminate\Support\Arr::wrap($request->file('images')) : [];
+        $newVideo  = $request->hasFile('video');
+        $replacesMedia = !empty($newImages) || $newVideo;
+        $keepExistingMedia = $draft && !$replacesMedia && !$request->boolean('clear_media');
+        $existingMedia = $keepExistingMedia ? $draft->media : collect();
+
+        $effectiveImageCount = !empty($newImages) ? count($newImages) : $existingMedia->where('media_type', 'image')->count();
+        $effectiveHasVideo   = $newVideo || ($newImages === [] && $existingMedia->where('media_type', 'video')->isNotEmpty());
+
+        $ruleErrors = \App\Support\PublishingRules::compositionErrors(
+            $message,
+            $hashtagsText,
+            $targetPlatforms,
+            $postType,
+            $effectiveImageCount,
+            $effectiveHasVideo,
+            $status === 'draft'
+        );
+        // Custom thumbnail / cover image: only meaningful for video posts (for image posts the image itself is
+        // the thumbnail, and carousels use their first image as the cover).
+        $thumbnailUpload = $request->file('thumbnail');
+        if ($thumbnailUpload) {
+            if (!$effectiveHasVideo) {
+                $ruleErrors['thumbnail'][] = 'A custom thumbnail can only be added to a video post. For image posts the image itself is the thumbnail, and a carousel uses its first image as the cover.';
+            } else {
+                foreach (\App\Support\PublishingRules::thumbnailErrors($thumbnailUpload->getRealPath()) as $thumbError) {
+                    $ruleErrors['thumbnail'][] = $thumbError;
+                }
+            }
+            if (!FacebookPost::supportsThumbnails() && $status !== 'published') {
+                $ruleErrors['thumbnail'][] = 'Saving a custom thumbnail needs a database update. Ask an administrator to run "php artisan migrate".';
+            }
+        }
+
+        // Scheduling for Instagram: check the media against Instagram's format rules now (no network), so a
+        // file Instagram will reject is reported when scheduling instead of failing at the scheduled time.
+        if ($status === 'scheduled' && $requiresInstagram) {
+            $igMedia = \App\Services\PublicMediaUrlService::class;
+            $igChecks = [];
+            if (!empty($newImages)) {
+                foreach ($newImages as $i => $img) {
+                    $igChecks[] = ['images', 'image', $img->getRealPath(), count($newImages) > 1 ? 'Image ' . ($i + 1) . ': ' : ''];
+                }
+            } elseif ($newVideo) {
+                $igChecks[] = ['video', 'video', $request->file('video')->getRealPath(), ''];
+            } else {
+                foreach ($existingMedia->values() as $i => $m) {
+                    $local = \App\Jobs\PublishScheduledPostJob::resolveLocalFilePath($m->file_path);
+                    if ($local) {
+                        $igChecks[] = [$m->media_type === 'video' ? 'video' : 'images', $m->media_type === 'video' ? 'video' : 'image', $local, $existingMedia->count() > 1 ? 'Image ' . ($i + 1) . ': ' : ''];
+                    }
+                }
+            }
+            foreach ($igChecks as [$field, $kind, $path, $prefix]) {
+                if ($problem = app($igMedia)->localMediaProblem($path, $kind)) {
+                    $ruleErrors[$field][] = 'Instagram: ' . $prefix . $problem;
+                }
+            }
+        }
+
+        // Carousel cover: a saved draft's images can be re-ordered without re-uploading them (first = cover).
+        $mediaOrder = array_map('intval', $validated['media_order'] ?? []);
+        if (!empty($mediaOrder) && $keepExistingMedia) {
+            $existingIds = $existingMedia->pluck('id')->map(fn ($id) => (int) $id)->all();
+            $sortedOrder = $mediaOrder;
+            sort($sortedOrder);
+            $sortedExisting = $existingIds;
+            sort($sortedExisting);
+            if ($sortedOrder !== $sortedExisting) {
+                $ruleErrors['media_order'][] = 'The media order does not match the images saved with this post.';
+            } else {
+                $position = array_flip($mediaOrder);
+                $existingMedia = $existingMedia->sortBy(fn ($m) => $position[(int) $m->id])->values();
+            }
+        }
+
+        if (!empty($ruleErrors)) {
+            return response()->json([
+                'success' => false,
+                'message' => collect($ruleErrors)->flatten()->first(),
+                'errors'  => $ruleErrors,
+            ], 422);
+        }
+        $postType = $postType ?? 'text';
 
         // 1. Validate Facebook Connection
         $fbPage = null;
@@ -3357,7 +3565,7 @@ Route::prefix('v1')->group(function () {
                 ], 400);
             }
 
-            if ($status !== 'draft' && !$request->hasFile('images') && !$request->hasFile('video')) {
+            if ($status !== 'draft' && $effectiveImageCount === 0 && !$effectiveHasVideo) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Instagram Graph API requires an image or video to create a post. Please attach media to publish to Instagram.',
@@ -3372,14 +3580,13 @@ Route::prefix('v1')->group(function () {
                 ->where('platform', 'youtube')
                 ->where('is_connected', true)
                 ->first();
+            // B2: only a token-bearing channel that belongs to THIS workspace may be used. Never fall back
+            // to "any channel of the current user", which could resolve another client's channel.
             $ytConn = \App\Models\YouTubeConnection::where('workspace_id', $workspaceId)
-                ->orWhere(function ($q) use ($ytInteg) {
-                    if ($ytInteg && !empty($ytInteg->account_id)) {
-                        $q->where('channel_id', $ytInteg->account_id);
-                    }
-                })
-                ->orWhere('user_id', auth()->id() ?? $request->user()?->id ?? 1)
                 ->whereNotNull('access_token')
+                ->when($ytInteg && !empty($ytInteg->account_id), fn ($q) => $q->orderByRaw('CASE WHEN channel_id = ? THEN 0 ELSE 1 END', [$ytInteg->account_id]))
+                ->orderByDesc('updated_at')
+                ->orderByDesc('id')
                 ->first();
             if ($status !== 'draft' && !$ytConn) {
                 return response()->json([
@@ -3388,7 +3595,7 @@ Route::prefix('v1')->group(function () {
                 ], 400);
             }
 
-            if ($status !== 'draft' && $postType !== 'video' && !$request->hasFile('video')) {
+            if ($status !== 'draft' && $postType !== 'video' && !$effectiveHasVideo) {
                 return response()->json([
                     'success' => false,
                     'message' => 'YouTube requires video content. Please attach a video file to publish to YouTube.',
@@ -3396,9 +3603,25 @@ Route::prefix('v1')->group(function () {
             }
         }
 
-        // Parse scheduled_at if provided
+        // Parse and validate scheduled_at
         $scheduledAtCarbon = null;
-        if (!empty($validated['scheduled_at'])) {
+        if ($status === 'scheduled') {
+            if (empty($validated['scheduled_at'])) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'A future schedule date and time is required to schedule a post.',
+                    'errors'  => ['scheduled_at' => ['A schedule date and time is required.']],
+                ], 422);
+            }
+            $scheduledAtCarbon = \Carbon\Carbon::parse($validated['scheduled_at'], 'Asia/Kolkata')->utc();
+            if ($scheduledAtCarbon->isPast()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'The scheduled date and time must be in the future.',
+                    'errors'  => ['scheduled_at' => ['The scheduled date and time must be in the future.']],
+                ], 422);
+            }
+        } elseif (!empty($validated['scheduled_at'])) {
             $scheduledAtCarbon = \Carbon\Carbon::parse($validated['scheduled_at'], 'Asia/Kolkata')->utc();
         }
 
@@ -3423,8 +3646,9 @@ Route::prefix('v1')->group(function () {
 
         // Handle uploaded media files
         $storedMediaFiles = [];
+        $newMediaFiles = [];
         if ($request->hasFile('images')) {
-            $images = $request->file('images');
+            $images = \Illuminate\Support\Arr::wrap($request->file('images'));
             $postType = count($images) === 1 ? 'single_image' : 'multi_image';
             foreach ($images as $index => $img) {
                 $uuid = \Illuminate\Support\Str::uuid()->toString();
@@ -3460,9 +3684,47 @@ Route::prefix('v1')->group(function () {
                 'uploaded_file' => $vid,
             ];
         }
+        $newMediaFiles = $storedMediaFiles;
 
-        // Create database record
-        $post = FacebookPost::create([
+        // Re-using the media of a draft that is being edited/published without re-uploading it.
+        if (empty($storedMediaFiles) && $existingMedia->isNotEmpty()) {
+            foreach ($existingMedia->values() as $position => $media) {
+                $storedMediaFiles[] = [
+                    'type'          => $media->media_type,
+                    'file_path'     => $media->file_path,
+                    'file_url'      => $media->file_url,
+                    'sort_order'    => !empty($mediaOrder) ? $position : $media->sort_order,
+                    'uploaded_file' => null,
+                ];
+            }
+            $postType = $existingMedia->first()->media_type === 'video'
+                ? 'video'
+                : ($existingMedia->count() === 1 ? 'single_image' : 'multi_image');
+        }
+
+        // Custom thumbnail: a new upload replaces the saved one; it is dropped when removed or when the post
+        // no longer has a video. Stored on the public disk, separate from the video.
+        $thumbnailsSupported = FacebookPost::supportsThumbnails();
+        $thumbnailRelative = ($draft && $thumbnailsSupported) ? $draft->thumbnail_path : null;
+        $thumbnailUrl      = ($draft && $thumbnailsSupported) ? $draft->thumbnail_url : null;
+        if ($thumbnailUpload) {
+            $thumbExt = strtolower($thumbnailUpload->getClientOriginalExtension() ?: 'jpg');
+            $thumbnailRelative = $thumbnailUpload->storeAs(
+                "posts/{$workspaceId}/thumbnails",
+                \Illuminate\Support\Str::uuid()->toString() . '.' . (in_array($thumbExt, ['jpg', 'jpeg', 'png'], true) ? $thumbExt : 'jpg'),
+                'public'
+            );
+            $thumbnailUrl = \Illuminate\Support\Facades\Storage::disk('public')->url($thumbnailRelative);
+        } elseif ($request->boolean('remove_thumbnail') || !$effectiveHasVideo) {
+            $thumbnailRelative = null;
+            $thumbnailUrl = null;
+        }
+        $thumbnailAbsolute = ($thumbnailRelative && \Illuminate\Support\Facades\Storage::disk('public')->exists($thumbnailRelative))
+            ? \Illuminate\Support\Facades\Storage::disk('public')->path($thumbnailRelative)
+            : null;
+
+        // Create (or update the edited draft's) database record
+        $recordAttributes = [
             'workspace_id'     => $workspaceId,
             'facebook_page_id' => $fbPage ? $fbPage->id : null,
             'post_type'        => $postType,
@@ -3472,11 +3734,34 @@ Route::prefix('v1')->group(function () {
             'scheduled_at'     => $scheduledAtCarbon,
             'published_at'     => $status === 'published' ? now() : null,
             'youtube_privacy'  => $youtubePrivacy,
-            'created_by_id'    => $request->user()->id ?? 1,
-        ]);
+            'internal_title'   => $validated['internal_title'] ?? null,
+            'cta'              => $validated['cta'] ?? null,
+            'hashtags'         => $hashtagsText,
+            'video_title'      => $validated['video_title'] ?? null,
+            'platforms'        => $targetPlatforms,
+        ];
+        if ($thumbnailsSupported) {
+            $recordAttributes['thumbnail_path'] = $thumbnailRelative;
+            $recordAttributes['thumbnail_url']  = $thumbnailUrl;
+        }
 
-        // Insert media attachments
-        foreach ($storedMediaFiles as $mediaData) {
+        if ($draft) {
+            $draft->fill($recordAttributes)->save();
+            $post = $draft;
+            if ($replacesMedia || $request->boolean('clear_media')) {
+                $post->media()->delete();
+            } elseif (!empty($mediaOrder) && $keepExistingMedia) {
+                // Persist the new carousel order (first image = cover)
+                foreach ($mediaOrder as $position => $mediaId) {
+                    \App\Models\FacebookPostMedia::where('facebook_post_id', $post->id)->where('id', $mediaId)->update(['sort_order' => $position]);
+                }
+            }
+        } else {
+            $post = FacebookPost::create($recordAttributes + ['created_by_id' => $request->user()->id ?? 1]);
+        }
+
+        // Insert media attachments (only files that were actually uploaded in this request)
+        foreach ($newMediaFiles as $mediaData) {
             \App\Models\FacebookPostMedia::create([
                 'facebook_post_id' => $post->id,
                 'media_type'       => $mediaData['type'],
@@ -3486,25 +3771,41 @@ Route::prefix('v1')->group(function () {
             ]);
         }
 
-        // Create legacy generic post record for multi-platform history
-        Post::create([
-            'workspace_id'    => $workspaceId,
-            'content'         => $message,
-            'platform_list'   => $targetPlatforms,
-            'status'          => $status,
-            'scheduled_at'    => $scheduledAtCarbon,
-            'published_at'    => $post->published_at,
-            'approval_status' => 'approved',
-            'created_by_id'   => $request->user()->id ?? 1,
-        ]);
+        // Legacy generic post record for multi-platform history, linked by foreign key (B12)
+        $legacyAttributes = [
+            'workspace_id'     => $workspaceId,
+            'facebook_post_id' => $post->id,
+            'content'          => $message,
+            'platform_list'    => $targetPlatforms,
+            'status'           => $status,
+            'scheduled_at'     => $scheduledAtCarbon,
+            'published_at'     => $post->published_at,
+            'approval_status'  => 'approved',
+        ];
+        $legacy = $draft ? Post::where('facebook_post_id', $post->id)->first() : null;
+        if ($legacy) {
+            $legacy->fill($legacyAttributes)->save();
+        } else {
+            Post::create($legacyAttributes + ['created_by_id' => $request->user()->id ?? 1]);
+        }
 
         // If Draft or Scheduled, return immediately without calling social platform APIs
         if ($status !== 'published') {
+            if ($status === 'scheduled') {
+                try {
+                    \App\Jobs\PublishScheduledPostJob::dispatch($post->id)->delay($scheduledAtCarbon);
+                } catch (\Throwable $queueEx) {
+                    \Illuminate\Support\Facades\Log::warning("Could not dispatch queue job for post {$post->id}: {$queueEx->getMessage()}");
+                }
+            }
+
             return response()->json([
                 'success' => true,
-                'message' => $status === 'scheduled' ? 'Post scheduled successfully!' : 'Draft saved successfully!',
+                'message' => $status === 'scheduled'
+                    ? ($draft ? 'Scheduled post updated successfully!' : 'Post scheduled successfully!')
+                    : ($draft ? 'Draft updated successfully!' : 'Draft saved successfully!'),
                 'data'    => $post->load('media'),
-            ], 201);
+            ], $draft ? 200 : 201);
         }
 
         // Execute Multi-Platform Publishing
@@ -3524,7 +3825,7 @@ Route::prefix('v1')->group(function () {
                     $fbResult = $graphService->publishMultiplePhotos($fbPage->page_id, $fbPage->page_access_token, $message, $mediaPaths);
                 } elseif ($postType === 'video' && !empty($storedMediaFiles)) {
                     $videoPath = $storedMediaFiles[0]['file_path'] ?? $storedMediaFiles[0]['uploaded_file'];
-                    $fbResult = $graphService->publishVideo($fbPage->page_id, $fbPage->page_access_token, $message, $videoPath);
+                    $fbResult = $graphService->publishVideo($fbPage->page_id, $fbPage->page_access_token, $message, $videoPath, $thumbnailAbsolute);
                 } else {
                     $fbResult = $graphService->publishTextPost($fbPage->page_id, $fbPage->page_access_token, $message, $validated['link_url'] ?? null);
                 }
@@ -3537,6 +3838,10 @@ Route::prefix('v1')->group(function () {
                     'id'        => $fbPostId,
                     'timestamp' => now()->toIso8601String(),
                 ];
+                if ($postType === 'video' && $thumbnailAbsolute) {
+                    $platformStatuses['facebook']['thumbnail'] = $fbResult['thumbnail']
+                        ?? ['requested' => true, 'applied' => false, 'message' => 'Facebook did not confirm the custom thumbnail.'];
+                }
                 $publishedSummary[] = 'Facebook Page';
             } catch (\Exception $e) {
                 $errMsg = $e->getMessage();
@@ -3582,7 +3887,7 @@ Route::prefix('v1')->group(function () {
                     try {
                         $igResult = $graphService->publishInstagramCarousel($igAccountId, $primaryToken, $message, $mediaPaths, $workspaceId);
                     } catch (\Exception $igErr) {
-                        if ($fbPageForIg && !empty($fbPageForIg->page_access_token) && $primaryToken !== $fbPageForIg->page_access_token) {
+                        if (!($igErr instanceof \App\Exceptions\InstagramMediaException) && $fbPageForIg && !empty($fbPageForIg->page_access_token) && $primaryToken !== $fbPageForIg->page_access_token) {
                             $igResult = $graphService->publishInstagramCarousel($igAccountId, $fbPageForIg->page_access_token, $message, $mediaPaths, $workspaceId);
                         } else {
                             throw $igErr;
@@ -3593,7 +3898,7 @@ Route::prefix('v1')->group(function () {
                     try {
                         $igResult = $graphService->publishInstagramSinglePhoto($igAccountId, $primaryToken, $message, $mediaPath, $workspaceId);
                     } catch (\Exception $igErr) {
-                        if ($fbPageForIg && !empty($fbPageForIg->page_access_token) && $primaryToken !== $fbPageForIg->page_access_token) {
+                        if (!($igErr instanceof \App\Exceptions\InstagramMediaException) && $fbPageForIg && !empty($fbPageForIg->page_access_token) && $primaryToken !== $fbPageForIg->page_access_token) {
                             $igResult = $graphService->publishInstagramSinglePhoto($igAccountId, $fbPageForIg->page_access_token, $message, $mediaPath, $workspaceId);
                         } else {
                             throw $igErr;
@@ -3601,7 +3906,9 @@ Route::prefix('v1')->group(function () {
                     }
                 } elseif (!empty($storedMediaFiles) && $storedMediaFiles[0]['type'] === 'video') {
                     $videoPath = $storedMediaFiles[0]['file_path'] ?? $storedMediaFiles[0]['uploaded_file'];
-                    $igResult = $graphService->publishInstagramVideo($igAccountId, $primaryToken, $message, $videoPath, $workspaceId);
+                    $igResult = $thumbnailAbsolute
+                        ? $graphService->publishInstagramVideo($igAccountId, $primaryToken, $message, $videoPath, $workspaceId, $thumbnailAbsolute)
+                        : $graphService->publishInstagramVideo($igAccountId, $primaryToken, $message, $videoPath, $workspaceId);
                 }
 
                 $igMediaId = $igResult['id'] ?? null;
@@ -3616,7 +3923,13 @@ Route::prefix('v1')->group(function () {
                     'id'        => $igMediaId,
                     'timestamp' => now()->toIso8601String(),
                 ];
+                if ($postType === 'video' && $thumbnailAbsolute) {
+                    $platformStatuses['instagram']['thumbnail'] = $igResult['thumbnail']
+                        ?? ['requested' => true, 'applied' => false, 'message' => 'Instagram did not confirm the custom Reel cover.'];
+                }
                 $publishedSummary[] = 'Instagram (@' . ($igInteg ? $igInteg->account_name : 'Account') . ')';
+                // The Overview dashboard must show the new post immediately, not after its caches expire.
+                FacebookGraphService::invalidateInstagramDashboardCache($workspaceId, (string) $igAccountId);
             } catch (\Exception $e) {
                 $rawMsg = $e->getMessage();
                 $friendlyMsg = $rawMsg;
@@ -3640,13 +3953,9 @@ Route::prefix('v1')->group(function () {
                     $videoPath = $storedMediaFiles[0]['file_path'] ?? $request->file('video')->getRealPath();
                     $ytService = resolve(\App\Services\YouTubeService::class);
 
-                    $ytResult = $ytService->uploadVideo(
-                        $ytConn,
-                        $videoPath,
-                        $videoTitle,
-                        $message,
-                        $youtubePrivacy
-                    );
+                    $ytResult = $thumbnailAbsolute
+                        ? $ytService->uploadVideo($ytConn, $videoPath, $videoTitle, $message, $youtubePrivacy, null, '22', $thumbnailAbsolute)
+                        : $ytService->uploadVideo($ytConn, $videoPath, $videoTitle, $message, $youtubePrivacy);
 
                     $ytVideoId = $ytResult['id'] ?? null;
                     $post->yt_video_id = $ytVideoId;
@@ -3658,6 +3967,9 @@ Route::prefix('v1')->group(function () {
                         'privacy_status' => $youtubePrivacy,
                         'timestamp'      => now()->toIso8601String(),
                     ];
+                    if ($thumbnailAbsolute) {
+                        $platformStatuses['youtube']['thumbnail'] = \App\Support\PublishingRules::youtubeThumbnailStatus($ytResult);
+                    }
                     $publishedSummary[] = "YouTube ({$ytConn->channel_name}) [{$youtubePrivacy}]";
                 } else {
                     throw new Exception('YouTube requires a video file to be uploaded.');
@@ -3747,131 +4059,199 @@ Route::prefix('v1')->group(function () {
             'errors'            => array_values($errors),
             'data'              => $post,
         ]);
-    });
+    };
+    Route::post('/facebook/publish-post', $publishPostHandler);
 
-    // POST /v1/facebook/publish-image (Backwards compatible image upload route)
-    Route::post('/facebook/publish-image', function (Request $request) {
-        return redirect()->to('/api/v1/facebook/publish-post');
-    });
+    // POST /v1/facebook/publish-image (backwards compatible alias: same handler, body and files preserved)
+    Route::post('/facebook/publish-image', $publishPostHandler);
+
+    // ── Shared helpers for the publishing endpoints ──────────────────────────────
+    // Platforms a post targets: the persisted list, else the linked legacy row (foreign key), else what the
+    // post actually produced. Never guessed from matching caption text (B12).
+    $resolvePlatformList = function (FacebookPost $p): array {
+        if (!empty($p->platforms)) {
+            return array_values($p->platforms);
+        }
+        $linked = $p->relationLoaded('legacyPost') ? $p->legacyPost : $p->legacyPost()->first();
+        if ($linked && !empty($linked->platform_list)) {
+            return array_values($linked->platform_list);
+        }
+        $derived = [];
+        if (!empty($p->fb_post_id) || $p->facebook_page_id) $derived[] = 'Facebook';
+        if (!empty($p->ig_media_id)) $derived[] = 'Instagram';
+        if (!empty($p->yt_video_id)) $derived[] = 'YouTube';
+        return $derived;
+    };
+
+    // Loads a post and verifies the caller may use its workspace. Returns [post|null, errorResponse|null].
+    $findAuthorizedPost = function (Request $request, $id) {
+        $post = FacebookPost::find($id);
+        if (!$post) {
+            return [null, response()->json(['success' => false, 'message' => 'Post not found.'], 404)];
+        }
+        if ($denied = \App\Support\WorkspaceAccess::guard($request, $post->workspace_id)) {
+            return [null, $denied];
+        }
+        return [$post, null];
+    };
 
     // ── Drafts API ───────────────────────────────────────────────────────────────
     Route::get('/drafts', function (Request $request) {
-        $workspaceId = $request->query('workspace_id', 1);
-        $drafts = FacebookPost::where('workspace_id', $workspaceId)->where('status', 'draft')->orderBy('updated_at', 'desc')->get();
+        if ($denied = \App\Support\WorkspaceAccess::guard($request, $request->query('workspace_id'))) {
+            return $denied;
+        }
+        $drafts = FacebookPost::with('media')
+            ->where('workspace_id', (int) $request->query('workspace_id'))
+            ->where('status', 'draft')
+            ->orderBy('updated_at', 'desc')
+            ->get();
         return response()->json(['success' => true, 'data' => $drafts]);
     });
 
-    Route::delete('/drafts/{id}', function ($id) {
-        FacebookPost::where('id', $id)->where('status', 'draft')->delete();
+    // Single draft or scheduled post, used by the "Edit" action to load it back into the composer (B4).
+    Route::get('/drafts/{id}', function (Request $request, $id) use ($findAuthorizedPost, $resolvePlatformList) {
+        [$post, $error] = $findAuthorizedPost($request, $id);
+        if ($error) return $error;
+        if (!in_array($post->status, ['draft', 'scheduled', 'failed'], true)) {
+            return response()->json(['success' => false, 'message' => 'Only drafts and scheduled posts can be opened for editing.'], 422);
+        }
+        $post->load('media');
+        $post->platform_list = $resolvePlatformList($post);
+        return response()->json(['success' => true, 'data' => $post]);
+    });
+
+    Route::delete('/drafts/{id}', function (Request $request, $id) use ($findAuthorizedPost) {
+        [$post, $error] = $findAuthorizedPost($request, $id);
+        if ($error) return $error;
+        if ($post->status !== 'draft') {
+            return response()->json(['success' => false, 'message' => 'Only drafts can be deleted here.'], 422);
+        }
+        Post::where('facebook_post_id', $post->id)->where('status', 'draft')->delete();
+        $post->delete();
         return response()->json(['success' => true, 'message' => 'Draft deleted']);
     });
 
     // ── Scheduled Posts API ──────────────────────────────────────────────────────
-    Route::get('/scheduled-posts', function (Request $request) {
-        $workspaceId = getOrCreateWorkspaceId($request->query('workspace_id', 1));
+    Route::get('/scheduled-posts', function (Request $request) use ($resolvePlatformList) {
+        if ($denied = \App\Support\WorkspaceAccess::guard($request, $request->query('workspace_id'))) {
+            return $denied;
+        }
+        $workspaceId = (int) $request->query('workspace_id');
 
-        // Auto-process any due scheduled posts if scheduler worker is not running
-        if (FacebookPost::where('status', 'scheduled')->where('scheduled_at', '<=', now())->exists()) {
+        // Fallback ONLY when the real scheduler (cron / Task Scheduler / schedule:work) is not running: publish due
+        // posts during this page load. With the scheduler running, publishing never blocks page requests.
+        if (!\App\Console\Commands\ProcessScheduledPosts::schedulerIsRunning()
+            && FacebookPost::where('status', 'scheduled')->where('scheduled_at', '<=', now())->exists()) {
             try {
-                \Illuminate\Support\Facades\Artisan::call('posts:process-scheduled');
+                \Illuminate\Support\Facades\Artisan::call('posts:process-scheduled', ['--web-fallback' => true]);
             } catch (\Throwable $e) {
                 \Illuminate\Support\Facades\Log::warning('Auto-process scheduled posts notice: ' . $e->getMessage());
             }
         }
 
-        $scheduled = FacebookPost::where('workspace_id', $workspaceId)
+        $scheduled = FacebookPost::with(['legacyPost', 'media'])
+            ->where('workspace_id', $workspaceId)
             ->where('status', 'scheduled')
             ->orderBy('scheduled_at', 'asc')
             ->get()
-            ->map(function ($p) {
-                $legacyPost = Post::where('workspace_id', $p->workspace_id)
-                    ->where('content', $p->content)
-                    ->latest()
-                    ->first();
-                $p->platform_list = $legacyPost ? $legacyPost->platform_list : ($p->facebook_page_id ? ['Facebook'] : ['Instagram']);
+            ->map(function ($p) use ($resolvePlatformList) {
+                $p->platform_list = $resolvePlatformList($p);
+                $p->unsetRelation('legacyPost');
                 return $p;
             });
-        return response()->json(['success' => true, 'data' => $scheduled]);
+        return response()->json([
+            'success'   => true,
+            'data'      => $scheduled,
+            // Lets the UI warn when nothing will publish scheduled posts automatically
+            'scheduler' => [
+                'running'     => \App\Console\Commands\ProcessScheduledPosts::schedulerIsRunning(),
+                'last_run_at' => \App\Console\Commands\ProcessScheduledPosts::lastSchedulerRun(),
+            ],
+        ]);
     });
 
-    Route::delete('/scheduled-posts/{id}', function ($id) {
-        FacebookPost::where('id', $id)->where('status', 'scheduled')->delete();
-        Post::where('id', $id)->where('status', 'scheduled')->delete();
+    Route::get('/scheduled-posts/{id}', function (Request $request, $id) use ($findAuthorizedPost, $resolvePlatformList) {
+        [$post, $error] = $findAuthorizedPost($request, $id);
+        if ($error) return $error;
+        if ($post->status !== 'scheduled') {
+            return response()->json(['success' => false, 'message' => 'Only scheduled posts can be loaded here.'], 422);
+        }
+        $post->load('media');
+        $post->platform_list = $resolvePlatformList($post);
+        return response()->json(['success' => true, 'data' => $post]);
+    });
+
+    Route::delete('/scheduled-posts/{id}', function (Request $request, $id) use ($findAuthorizedPost) {
+        [$post, $error] = $findAuthorizedPost($request, $id);
+        if ($error) return $error;
+        if ($post->status !== 'scheduled') {
+            return response()->json(['success' => false, 'message' => 'Only scheduled posts can be cancelled here.'], 422);
+        }
+        // B11: only the legacy row explicitly linked to this post is removed - never one that merely shares an id.
+        Post::where('facebook_post_id', $post->id)->where('status', 'scheduled')->delete();
+        $post->delete();
         return response()->json(['success' => true, 'message' => 'Scheduled post cancelled and removed']);
     });
 
     // ── Retry & Duplicate Post Actions ───────────────────────────────────────────
-    Route::post('/posts/{id}/retry', function ($id) {
-        $post = FacebookPost::findOrFail($id);
-        $fbPage = FacebookPage::find($post->facebook_page_id) ?? FacebookPage::where('workspace_id', $post->workspace_id)->first();
+    Route::post('/posts/{id}/retry', function (Request $request, $id) use ($findAuthorizedPost) {
+        [$post, $error] = $findAuthorizedPost($request, $id);
+        if ($error) return $error;
 
-        if (!$fbPage) {
-            return response()->json(['success' => false, 'message' => 'No connected Facebook Page available for retry'], 400);
+        $hasFailedPlatform = collect($post->platform_statuses ?? [])->contains(fn ($s) => ($s['status'] ?? null) === 'failed');
+        if (!($post->status === 'failed' || ($post->status === 'published' && $hasFailedPlatform))) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only failed or partially published posts can be retried.',
+            ], 422);
         }
 
-        $graphService = new FacebookGraphService();
-        $mediaItems = \App\Models\FacebookPostMedia::where('facebook_post_id', $post->id)->orderBy('sort_order', 'asc')->get();
+        // Re-run the same publishing job in manual-retry mode. It skips every platform that already has a post /
+        // media / video ID, so nothing is published twice: only the platforms that failed are attempted again,
+        // with the media, caption, thumbnail and accounts saved on the post. The post is never turned into a
+        // "scheduled" post, so a retry can never lead to automatic publishing later.
+        \App\Jobs\PublishScheduledPostJob::dispatchSync($post->id, true);
+        $post->refresh();
 
-        try {
-            $fbResult = null;
-            if ($post->post_type === 'single_image' || ($mediaItems->count() === 1 && $mediaItems->first()->media_type === 'image')) {
-                $media = $mediaItems->first();
-                $filePath = ($media && !empty($media->file_path) && file_exists($media->file_path)) ? $media->file_path : ($media?->file_url ?? null);
-                if (!$filePath) {
-                    throw new \Exception("Cannot retry photo post: Image file is missing from server storage.");
-                }
-                $fbResult = $graphService->publishSinglePhoto($fbPage->page_id, $fbPage->page_access_token, $post->content ?? '', $filePath);
-            } elseif ($post->post_type === 'multi_image' || ($mediaItems->count() > 1 && $mediaItems->first()->media_type === 'image')) {
-                $filePaths = $mediaItems->map(fn($m) => (!empty($m->file_path) && file_exists($m->file_path)) ? $m->file_path : $m->file_url)->filter()->values()->toArray();
-                if (empty($filePaths)) {
-                    throw new \Exception("Cannot retry multi-photo post: Image files are missing from server storage.");
-                }
-                $fbResult = $graphService->publishMultiplePhotos($fbPage->page_id, $fbPage->page_access_token, $post->content ?? '', $filePaths);
-            } elseif ($post->post_type === 'video' || ($mediaItems->count() >= 1 && $mediaItems->first()->media_type === 'video')) {
-                $media = $mediaItems->first();
-                $filePath = ($media && !empty($media->file_path) && file_exists($media->file_path)) ? $media->file_path : ($media?->file_url ?? null);
-                if (!$filePath) {
-                    throw new \Exception("Cannot retry video post: Video file is missing from server storage.");
-                }
-                $fbResult = $graphService->publishVideo($fbPage->page_id, $fbPage->page_access_token, $post->content ?? '', $filePath);
-            } else {
-                if (empty(trim($post->content ?? ''))) {
-                    throw new \Exception("Cannot retry empty post: Message caption and media attachments are both empty.");
-                }
-                $fbResult = $graphService->publishTextPost($fbPage->page_id, $fbPage->page_access_token, $post->content, $post->link_url);
-            }
-
-            $post->status = 'published';
-            $post->fb_post_id = $fbResult['post_id'] ?? $fbResult['id'] ?? null;
-            $post->error_message = null;
-            $post->published_at = now();
-            $post->retry_count += 1;
-            $post->save();
-
-            FacebookPostHistory::create([
-                'facebook_post_id' => $post->id,
-                'action'           => 'retried',
-                'attempt_number'   => $post->retry_count,
-                'status_code'      => 200,
-                'response_payload' => $fbResult,
+        if ($post->status === 'published') {
+            $stillFailed = collect($post->platform_statuses ?? [])->contains(fn ($s) => ($s['status'] ?? null) === 'failed');
+            return response()->json([
+                'success'           => true,
+                'partial'           => $stillFailed,
+                'status'            => 'published',
+                'message'           => $stillFailed ? 'Retry finished; some platforms still failed: ' . $post->error_message : 'Post retried and published successfully!',
+                'platform_statuses' => $post->platform_statuses,
+                'data'              => $post->load('media'),
             ]);
-
-            return response()->json(['success' => true, 'message' => 'Post retried and published successfully!', 'data' => $post]);
-        } catch (\Exception $e) {
-            $post->retry_count += 1;
-            $post->error_message = $e->getMessage();
-            $post->save();
-
-            return response()->json(['success' => false, 'message' => "Retry Failed: {$e->getMessage()}"], 500);
         }
+
+        return response()->json([
+            'success'           => false,
+            'status'            => $post->status,
+            'message'           => 'Retry failed: ' . $post->error_message,
+            'platform_statuses' => $post->platform_statuses,
+            'data'              => $post->load('media'),
+        ], 422);
     });
 
-    Route::post('/posts/{id}/duplicate', function ($id) {
-        $post = FacebookPost::findOrFail($id);
+    Route::post('/posts/{id}/duplicate', function (Request $request, $id) use ($findAuthorizedPost, $resolvePlatformList) {
+        [$post, $error] = $findAuthorizedPost($request, $id);
+        if ($error) return $error;
+
+        $platforms = $resolvePlatformList($post);
+
         $newPost = $post->replicate();
         $newPost->status = 'draft';
         $newPost->fb_post_id = null;
+        $newPost->ig_media_id = null;
+        $newPost->yt_video_id = null;
+        $newPost->platform_statuses = null;
+        $newPost->error_message = null;
+        $newPost->retry_count = 0;
         $newPost->published_at = null;
+        $newPost->scheduled_at = null;
+        $newPost->platforms = $platforms;
+        $newPost->created_by_id = $request->user()->id ?? $post->created_by_id;
         $newPost->created_at = now();
         $newPost->updated_at = now();
         $newPost->save();
@@ -3883,35 +4263,50 @@ Route::prefix('v1')->group(function () {
             $newMedia->save();
         }
 
-        // Also duplicate in Post model for history
+        // Linked legacy history row keeps the SAME platforms as the source post (B12).
         Post::create([
-            'workspace_id'    => $newPost->workspace_id,
-            'content'         => $newPost->content,
-            'platform_list'   => $newPost->facebook_page_id ? ['Facebook'] : ['Instagram'],
-            'status'          => 'draft',
-            'created_by_id'   => request()->user()->id ?? 1,
+            'workspace_id'     => $newPost->workspace_id,
+            'facebook_post_id' => $newPost->id,
+            'content'          => $newPost->content,
+            'platform_list'    => $platforms,
+            'status'           => 'draft',
+            'approval_status'  => 'approved',
+            'created_by_id'    => $request->user()->id ?? 1,
         ]);
 
         return response()->json(['success' => true, 'message' => 'Post duplicated as a new draft!', 'data' => $newPost->load('media')]);
     });
 
     // ── Paginated Publishing History & Drafts Endpoint ────────────────────────
-    Route::get('/posts/history', function (Request $request) {
-        $workspaceId = (int)$request->query('workspace_id', 1);
+    Route::get('/posts/history', function (Request $request) use ($resolvePlatformList) {
+        $requested = $request->query('workspace_id');
+        $page      = max(1, (int)$request->query('page', 1));
+        $perPage   = max(1, min(50, (int)$request->query('per_page', 5)));
 
-        // Auto-process any due scheduled posts if scheduler worker is not running
-        if (FacebookPost::where('status', 'scheduled')->where('scheduled_at', '<=', now())->exists()) {
+        // "All Workspaces" is not a publishing target: list nothing rather than mixing clients together.
+        if (is_string($requested) && strtolower(trim($requested)) === 'all') {
+            return response()->json([
+                'success' => true, 'data' => [], 'current_page' => 1, 'per_page' => $perPage,
+                'total' => 0, 'last_page' => 1, 'has_prev' => false, 'has_next' => false,
+            ]);
+        }
+        if ($denied = \App\Support\WorkspaceAccess::guard($request, $requested)) {
+            return $denied;
+        }
+        $workspaceId = (int) $requested;
+
+        // Fallback ONLY when the real scheduler (cron / Task Scheduler / schedule:work) is not running: publish due
+        // posts during this page load. With the scheduler running, publishing never blocks page requests.
+        if (!\App\Console\Commands\ProcessScheduledPosts::schedulerIsRunning()
+            && FacebookPost::where('status', 'scheduled')->where('scheduled_at', '<=', now())->exists()) {
             try {
-                \Illuminate\Support\Facades\Artisan::call('posts:process-scheduled');
+                \Illuminate\Support\Facades\Artisan::call('posts:process-scheduled', ['--web-fallback' => true]);
             } catch (\Throwable $e) {
                 \Illuminate\Support\Facades\Log::warning('Auto-process scheduled posts notice: ' . $e->getMessage());
             }
         }
 
-        $page        = max(1, (int)$request->query('page', 1));
-        $perPage     = max(1, min(50, (int)$request->query('per_page', 5)));
-
-        $query = FacebookPost::with('media')
+        $query = FacebookPost::with(['media', 'legacyPost'])
             ->where('workspace_id', $workspaceId)
             ->orderBy('created_at', 'desc');
 
@@ -3922,12 +4317,9 @@ Route::prefix('v1')->group(function () {
         $posts = $query->skip(($page - 1) * $perPage)
             ->take($perPage)
             ->get()
-            ->map(function ($p) {
-                $legacyPost = Post::where('workspace_id', $p->workspace_id)
-                    ->where('content', $p->content)
-                    ->latest()
-                    ->first();
-                $p->platform_list = $legacyPost ? $legacyPost->platform_list : ($p->facebook_page_id ? ['Facebook'] : ['Instagram']);
+            ->map(function ($p) use ($resolvePlatformList) {
+                $p->platform_list = $resolvePlatformList($p);
+                $p->unsetRelation('legacyPost');
 
                 // If post is published in DB but has individual platform failures, present status as partial for frontend UI
                 if ($p->status === 'published' && !empty($p->platform_statuses)) {
@@ -4679,7 +5071,7 @@ Route::prefix('v1')->group(function () {
     });
 
     Route::post('/facebook/inbox/subscribe-webhook', [FacebookMessengerWebhookController::class, 'subscribe']);
-    Route::get('/facebook/inbox/events', [FacebookMessengerWebhookController::class, 'events']);
+    Route::get('/facebook/inbox/events', [FacebookMessengerWebhookController::class, 'events'])->withoutMiddleware('auth:sanctum');
     Route::get('/facebook/inbox/events/poll', [FacebookMessengerWebhookController::class, 'poll']);
 
     // Instagram Direct Message Routes
@@ -4687,7 +5079,7 @@ Route::prefix('v1')->group(function () {
     Route::get('/instagram/inbox/conversations/{conversationId}/messages', [InstagramInboxController::class, 'messages']);
     Route::post('/instagram/inbox/conversations/{conversationId}/messages', [InstagramInboxController::class, 'sendMessage']);
     Route::post('/instagram/inbox/send-message', [InstagramInboxController::class, 'sendMessage']);
-    Route::get('/instagram/inbox/events', [FacebookMessengerWebhookController::class, 'events']);
+    Route::get('/instagram/inbox/events', [FacebookMessengerWebhookController::class, 'events'])->withoutMiddleware('auth:sanctum');
     Route::get('/instagram/inbox/events/poll', [FacebookMessengerWebhookController::class, 'poll']);
 
     // YouTube Inbox Routes
@@ -5441,23 +5833,26 @@ Route::prefix('v1')->group(function () {
             return response()->json(['success' => false, 'message' => 'No Instagram account connected.']);
         }
 
+        // Calendar days in the reporting timezone (IST), exactly like the Facebook dashboard.
+        $reportingTz = \App\Services\FacebookGraphService::REPORTING_TIMEZONE;
         if (!empty($startDateParam) && !empty($endDateParam) && $startDateParam !== 'all' && $endDateParam !== 'all') {
-            $startDate = \Carbon\Carbon::parse($startDateParam)->startOfDay();
-            $endDate   = \Carbon\Carbon::parse($endDateParam)->endOfDay();
+            $startDate = \Carbon\Carbon::parse($startDateParam, $reportingTz)->startOfDay();
+            $endDate   = \Carbon\Carbon::parse($endDateParam, $reportingTz)->endOfDay();
         } else {
-            $endDate   = now()->endOfDay();
-            $startDate = now()->subDays(29)->startOfDay();
+            $endDate   = now($reportingTz)->endOfDay();
+            $startDate = now($reportingTz)->subDays(29)->startOfDay();
         }
 
         if ($endDate->isBefore($startDate)) {
             $endDate = $startDate->copy()->endOfDay();
         }
 
-        $statsCacheKey = 'ig_stats_v6_' . sha1(implode('|', [
+        $statsCacheKey = 'ig_stats_v7_' . sha1(implode('|', [
             $workspaceId,
             $igInteg->account_id,
             $startDate->toDateString(),
             $endDate->toDateString(),
+            \App\Services\FacebookGraphService::instagramDashboardCacheVersion((string) $igInteg->account_id),
         ])) . ($autoSync ? '_live' : '');
 
         if (!$forceRefresh && \Illuminate\Support\Facades\Cache::has($statsCacheKey)) {
@@ -5485,18 +5880,49 @@ Route::prefix('v1')->group(function () {
 
         $mediaFetchLimit = min(10000, max(100, (int)($profile['media_count'] ?? 0)));
         $mediaItems = [];
+        $mediaError = null;
         try {
             $mediaItems = $graphService->getInstagramMediaList(
                 $igInteg->refresh_token,
                 $igInteg->account_id,
                 $mediaFetchLimit,
                 $forceRefresh,
-                $startDate->toDateString(),
-                $endDate->toDateString(),
+                $startDate,
+                $endDate,
                 $cacheTtl
             );
+            $mediaError = $graphService->lastInstagramMediaListError();
         } catch (\Throwable $e) {
+            $mediaError = $e->getMessage();
             \Illuminate\Support\Facades\Log::warning('[INSTAGRAM DASHBOARD] media error: ' . $e->getMessage());
+        }
+
+        // Meta could not be reached / rejected the request: report it instead of showing "0 posts".
+        // Not cached, so the next load or "Refresh metrics" retries.
+        if ($mediaError !== null && empty($mediaItems)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Could not load Instagram posts from Meta: ' . \Illuminate\Support\Str::limit($mediaError, 200),
+            ]);
+        }
+
+        // Reconcile with posts this workspace published to Instagram through Marketing Command.
+        $publishedFromApp = \App\Models\FacebookPost::where('workspace_id', $workspaceId)
+            ->where('status', 'published')
+            ->whereNotNull('ig_media_id')
+            ->where('ig_media_id', '!=', '')
+            ->whereBetween('published_at', [$startDate->copy()->utc(), $endDate->copy()->utc()])
+            ->pluck('ig_media_id')
+            ->map(fn ($id) => (string) $id)
+            ->all();
+        $returnedMediaIds = array_map(fn ($item) => (string) ($item['id'] ?? ''), $mediaItems);
+        $notReturnedByMeta = $mediaError === null ? array_values(array_diff($publishedFromApp, $returnedMediaIds)) : [];
+        if (!empty($notReturnedByMeta)) {
+            \Illuminate\Support\Facades\Log::warning('[INSTAGRAM DASHBOARD] Published Instagram media not returned by Meta (deleted or removed on Instagram?)', [
+                'workspace_id' => $workspaceId,
+                'account_id'   => $igInteg->account_id,
+                'media_ids'    => $notReturnedByMeta,
+            ]);
         }
 
         $periodFollowers = null;
@@ -5541,7 +5967,7 @@ Route::prefix('v1')->group(function () {
 
         foreach ($mediaItems as $item) {
             if (!empty($item['timestamp'])) {
-                $dateKey = \Carbon\Carbon::parse($item['timestamp'])->format('Y-m-d');
+                $dateKey = \Carbon\Carbon::parse($item['timestamp'])->setTimezone($reportingTz)->format('Y-m-d');
                 if (array_key_exists($dateKey, $postsByDay)) {
                     $postsByDay[$dateKey]++;
                 }
@@ -5586,7 +6012,12 @@ Route::prefix('v1')->group(function () {
                 'total_posts'      => count($mediaItems),
                 'account_name'     => '@' . ltrim((string)($profile['username'] ?? $igInteg->account_name ?? ''), '@'),
                 'account_id'       => $igInteg->account_id,
+                // Posts published to Instagram via Marketing Command in this range, and any of those that
+                // Meta no longer returns (deleted/removed on Instagram), for traceability.
+                'app_published_posts'       => count($publishedFromApp),
+                'app_published_not_on_meta' => $notReturnedByMeta,
             ],
+            'partial' => $mediaError !== null,
             'posts_chart' => [
                 'labels' => $labels,
                 'counts' => $counts,
@@ -5600,7 +6031,9 @@ Route::prefix('v1')->group(function () {
             ],
         ];
 
-        \Illuminate\Support\Facades\Cache::put($statsCacheKey, $payload, $cacheTtl);
+        if ($mediaError === null) {
+            \Illuminate\Support\Facades\Cache::put($statsCacheKey, $payload, $cacheTtl);
+        }
 
         return response()->json($payload);
     });
@@ -5634,26 +6067,28 @@ Route::prefix('v1')->group(function () {
 
         $startDate = null;
         $endDate = null;
+        $reportingTz = \App\Services\FacebookGraphService::REPORTING_TIMEZONE;
         if (!$allPosts) {
             if (!empty($startDateParam) && !empty($endDateParam) && $startDateParam !== 'null' && $endDateParam !== 'null' && $startDateParam !== 'all' && $endDateParam !== 'all') {
-                $startDate = \Carbon\Carbon::parse($startDateParam)->startOfDay();
-                $endDate   = \Carbon\Carbon::parse($endDateParam)->endOfDay();
+                $startDate = \Carbon\Carbon::parse($startDateParam, $reportingTz)->startOfDay();
+                $endDate   = \Carbon\Carbon::parse($endDateParam, $reportingTz)->endOfDay();
             } else {
-                $endDate   = now()->endOfDay();
-                $startDate = now()->subDays(29)->startOfDay();
+                $endDate   = now($reportingTz)->endOfDay();
+                $startDate = now($reportingTz)->subDays(29)->startOfDay();
             }
             if ($endDate->isBefore($startDate)) {
                 $endDate = $startDate->copy()->endOfDay();
             }
         }
 
-        $postsCacheKey = 'ig_posts_v6_' . sha1(implode('|', [
+        $postsCacheKey = 'ig_posts_v7_' . sha1(implode('|', [
             $workspaceId,
             $igInteg->account_id,
             $page,
             $perPage,
             $allPosts ? 'all' : ($startDate ? $startDate->toDateString() : ''),
             $allPosts ? 'all' : ($endDate ? $endDate->toDateString() : ''),
+            \App\Services\FacebookGraphService::instagramDashboardCacheVersion((string) $igInteg->account_id),
         ])) . ($autoSync ? '_live' : '');
 
         if (!$forceRefresh && \Illuminate\Support\Facades\Cache::has($postsCacheKey)) {
@@ -5679,18 +6114,28 @@ Route::prefix('v1')->group(function () {
 
         $mediaFetchLimit = min(10000, max(100, (int)($profile['media_count'] ?? 0)));
         $mediaItems = [];
+        $mediaError = null;
         try {
             $mediaItems = $graphService->getInstagramMediaList(
                 $igInteg->refresh_token,
                 $igInteg->account_id,
                 $mediaFetchLimit,
                 $forceRefresh,
-                $allPosts || !$startDate ? null : $startDate->toDateString(),
-                $allPosts || !$endDate ? null : $endDate->toDateString(),
+                $allPosts || !$startDate ? null : $startDate,
+                $allPosts || !$endDate ? null : $endDate,
                 $cacheTtl
             );
+            $mediaError = $graphService->lastInstagramMediaListError();
         } catch (\Throwable $e) {
+            $mediaError = $e->getMessage();
             \Illuminate\Support\Facades\Log::warning('[INSTAGRAM POSTS] media error: ' . $e->getMessage());
+        }
+
+        if ($mediaError !== null && empty($mediaItems)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Could not load Instagram posts from Meta: ' . \Illuminate\Support\Str::limit($mediaError, 200),
+            ]);
         }
 
         usort($mediaItems, function ($a, $b) {
@@ -5781,14 +6226,16 @@ Route::prefix('v1')->group(function () {
             'has_next'     => $safePage < $totalPages,
         ];
 
-        \Illuminate\Support\Facades\Cache::put($postsCacheKey, $payload, $cacheTtl);
+        if ($mediaError === null) {
+            \Illuminate\Support\Facades\Cache::put($postsCacheKey, $payload, $cacheTtl);
+        }
 
         return response()->json($payload);
     });
 
     // Google Analytics (GA4) Integration Routes (Dedicated OAuth 2.0 Flow)
-    Route::get('/google-analytics/connect', [\App\Http\Controllers\GoogleAnalyticsController::class, 'connect']);
-    Route::get('/google-analytics/callback', [\App\Http\Controllers\GoogleAnalyticsController::class, 'callback']);
+    Route::get('/google-analytics/connect', [\App\Http\Controllers\GoogleAnalyticsController::class, 'connect'])->withoutMiddleware('auth:sanctum');
+    Route::get('/google-analytics/callback', [\App\Http\Controllers\GoogleAnalyticsController::class, 'callback'])->withoutMiddleware('auth:sanctum');
     Route::get('/google-analytics/status', [\App\Http\Controllers\GoogleAnalyticsController::class, 'status']);
     Route::get('/google-analytics/properties', [\App\Http\Controllers\GoogleAnalyticsController::class, 'properties']);
     Route::post('/google-analytics/select-property', [\App\Http\Controllers\GoogleAnalyticsController::class, 'selectProperty']);
@@ -5798,8 +6245,8 @@ Route::prefix('v1')->group(function () {
     Route::post('/google-analytics/disconnect', [\App\Http\Controllers\GoogleAnalyticsController::class, 'disconnect']);
 
     // ── Google Search Console Integration Routes (Dedicated OAuth 2.0 Flow) ──
-    Route::get('/search-console/connect', [\App\Http\Controllers\GoogleSearchConsoleController::class, 'connect']);
-    Route::get('/search-console/callback', [\App\Http\Controllers\GoogleSearchConsoleController::class, 'callback']);
+    Route::get('/search-console/connect', [\App\Http\Controllers\GoogleSearchConsoleController::class, 'connect'])->withoutMiddleware('auth:sanctum');
+    Route::get('/search-console/callback', [\App\Http\Controllers\GoogleSearchConsoleController::class, 'callback'])->withoutMiddleware('auth:sanctum');
     Route::get('/search-console/status', [\App\Http\Controllers\GoogleSearchConsoleController::class, 'status']);
     Route::get('/search-console/sites', [\App\Http\Controllers\GoogleSearchConsoleController::class, 'sites']);
     Route::post('/search-console/select-site', [\App\Http\Controllers\GoogleSearchConsoleController::class, 'selectSite']);
@@ -5855,7 +6302,7 @@ Route::prefix('v1')->group(function () {
             $endOfMonth = now()->endOfMonth()->addDays(7);
         }
 
-        $query = FacebookPost::with(['facebookPage', 'media'])
+        $query = FacebookPost::with(['facebookPage', 'media', 'legacyPost'])
             ->where(function ($q) use ($startOfMonth, $endOfMonth) {
                 $q->whereBetween('created_at', [$startOfMonth, $endOfMonth])
                   ->orWhereBetween('scheduled_at', [$startOfMonth, $endOfMonth])
@@ -5863,7 +6310,13 @@ Route::prefix('v1')->group(function () {
             });
 
         if ($workspaceId > 0) {
+            if ($denied = \App\Support\WorkspaceAccess::guard($request, $workspaceId)) {
+                return $denied;
+            }
             $query->where('workspace_id', $workspaceId);
+        } elseif (($allowedIds = \App\Support\WorkspaceAccess::accessibleIds($request->user())) !== null) {
+            // Combined view: non-admin users only ever see the clients they belong to.
+            $query->whereIn('workspace_id', $allowedIds);
         }
 
         $posts = $query->orderBy('created_at', 'desc')->get();
@@ -5872,9 +6325,16 @@ Route::prefix('v1')->group(function () {
             $date = $post->scheduled_at ?? $post->published_at ?? $post->created_at;
             $cleanDate = $date ? \Carbon\Carbon::parse($date)->toIso8601String() : null;
 
-            $platforms = ['facebook'];
-            if (!empty($post->ig_media_id)) $platforms[] = 'instagram';
-            if (!empty($post->yt_video_id)) $platforms[] = 'youtube';
+            $platforms = [];
+            if (!empty($post->platforms)) {
+                $platforms = array_map('strtolower', (array) $post->platforms);
+            } elseif ($post->relationLoaded('legacyPost') && !empty($post->legacyPost?->platform_list)) {
+                $platforms = array_map('strtolower', (array) $post->legacyPost->platform_list);
+            } else {
+                $platforms = ['facebook'];
+                if (!empty($post->ig_media_id)) $platforms[] = 'instagram';
+                if (!empty($post->yt_video_id)) $platforms[] = 'youtube';
+            }
 
             return [
                 'id'             => $post->id,
@@ -5889,6 +6349,10 @@ Route::prefix('v1')->group(function () {
                 'workspace_id'   => $post->workspace_id,
                 'page_name'      => $post->facebookPage?->page_name ?? 'Default Account',
                 'media_url'      => $post->media->first()?->file_url ?? null,
+                'media_type'     => $post->media->first()?->media_type,
+                // Preview image: the custom video thumbnail, else the first image
+                'thumbnail_url'  => (\App\Models\FacebookPost::supportsThumbnails() ? $post->thumbnail_url : null)
+                    ?? $post->media->firstWhere('media_type', 'image')?->file_url,
                 'reach_count'    => (int) ($post->reach_count ?? 0),
                 'likes_count'    => (int) ($post->likes_count ?? 0),
                 'comments_count' => (int) ($post->comments_count ?? 0),
@@ -5908,9 +6372,40 @@ Route::prefix('v1')->group(function () {
         ]);
 
         $post = FacebookPost::findOrFail($id);
-        $post->scheduled_at = \Carbon\Carbon::parse($validated['scheduled_at']);
-        $post->status = 'scheduled';
+        if ($denied = \App\Support\WorkspaceAccess::guard($request, $post->workspace_id)) {
+            return $denied;
+        }
+
+        // Only a post the user explicitly scheduled can be rescheduled. This endpoint only moves its time; it
+        // never turns a draft, failed or published post into a scheduled one (that needs the Schedule action).
+        if ($post->status !== 'scheduled' || $post->published_at !== null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only scheduled posts can be rescheduled. Use the Schedule action in the composer to schedule this post.',
+            ], 422);
+        }
+
+        $scheduledAt = \Carbon\Carbon::parse($validated['scheduled_at'], 'Asia/Kolkata')->utc();
+        if ($scheduledAt->isPast()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Rescheduled date and time must be in the future.',
+                'errors'  => ['scheduled_at' => ['Rescheduled date and time must be in the future.']],
+            ], 422);
+        }
+
+        $post->scheduled_at = $scheduledAt;
         $post->save();
+
+        Post::where('facebook_post_id', $post->id)->update([
+            'scheduled_at' => $scheduledAt,
+        ]);
+
+        try {
+            \App\Jobs\PublishScheduledPostJob::dispatch($post->id)->delay($scheduledAt);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning("Reschedule job dispatch notice: {$e->getMessage()}");
+        }
 
         return response()->json([
             'success' => true,
@@ -5961,6 +6456,10 @@ Route::prefix('v1')->group(function () {
     });
 
     Route::post('/reports/send-client-email', function (Request $request) {
+        $request->validate([
+            'workspace_id' => 'nullable|integer|exists:workspaces,id',
+            'email'        => 'nullable|email|max:255',
+        ]);
         $workspaceId = (int) $request->input('workspace_id', 1);
         $ws = Workspace::find($workspaceId) ?? Workspace::first();
 
@@ -5976,6 +6475,7 @@ Route::prefix('v1')->group(function () {
             'recipient' => $recipient,
             'sent_at'   => now()->toIso8601String(),
         ]);
+    });
     });
 });
 

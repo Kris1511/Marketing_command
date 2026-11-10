@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   CheckCircle2,
@@ -16,6 +16,7 @@ import {
   RotateCw,
 } from 'lucide-react';
 import axiosInstance, { BACKEND_URL, API_BASE_URL } from '../api/axiosInstance';
+import { openYouTubeOAuth } from '../api/youtubeOAuth';
 import { useWorkspace } from '../context/WorkspaceContext';
 
 const PLATFORM_CONFIGS = [
@@ -121,6 +122,37 @@ export default function IntegrationsPage() {
   const [selectedPageId, setSelectedPageId] = useState('');
   const [oauthSessionId, setOauthSessionId] = useState('');
   const [oauthError, setOauthError] = useState('');
+  const oauthResultRef = useRef(false);
+  const metaPopupTimerRef = useRef(null);
+
+  useEffect(() => () => clearInterval(metaPopupTimerRef.current), []);
+
+  // Facebook renders some errors itself (e.g. "Facebook Login is currently unavailable for this app"),
+  // so the popup can close without ever reporting back. In that case ask the server what it can see.
+  const watchMetaPopup = (popup, wsId) => {
+    clearInterval(metaPopupTimerRef.current);
+    oauthResultRef.current = false;
+    metaPopupTimerRef.current = setInterval(async () => {
+      if (!popup.closed) return;
+      clearInterval(metaPopupTimerRef.current);
+      if (oauthResultRef.current) return;
+
+      const intro =
+        'The Meta login window closed before finishing. If Facebook showed an error such as "Facebook Login is currently unavailable for this app", that message comes from the Meta App settings and is resolved in the Meta App Dashboard, not by this application.';
+      try {
+        const res = await axiosInstance.get('/auth/facebook/diagnose', { params: { workspace_id: wsId } });
+        const findings = (res.data?.data?.warnings || []).filter((w) => w.level !== 'info');
+        setOauthError(
+          findings.length
+            ? `${intro}\nConfiguration check:\n${findings.map((w) => `\u2022 ${w.message}`).join('\n')}`
+            : `${intro}\nNo configuration problem was found on this server.`
+        );
+        setSyncMsg('');
+      } catch (err) {
+        setOauthError(intro);
+      }
+    }, 800);
+  };
   const [manualPlatform, setManualPlatform] = useState('facebook');
   const [manualPageId, setManualPageId] = useState('');
   const [manualPageName, setManualPageName] = useState('');
@@ -203,6 +235,9 @@ export default function IntegrationsPage() {
   // Listen for OAuth messages from popups
   useEffect(() => {
     const handleMessage = (event) => {
+      if (typeof event.data?.type === 'string' && event.data.type.startsWith('FACEBOOK_')) {
+        oauthResultRef.current = true;
+      }
       if (event.data?.type === 'FACEBOOK_PAGES_FETCHED') {
         setOauthError('');
         const pages = event.data.pages || [];
@@ -329,21 +364,18 @@ export default function IntegrationsPage() {
         alert('Pop-up was blocked. Please allow pop-ups for this site to complete Meta authentication.');
       } else {
         setSyncMsg('Connecting with Meta... Complete login in the pop-up window.');
+        watchMetaPopup(popup, wsId);
       }
       return;
     }
 
     if (item.key === 'youtube') {
-      const popup = window.open(
-        `${BACKEND_URL}/api/youtube/connect?workspace_id=${wsId}`,
-        'GoogleYouTubeOAuth',
-        'width=600,height=700,scrollbars=yes'
-      );
-      if (!popup || popup.closed || typeof popup.closed === 'undefined') {
-        alert('Pop-up was blocked. Please allow pop-ups for this site to complete Google OAuth.');
-      } else {
-        setSyncMsg('Connecting to Google OAuth... Complete login in the pop-up.');
-      }
+      // Uses the selected client only (no hard-coded fallback); the API validates it before Google is opened.
+      openYouTubeOAuth({ workspaceId: selectedWorkspaceId }).then((r) => {
+        if (r.status === 'opened') setSyncMsg(`Connecting to Google OAuth... Complete login in the pop-up.${r.warning ? ` Warning: ${r.warning}` : ''}`);
+        else if (r.status === 'already_connected') setSyncMsg(r.message);
+        else alert(r.message);
+      });
       return;
     }
 
@@ -411,21 +443,17 @@ export default function IntegrationsPage() {
         alert('Pop-up was blocked. Please allow pop-ups for this site to complete Meta authentication.');
       } else {
         setSyncMsg(`Re-authenticating ${item.name}... Complete login in the pop-up window.`);
+        watchMetaPopup(popup, wsId);
       }
       return;
     }
 
     if (item.key === 'youtube') {
-      const popup = window.open(
-        `${BACKEND_URL}/api/youtube/connect?workspace_id=${wsId}&reconnect=true&force=true`,
-        'GoogleYouTubeOAuth',
-        'width=600,height=700,scrollbars=yes'
-      );
-      if (!popup || popup.closed || typeof popup.closed === 'undefined') {
-        alert('Pop-up was blocked. Please allow pop-ups for this site to complete Google OAuth.');
-      } else {
-        setSyncMsg('Re-authenticating with Google OAuth... Complete login in the pop-up.');
-      }
+      openYouTubeOAuth({ workspaceId: selectedWorkspaceId, force: true }).then((r) => {
+        if (r.status === 'opened') setSyncMsg('Re-authenticating with Google OAuth... Complete login in the pop-up.');
+        else if (r.status === 'already_connected') setSyncMsg(r.message);
+        else alert(r.message);
+      });
       return;
     }
 
@@ -793,7 +821,7 @@ export default function IntegrationsPage() {
             <strong style={{ display: 'block', fontSize: '14px', marginBottom: '4px', color: '#b91c1c' }}>
               Connection Notice
             </strong>
-            <span style={{ color: '#374151' }}>{oauthError}</span>
+            <span style={{ color: '#374151', whiteSpace: 'pre-line' }}>{oauthError}</span>
           </div>
           <button
             type="button"

@@ -59,7 +59,7 @@ export default function Sidebar({ isOpen, onClose }) {
     {
       num: 3,
       title: 'Use Publishing for daily posts',
-      desc: 'Select platforms, add media and caption, then publish now or schedule.',
+      desc: 'Select platforms, add media and caption, then save a draft or publish.',
     },
     {
       num: 4,

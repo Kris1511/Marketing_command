@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import axiosInstance from '../api/axiosInstance';
 import { useWorkspace } from '../context/WorkspaceContext';
+import { contentTypeLabel, istDateKey, statusLabel } from '../pages/publishingRules';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -105,7 +106,9 @@ export default function VisualContentCalendar({ onSelectPost, onNewPostClick }) 
     const map = {};
     events.forEach((ev) => {
       if (!ev.date) return;
-      const dateKey = ev.date.substring(0, 10);
+      // Calendar days are IST days (a post at 02:00 IST belongs to that day, not to the previous UTC day)
+      const dateKey = istDateKey(ev.date);
+      if (!dateKey) return;
       if (!map[dateKey]) map[dateKey] = [];
 
       // Filter check
@@ -118,7 +121,7 @@ export default function VisualContentCalendar({ onSelectPost, onNewPostClick }) 
   }, [events, filterPlatform, filterStatus]);
 
   const monthName = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
-  const todayStr = new Date().toISOString().substring(0, 10);
+  const todayStr = istDateKey(new Date());
 
   return (
     <div style={{ background: '#ffffff', borderRadius: '14px', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
@@ -223,6 +226,7 @@ export default function VisualContentCalendar({ onSelectPost, onNewPostClick }) 
             <option value="scheduled">Scheduled</option>
             <option value="published">Published</option>
             <option value="draft">Drafts</option>
+            <option value="failed">Failed</option>
           </select>
 
           {onNewPostClick && (
@@ -329,11 +333,16 @@ export default function VisualContentCalendar({ onSelectPost, onNewPostClick }) 
               {/* Event Cards */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, overflowY: 'auto' }}>
                 {dayEvents.map((ev) => {
-                  const isScheduled = ev.status === 'scheduled';
+                  const isScheduled = ev.status === 'scheduled' || ev.status === 'processing';
                   const isPublished = ev.status === 'published';
-                  const bg = isScheduled ? '#eff6ff' : isPublished ? '#f0fdf4' : '#f8fafc';
-                  const border = isScheduled ? '#bfdbfe' : isPublished ? '#bbf7d0' : '#e2e8f0';
-                  const textColor = isScheduled ? '#1d4ed8' : isPublished ? '#15803d' : '#475569';
+                  const isFailed = ev.status === 'failed';
+                  const timeLabel = ev.date
+                    ? new Date(ev.date).toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true })
+                    : '';
+                  const typeLabel = contentTypeLabel(ev.post_type, ev.platforms);
+                  const bg = isFailed ? '#fef2f2' : isScheduled ? '#eff6ff' : isPublished ? '#f0fdf4' : '#f8fafc';
+                  const border = isFailed ? '#fecaca' : isScheduled ? '#bfdbfe' : isPublished ? '#bbf7d0' : '#e2e8f0';
+                  const textColor = isFailed ? '#b91c1c' : isScheduled ? '#1d4ed8' : isPublished ? '#15803d' : '#475569';
 
                   return (
                     <div
@@ -360,25 +369,39 @@ export default function VisualContentCalendar({ onSelectPost, onNewPostClick }) 
                             fontWeight: '600',
                             padding: '1px 4px',
                             borderRadius: '4px',
-                            background: isPublished ? '#dcfce7' : isScheduled ? '#dbeafe' : '#e2e8f0',
+                            background: isFailed ? '#fee2e2' : isPublished ? '#dcfce7' : isScheduled ? '#dbeafe' : '#e2e8f0',
                             color: textColor,
                           }}
                         >
-                          {ev.status}
+                          {statusLabel(ev.status)}
                         </span>
                       </div>
-                      <p
-                        style={{
-                          margin: '2px 0 0 0',
-                          color: '#334155',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          fontSize: '11px',
-                        }}
-                      >
-                        {ev.title}
-                      </p>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', minWidth: 0 }}>
+                        {ev.thumbnail_url && (
+                          <img
+                            src={ev.thumbnail_url}
+                            alt=""
+                            style={{ width: '22px', height: '22px', borderRadius: '3px', objectFit: 'cover', flexShrink: 0, background: '#e2e8f0' }}
+                            onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                          />
+                        )}
+                        <p
+                          style={{
+                            margin: 0,
+                            color: '#334155',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            fontSize: '11px',
+                            minWidth: 0,
+                          }}
+                        >
+                          {ev.title}
+                        </p>
+                      </div>
+                      <div style={{ fontSize: '10px', color: '#64748b', marginTop: '1px' }}>
+                        {[timeLabel, typeLabel].filter(Boolean).join(' · ')}
+                      </div>
                     </div>
                   );
                 })}

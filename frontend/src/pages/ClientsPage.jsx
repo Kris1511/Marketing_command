@@ -16,7 +16,7 @@ const emptyForm = {
 };
 
 export default function ClientsPage() {
-  const { workspaces, setSelectedWorkspaceId, fetchWorkspaces, loadingWorkspaces } = useWorkspace();
+  const { workspaces, setSelectedWorkspaceId, fetchWorkspaces, loadingWorkspaces, workspacesError } = useWorkspace();
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'active', 'setup_pending'
@@ -81,8 +81,16 @@ export default function ClientsPage() {
       });
 
       if (res.data.success) {
-        setSuccessMsg(`"${res.data.data.name}" workspace created!`);
-        if (fetchWorkspaces) fetchWorkspaces();
+        const createdName = res.data.data.name;
+        // Reload the list from the server and clear any filter that could hide the new client.
+        const refreshed = await fetchWorkspaces();
+        setStatusFilter('all');
+        setSearchTerm('');
+        if (!refreshed) {
+          setError(`"${createdName}" was saved, but the client list could not be refreshed. Close this window and try Retry.`);
+          return;
+        }
+        setSuccessMsg(`"${createdName}" workspace created!`);
         setTimeout(() => {
           closeModal();
           setSuccessMsg('');
@@ -283,6 +291,13 @@ export default function ClientsPage() {
             </div>
           </div>
         </div>
+
+        {workspacesError && !loadingWorkspaces && (
+          <div role="alert" style={{ margin: '0 0 12px', padding: '10px 12px', borderRadius: '8px', background: '#fef2f2', color: '#b91c1c', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+            <span>{workspacesError}</span>
+            <button type="button" className="btn btn-secondary" onClick={() => fetchWorkspaces()}>Retry</button>
+          </div>
+        )}
 
         {/* Client Cards Grid */}
         <div className="client-card-grid">

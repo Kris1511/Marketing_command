@@ -16,6 +16,8 @@ class FacebookPage extends Model
         'page_id',
         'page_name',
         'page_access_token',
+        'facebook_user_id',
+        'facebook_app_id',
         'followers_count',
         'fan_count',
         'profile_picture_url',

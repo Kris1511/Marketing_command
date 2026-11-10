@@ -16,6 +16,8 @@ class Integration extends Model
         'platform',
         'account_id',
         'account_name',
+        'facebook_user_id',
+        'facebook_app_id',
         'refresh_token',
         'access_token_expires_at',
         'is_connected',

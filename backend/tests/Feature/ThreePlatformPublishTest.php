@@ -17,6 +17,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 class ThreePlatformPublishTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\FakesPublicMediaHost;
 
     protected User $user;
     protected Workspace $workspace;
@@ -131,6 +132,9 @@ class ThreePlatformPublishTest extends TestCase
 
     public function test_instagram_image_and_carousel_publish()
     {
+        // Instagram downloads each image from a public HTTPS URL; serve the faked public disk from one.
+        $this->usePublicMediaHost();
+
         Http::fake([
             'https://api.cloudinary.com/*' => Http::response(['secure_url' => 'https://res.cloudinary.com/demo/image/upload/sample.jpg'], 200),
             'https://graph.instagram.com/*' => Http::sequence()
@@ -150,8 +154,8 @@ class ThreePlatformPublishTest extends TestCase
             'refresh_token' => 'IGAA_valid_token',
         ]);
 
-        $file1 = UploadedFile::fake()->create('ig1.jpg', 100, 'image/jpeg');
-        $file2 = UploadedFile::fake()->create('ig2.jpg', 100, 'image/jpeg');
+        $file1 = UploadedFile::fake()->image('ig1.jpg', 1080, 1080);
+        $file2 = UploadedFile::fake()->image('ig2.jpg', 1080, 1350);
 
         $response = $this->actingAs($this->user)->post('/api/v1/facebook/publish-post', [
             'workspace_id' => $this->workspace->id,
@@ -172,6 +176,7 @@ class ThreePlatformPublishTest extends TestCase
     {
         $ytConn = YouTubeConnection::create([
             'user_id'          => $this->user->id,
+            'workspace_id'     => $this->workspace->id,
             'channel_id'       => 'UCmu0fcvdaWcEa3_FCNTQ-sQ',
             'channel_name'     => 'RedMind Technologies',
             'access_token'     => 'mock_yt_access_token',

@@ -98,39 +98,62 @@ class FacebookMessengerWebhookController extends Controller
             }
 
             $workspaceId = null;
-            $page = FacebookPage::where('page_id', $pageId)
+
+            // 1. Detect active Facebook Page records across workspaces
+            $activePages = FacebookPage::where('page_id', $pageId)
                 ->whereNotNull('page_access_token')
                 ->where(function ($query) {
                     $query->whereNotIn('token_status', ['invalid', 'disconnected', 'revoked'])->orWhereNull('token_status');
                 })
-                ->orderByDesc('updated_at')
-                ->first();
+                ->get();
 
-            // If not found as Facebook Page, check if it's an Instagram Business Account ID
-            if (!$page) {
-                $igIntegration = \App\Models\Integration::where('platform', 'instagram')
-                    ->where('account_id', $pageId)
-                    ->first();
-                if ($igIntegration && $igIntegration->workspace_id) {
-                    $workspaceId = $igIntegration->workspace_id;
-                    $page = FacebookPage::where('workspace_id', $workspaceId)
-                        ->whereNotNull('page_access_token')
-                        ->first();
-                }
+            $distinctFbWorkspaces = $activePages->pluck('workspace_id')->unique()->filter()->values();
+
+            // Security Quarantine: If multiple active records exist across different workspaces, do NOT silently pick one!
+            if ($distinctFbWorkspaces->count() > 1) {
+                Log::warning('[FACEBOOK MESSENGER WEBHOOK] Ambiguous routing detected: multiple active workspaces claim the same Facebook Page ID. Event quarantined to prevent cross-workspace data leakage.', [
+                    'page_id'       => $pageId,
+                    'workspace_ids' => $distinctFbWorkspaces->all(),
+                ]);
+                continue;
             }
 
-            // Also check Integration table by account_id if still null
-            if (!$workspaceId && !$page) {
-                $anyIntegration = \App\Models\Integration::where('account_id', $pageId)->first();
-                if ($anyIntegration && $anyIntegration->workspace_id) {
-                    $workspaceId = $anyIntegration->workspace_id;
+            $page = $activePages->first();
+            $workspaceId = $distinctFbWorkspaces->first();
+
+            // 2. If not found as Facebook Page, check Instagram Business Account ID
+            if (!$page) {
+                $igIntegrations = \App\Models\Integration::where('platform', 'instagram')
+                    ->where('account_id', $pageId)
+                    ->where('is_connected', true)
+                    ->where('connection_status', '!=', 'disconnected')
+                    ->get();
+
+                $distinctIgWorkspaces = $igIntegrations->pluck('workspace_id')->unique()->filter()->values();
+
+                if ($distinctIgWorkspaces->count() > 1) {
+                    Log::warning('[FACEBOOK MESSENGER WEBHOOK] Ambiguous routing detected: multiple active workspaces claim the same Instagram Account ID. Event quarantined.', [
+                        'account_id'    => $pageId,
+                        'workspace_ids' => $distinctIgWorkspaces->all(),
+                    ]);
+                    continue;
+                }
+
+                if ($distinctIgWorkspaces->count() === 1) {
+                    $workspaceId = $distinctIgWorkspaces->first();
+                    $page = FacebookPage::where('workspace_id', $workspaceId)
+                        ->whereNotNull('page_access_token')
+                        ->where(function ($query) {
+                            $query->whereNotIn('token_status', ['invalid', 'disconnected', 'revoked'])->orWhereNull('token_status');
+                        })
+                        ->first();
                 }
             }
 
             $effectiveWorkspaceId = $workspaceId ?: $page?->workspace_id;
             if (!$effectiveWorkspaceId) {
-                $effectiveWorkspaceId = FacebookPage::where('page_id', $pageId)->value('workspace_id')
-                    ?: Integration::where('account_id', $pageId)->value('workspace_id');
+                Log::info('[FACEBOOK MESSENGER WEBHOOK] Ignoring event for unknown or unlinked Page/Account ID', ['page_id' => $pageId]);
+                continue;
             }
 
             $userId = $this->resolveUserIdForWorkspace($effectiveWorkspaceId);
@@ -390,6 +413,13 @@ class FacebookMessengerWebhookController extends Controller
 
     public function events(Request $request, WorkspaceSocialAccounts $accounts): StreamedResponse
     {
+        // EventSource cannot send an Authorization header, so this route is outside auth:sanctum and
+        // accepts the Sanctum token via Bearer header or the `token` query parameter instead.
+        $token = $request->bearerToken() ?: $request->query('token');
+        if (!$token || !\Laravel\Sanctum\PersonalAccessToken::findToken($token)) {
+            abort(401, 'Unauthorized. Valid token required.');
+        }
+
         $validated = $request->validate([
             'workspace_id' => 'required|integer|exists:workspaces,id',
             'since'        => 'nullable|integer|min:0',
@@ -510,12 +540,22 @@ class FacebookMessengerWebhookController extends Controller
         }
 
         $secret = (string) config('services.facebook.client_secret');
-        if ($secret === '') {
-            return false;
+        if ($secret !== '') {
+            $expected = 'sha256=' . hash_hmac('sha256', $rawBody, $secret);
+            if (hash_equals($expected, $signature)) {
+                return true;
+            }
         }
 
-        $expected = 'sha256=' . hash_hmac('sha256', $rawBody, $secret);
-        return hash_equals($expected, $signature);
+        $testingSecret = (string) (config('services.facebook.testing_client_secret') ?? env('FACEBOOK_TESTING_APP_SECRET', ''));
+        if ($testingSecret !== '') {
+            $expectedTesting = 'sha256=' . hash_hmac('sha256', $rawBody, $testingSecret);
+            if (hash_equals($expectedTesting, $signature)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function eventType(array $messaging): string

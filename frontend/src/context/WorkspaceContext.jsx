@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import axiosInstance from '../api/axiosInstance';
 import { useAuth } from '../hooks/useAuth';
 
@@ -11,14 +11,17 @@ export function WorkspaceProvider({ children }) {
     return localStorage.getItem('selectedWorkspaceId') || localStorage.getItem('activeWorkspaceId') || '';
   });
   const [loadingWorkspaces, setLoadingWorkspaces] = useState(true);
+  const [workspacesError, setWorkspacesError] = useState('');
 
+  // Resolves to true when the list was refreshed, false when it could not be loaded.
   const fetchWorkspaces = async () => {
     if (!user) {
       setLoadingWorkspaces(false);
-      return;
+      return false;
     }
     try {
       const res = await axiosInstance.get('/workspaces');
+      setWorkspacesError('');
       if (res.data.success && res.data.data) {
         const list = res.data.data;
         setWorkspaces(list);
@@ -36,8 +39,11 @@ export function WorkspaceProvider({ children }) {
           }
         }
       }
+      return true;
     } catch (err) {
       console.error('Error fetching workspaces in WorkspaceContext:', err);
+      setWorkspacesError(err.response?.data?.message || 'Unable to load client workspaces. Please try again.');
+      return false;
     } finally {
       setLoadingWorkspaces(false);
     }
@@ -47,11 +53,26 @@ export function WorkspaceProvider({ children }) {
     fetchWorkspaces();
   }, [user]);
 
+  // A page (e.g. Publishing) can register a guard that may veto a client switch, for example while there are
+  // unsaved changes. The guard receives the requested id and returns false to keep the current workspace.
+  const switchGuardRef = useRef(null);
+  const registerWorkspaceSwitchGuard = useCallback((guard) => {
+    switchGuardRef.current = guard;
+    return () => {
+      if (switchGuardRef.current === guard) switchGuardRef.current = null;
+    };
+  }, []);
+
+  // Returns true when the switch happened, false when a guard cancelled it.
   const setSelectedWorkspaceId = (id) => {
     const stringId = String(id);
+    if (stringId !== String(selectedWorkspaceId) && switchGuardRef.current && switchGuardRef.current(stringId) === false) {
+      return false;
+    }
     setSelectedWorkspaceIdState(stringId);
     localStorage.setItem('selectedWorkspaceId', stringId);
     localStorage.setItem('activeWorkspaceId', stringId);
+    return true;
   };
 
   const selectedWorkspace =
@@ -67,9 +88,11 @@ export function WorkspaceProvider({ children }) {
         activeWorkspace: selectedWorkspace,
         setSelectedWorkspaceId,
         setActiveWorkspaceId: setSelectedWorkspaceId,
+        registerWorkspaceSwitchGuard,
         refreshWorkspaces: fetchWorkspaces,
         fetchWorkspaces,
         loadingWorkspaces,
+        workspacesError,
         loading: loadingWorkspaces,
       }}
     >

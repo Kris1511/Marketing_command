@@ -49,6 +49,15 @@ function formatNum(n) {
   return n.toLocaleString();
 }
 
+// Platform switcher: one definition drives every tab so spacing and active styling stay identical.
+const PLATFORM_TABS = [
+  { key: 'facebook', label: 'Facebook', bg: '#1877f2', border: '#1877f2', shadow: 'rgba(24,119,242,0.35)' },
+  { key: 'instagram', label: 'Instagram', bg: 'linear-gradient(135deg, #f58529, #dd2a7b, #8134af)', border: '#e1306c', shadow: 'rgba(221,42,123,0.35)' },
+  { key: 'youtube', label: 'YouTube', bg: '#ff0000', border: '#ff0000', shadow: 'rgba(255,0,0,0.35)' },
+  { key: 'google_analytics', label: 'Google Analytics', bg: '#f59e0b', border: '#f59e0b', shadow: 'rgba(245,158,11,0.35)' },
+  { key: 'search_console', label: 'Search Console', bg: '#0284c7', border: '#0284c7', shadow: 'rgba(2,132,199,0.35)' },
+];
+
 export default function DashboardPage() {
   const { selectedWorkspaceId, selectedWorkspace, loadingWorkspaces } = useWorkspace();
   if (loadingWorkspaces) return <div role="status">Loading workspace...</div>;
@@ -517,7 +526,9 @@ function WorkspaceDashboard() {
         <div className="welcome-copy">
           <h2>{greeting}, {userName} 👋</h2>
           <p>
-            {connectedChannels.length > 0
+            {loading && connectedChannels.length === 0
+              ? `Loading ${clientName}...`
+              : connectedChannels.length > 0
               ? `${clientName} has ${connectedChannels.length} channel${connectedChannels.length > 1 ? 's' : ''} connected.${priorities.length > 0 ? ` ${priorities.length} item${priorities.length > 1 ? 's' : ''} need your attention.` : ''}`
               : `Welcome to ${clientName}. Connect your social accounts to start tracking performance.`}
           </p>
@@ -568,107 +579,28 @@ function WorkspaceDashboard() {
         </div>
       </div>
 
-      {/* Platform Switcher & Date Filter Bar — Aligned matching reference screenshot */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', gap: '12px', flexWrap: 'wrap' }}>
-        {/* Left: Platform Tabs [Facebook] [Instagram] [YouTube] */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button
-            type="button"
-            onClick={() => handlePlatformSelect('facebook')}
-            style={{
-              padding: '7px 18px',
-              borderRadius: '6px',
-              fontSize: '13px',
-              fontWeight: '700',
-              cursor: 'pointer',
-              border: selectedPlatform === 'facebook' ? '1px solid #1877f2' : '1px solid #cbd5e1',
-              background: selectedPlatform === 'facebook' ? '#1877f2' : '#ffffff',
-              color: selectedPlatform === 'facebook' ? '#ffffff' : '#475569',
-              boxShadow: selectedPlatform === 'facebook' ? '0 1px 3px rgba(24,119,242,0.35)' : 'none',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            Facebook
-          </button>
-          <button
-            type="button"
-            onClick={() => handlePlatformSelect('instagram')}
-            style={{
-              padding: '7px 18px',
-              borderRadius: '6px',
-              fontSize: '13px',
-              fontWeight: '700',
-              cursor: 'pointer',
-              border: selectedPlatform === 'instagram' ? '1px solid #e1306c' : '1px solid #cbd5e1',
-              background: selectedPlatform === 'instagram' ? 'linear-gradient(135deg, #f58529, #dd2a7b, #8134af)' : '#ffffff',
-              color: selectedPlatform === 'instagram' ? '#ffffff' : '#475569',
-              boxShadow: selectedPlatform === 'instagram' ? '0 1px 3px rgba(221,42,123,0.35)' : 'none',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            Instagram
-          </button>
-          <button
-            type="button"
-            onClick={() => handlePlatformSelect('youtube')}
-            style={{
-              padding: '7px 18px',
-              borderRadius: '6px',
-              fontSize: '13px',
-              fontWeight: '700',
-              cursor: 'pointer',
-              border: selectedPlatform === 'youtube' ? '1px solid #ff0000' : '1px solid #cbd5e1',
-              background: selectedPlatform === 'youtube' ? '#ff0000' : '#ffffff',
-              color: selectedPlatform === 'youtube' ? '#ffffff' : '#475569',
-              boxShadow: selectedPlatform === 'youtube' ? '0 1px 3px rgba(255,0,0,0.35)' : 'none',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            YouTube
-          </button>
-          <button
-            type="button"
-            onClick={() => handlePlatformSelect('google_analytics')}
-            style={{
-              padding: '7px 18px',
-              borderRadius: '6px',
-              fontSize: '13px',
-              fontWeight: '700',
-              cursor: 'pointer',
-              border: selectedPlatform === 'google_analytics' ? '1px solid #f59e0b' : '1px solid #cbd5e1',
-              background: selectedPlatform === 'google_analytics' ? '#f59e0b' : '#ffffff',
-              color: selectedPlatform === 'google_analytics' ? '#ffffff' : '#475569',
-              boxShadow: selectedPlatform === 'google_analytics' ? '0 1px 3px rgba(245,158,11,0.35)' : 'none',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            Google Analytics
-          </button>
-          <button
-            type="button"
-            onClick={() => handlePlatformSelect('search_console')}
-            style={{
-              padding: '7px 18px',
-              borderRadius: '6px',
-              fontSize: '13px',
-              fontWeight: '700',
-              cursor: 'pointer',
-              border: selectedPlatform === 'search_console' ? '1px solid #0284c7' : '1px solid #cbd5e1',
-              background: selectedPlatform === 'search_console' ? '#0284c7' : '#ffffff',
-              color: selectedPlatform === 'search_console' ? '#ffffff' : '#475569',
-              boxShadow: selectedPlatform === 'search_console' ? '0 1px 3px rgba(2,132,199,0.35)' : 'none',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            Search Console
-          </button>
+      {/* Platform Switcher & Date Filter Bar */}
+      <div className="dash-toolbar">
+        <div className="dash-tabs" role="tablist" aria-label="Platform">
+          {PLATFORM_TABS.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              role="tab"
+              aria-selected={selectedPlatform === tab.key}
+              className={`dash-tab${selectedPlatform === tab.key ? ' active' : ''}`}
+              style={{ '--tab-bg': tab.bg, '--tab-border': tab.border, '--tab-shadow': tab.shadow }}
+              onClick={() => handlePlatformSelect(tab.key)}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
-        {/* Right: Date Filter Bar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+        <div className="dash-filters">
           <select
-            className="input"
-            style={{ width: 'auto', padding: '6px 12px', fontSize: '13px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', cursor: 'pointer' }}
+            className="input dash-select"
+            aria-label="Date range"
             value={trendDays}
             onChange={e => {
               const val = (e.target.value === 'custom' || e.target.value === 'all') ? e.target.value : Number(e.target.value);
@@ -696,30 +628,13 @@ function WorkspaceDashboard() {
             <option value="custom">Custom range</option>
           </select>
 
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            background: trendDays === 'custom' ? '#ffffff' : '#f8fafc',
-            padding: '4px 10px',
-            borderRadius: '6px',
-            border: '1px solid #cbd5e1',
-            boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-            opacity: trendDays === 'custom' ? 1 : 0.8
-          }}>
-            <span style={{ fontSize: '12px', color: trendDays === 'custom' ? '#334155' : '#64748b', fontWeight: '600' }}>Start:</span>
+          <div className={`dash-range${trendDays === 'custom' ? ' is-custom' : ''}`}>
+            <label htmlFor="dash-start-date">Start:</label>
             <input
+              id="dash-start-date"
               type="date"
-              className="input"
+              className="input dash-date"
               disabled={trendDays !== 'custom'}
-              style={{
-                width: 'auto',
-                padding: '3px 8px',
-                fontSize: '12px',
-                background: trendDays === 'custom' ? '#ffffff' : '#f1f5f9',
-                cursor: trendDays === 'custom' ? 'default' : 'not-allowed',
-                color: trendDays === 'custom' ? '#0f172a' : '#64748b'
-              }}
               value={customStartDate}
               onChange={e => {
                 const newStart = e.target.value;
@@ -731,20 +646,13 @@ function WorkspaceDashboard() {
                 }
               }}
             />
-            <span style={{ fontSize: '12px', color: trendDays === 'custom' ? '#334155' : '#64748b', fontWeight: '600' }}>End:</span>
+            <label htmlFor="dash-end-date">End:</label>
             <input
+              id="dash-end-date"
               type="date"
-              className="input"
+              className="input dash-date"
               disabled={trendDays !== 'custom'}
               min={customStartDate}
-              style={{
-                width: 'auto',
-                padding: '3px 8px',
-                fontSize: '12px',
-                background: trendDays === 'custom' ? '#ffffff' : '#f1f5f9',
-                cursor: trendDays === 'custom' ? 'default' : 'not-allowed',
-                color: trendDays === 'custom' ? '#0f172a' : '#64748b'
-              }}
               value={customEndDate}
               onChange={e => {
                 const newEnd = e.target.value;

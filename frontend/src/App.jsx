@@ -17,6 +17,7 @@ import InboxPage from './pages/InboxPage';
 import CommentsPage from './pages/CommentsPage';
 import TeamPage from './pages/TeamPage';
 import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
+import DataDeletionPage from './pages/DataDeletionPage';
 import './assets/styles.css';
 
 function MainLayout() {
@@ -26,7 +27,7 @@ function MainLayout() {
   const getPageInfo = (pathname) => {
     switch (pathname) {
       case '/publishing':
-        return { title: 'Publishing', subtitle: 'Create, schedule and publish content across channels' };
+        return { title: 'Publishing', subtitle: 'Create, save drafts and publish content across channels' };
       case '/clients':
         return { title: 'Clients', subtitle: 'Manage client accounts and workspaces' };
       case '/leads':
@@ -87,6 +88,7 @@ export default function App() {
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
+            <Route path="/data-deletion" element={<DataDeletionPage />} />
             <Route path="/*" element={<MainLayout />} />
           </Routes>
         </WorkspaceProvider>

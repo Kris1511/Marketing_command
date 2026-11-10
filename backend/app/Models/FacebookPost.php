@@ -35,9 +35,39 @@ class FacebookPost extends Model
         'reach_count',
         'views_count',
         'last_synced_at',
+        'internal_title',
+        'cta',
+        'hashtags',
+        'video_title',
+        'platforms',
+        'thumbnail_path',
+        'thumbnail_url',
     ];
 
+    private static ?bool $thumbnailColumnsExist = null;
+
+    /**
+     * Whether the custom-thumbnail columns exist (migration 2026_11_10_120000). Lets publishing keep
+     * working on a database that has not been migrated yet.
+     */
+    public static function supportsThumbnails(): bool
+    {
+        return self::$thumbnailColumnsExist ??= \Illuminate\Support\Facades\Schema::hasColumns('facebook_posts', ['thumbnail_path', 'thumbnail_url']);
+    }
+
+    /** Absolute local path of the stored custom thumbnail, or null when there is none / the file is gone. */
+    public function thumbnailLocalPath(): ?string
+    {
+        if (!self::supportsThumbnails() || empty($this->thumbnail_path)) {
+            return null;
+        }
+        $disk = \Illuminate\Support\Facades\Storage::disk('public');
+
+        return $disk->exists($this->thumbnail_path) ? $disk->path($this->thumbnail_path) : null;
+    }
+
     protected $casts = [
+        'platforms'         => 'array',
         'scheduled_at'      => 'datetime',
         'published_at'      => 'datetime',
         'last_synced_at'    => 'datetime',
@@ -65,6 +95,18 @@ class FacebookPost extends Model
     public function media()
     {
         return $this->hasMany(FacebookPostMedia::class)->orderBy('sort_order', 'asc');
+    }
+
+    /** Legacy multi-platform history row, linked by posts.facebook_post_id (no content matching). */
+    public function legacyPost()
+    {
+        return $this->hasOne(Post::class, 'facebook_post_id');
+    }
+
+    /** Alias used by the calendar endpoint. */
+    public function facebookPage()
+    {
+        return $this->page();
     }
 
     public function history()

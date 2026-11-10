@@ -1,11 +1,20 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../context/WorkspaceContext';
+import { useAuth } from '../hooks/useAuth';
 import { Menu, RefreshCw, Bell } from 'lucide-react';
 
 export default function Topbar({ onToggleMobileMenu, title = 'Overview', subtitle = 'All important updates in one place' }) {
   const navigate = useNavigate();
   const { workspaces, selectedWorkspaceId, setSelectedWorkspaceId } = useWorkspace();
+  const { user } = useAuth();
+  const displayName = user?.name || 'Digital Marketing Team';
+  const initials = displayName
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || '')
+    .join('');
 
   return (
     <header className="topbar">
@@ -52,8 +61,8 @@ export default function Topbar({ onToggleMobileMenu, title = 'Overview', subtitl
           <Bell size={18} />
           <span className="notification-dot"></span>
         </button>
-        <div className="avatar" title="Digital Marketing Team">
-          PS
+        <div className="avatar" title={displayName}>
+          {initials}
         </div>
       </div>
     </header>

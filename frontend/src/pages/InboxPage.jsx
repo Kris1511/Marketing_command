@@ -424,6 +424,10 @@ export default function InboxPage() {
         workspace_id: String(selectedWorkspaceId),
         since: String(lastWebhookEventIdRef.current || 0),
       });
+      const authToken = localStorage.getItem('auth_token');
+      if (authToken) {
+        params.append('token', authToken);
+      }
 
       try {
         eventSource = new EventSource(`${baseURL}${ssePath}?${params.toString()}`, {

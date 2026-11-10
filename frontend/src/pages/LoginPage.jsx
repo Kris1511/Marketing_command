@@ -7,8 +7,10 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const { login, error: authError } = useAuth();
 
-  const [email, setEmail] = useState('demo@example.com');
-  const [password, setPassword] = useState('password123');
+  // Seeded demo credentials are only pre-filled and advertised in development builds.
+  const showDemoCredentials = import.meta.env.DEV;
+  const [email, setEmail] = useState(showDemoCredentials ? 'demo@example.com' : '');
+  const [password, setPassword] = useState(showDemoCredentials ? 'password123' : '');
   const [loading, setLoading] = useState(false);
   const [localError, setLocalError] = useState('');
 
@@ -195,65 +197,67 @@ export default function LoginPage() {
           </button>
         </form>
 
-        {/* Demo Credentials Box */}
-        <div
-          style={{
-            marginTop: '28px',
-            padding: '14px 16px',
-            background: '#f8fafc',
-            border: '1px dashed #cbd5e1',
-            borderRadius: '12px',
-            fontSize: '12px',
-            color: '#475569',
-          }}
-        >
-          <strong style={{ color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-            <KeyRound size={16} /> Demo Credentials (Click to pre-fill):
-          </strong>
+        {/* Demo Credentials Box (development only) */}
+        {showDemoCredentials && (
           <div
             style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '6px',
+              marginTop: '28px',
+              padding: '14px 16px',
+              background: '#f8fafc',
+              border: '1px dashed #cbd5e1',
+              borderRadius: '12px',
+              fontSize: '12px',
+              color: '#475569',
             }}
           >
-            <button
-              type="button"
-              onClick={() => fillCredentials('demo@example.com', 'password123')}
+            <strong style={{ color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+              <KeyRound size={16} /> Demo Credentials (Click to pre-fill):
+            </strong>
+            <div
               style={{
-                textAlign: 'left',
-                background: '#ffffff',
-                border: '1px solid #cbd5e1',
-                padding: '6px 10px',
-                borderRadius: '6px',
-                fontSize: '12px',
-                cursor: 'pointer',
-                color: '#2457e6',
-                fontWeight: '600',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '6px',
               }}
             >
-              • Admin: demo@example.com / password123
-            </button>
+              <button
+                type="button"
+                onClick={() => fillCredentials('demo@example.com', 'password123')}
+                style={{
+                  textAlign: 'left',
+                  background: '#ffffff',
+                  border: '1px solid #cbd5e1',
+                  padding: '6px 10px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  color: '#2457e6',
+                  fontWeight: '600',
+                }}
+              >
+                • Admin: demo@example.com / password123
+              </button>
 
-            <button
-              type="button"
-              onClick={() => fillCredentials('manager@example.com', 'password123')}
-              style={{
-                textAlign: 'left',
-                background: '#ffffff',
-                border: '1px solid #cbd5e1',
-                padding: '6px 10px',
-                borderRadius: '6px',
-                fontSize: '12px',
-                cursor: 'pointer',
-                color: '#2457e6',
-                fontWeight: '600',
-              }}
-            >
-              • Manager: manager@example.com / password123
-            </button>
+              <button
+                type="button"
+                onClick={() => fillCredentials('manager@example.com', 'password123')}
+                style={{
+                  textAlign: 'left',
+                  background: '#ffffff',
+                  border: '1px solid #cbd5e1',
+                  padding: '6px 10px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  color: '#2457e6',
+                  fontWeight: '600',
+                }}
+              >
+                • Manager: manager@example.com / password123
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Footer Privacy Policy Link */}
         <div style={{ marginTop: '22px', textAlign: 'center', fontSize: '12px', color: '#64748b' }}>

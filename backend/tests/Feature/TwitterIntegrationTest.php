@@ -24,6 +24,8 @@ class TwitterIntegrationTest extends TestCase
             'name' => 'Demo User',
             'email' => 'demo@example.com',
             'password' => bcrypt('password123'),
+            'role' => 'admin',
+            'is_active' => true,
         ]);
 
         // Seed workspace 1 to satisfy foreign key constraints
@@ -114,7 +116,7 @@ class TwitterIntegrationTest extends TestCase
     /**
      * Test the disconnect endpoint.
      */
-    public function test_disconnect_deletes_integration()
+    public function test_disconnect_marks_integration_disconnected()
     {
         // 1. Setup connected integration
         Integration::create([
@@ -137,19 +139,22 @@ class TwitterIntegrationTest extends TestCase
             'message' => 'X (Twitter) disconnected successfully.',
         ]);
 
-        // 3. Verify deleted from DB
-        $this->assertDatabaseMissing('integrations', [
+        // 3. Disconnect keeps the row (so history/unique keys survive) but marks it disconnected and clears tokens
+        $this->assertDatabaseHas('integrations', [
             'workspace_id' => 1,
             'platform' => 'twitter',
+            'is_connected' => false,
+            'connection_status' => 'pending_auth',
+            'refresh_token' => null,
         ]);
     }
 
     /**
-     * Test publishing flow with Twitter selected.
+     * Unified publishing is scoped to Facebook, Instagram and YouTube; an X-only request must be
+     * rejected without creating any post records.
      */
-    public function test_unified_publishing_publishes_to_twitter()
+    public function test_unified_publishing_rejects_x_only_requests()
     {
-        // 1. Setup connected integration
         Integration::create([
             'workspace_id' => 1,
             'platform' => 'twitter',
@@ -159,7 +164,6 @@ class TwitterIntegrationTest extends TestCase
             'connection_status' => 'connected',
         ]);
 
-        // 2. Post content to endpoint
         $response = $this->postJson('/api/v1/facebook/publish-post', [
             'workspace_id' => 1,
             'message' => 'Test Tweet content for social dashboard integration.',
@@ -167,23 +171,11 @@ class TwitterIntegrationTest extends TestCase
             'status' => 'published',
         ]);
 
-        $response->assertStatus(200);
-        $response->assertJson([
-            'success' => true,
-        ]);
+        $response->assertStatus(400);
+        $response->assertJson(['success' => false]);
 
-        // 3. Check records created
-        $this->assertDatabaseHas('facebook_posts', [
-            'workspace_id' => 1,
-            'content' => 'Test Tweet content for social dashboard integration.',
-            'status' => 'published',
-        ]);
-
-        $this->assertDatabaseHas('posts', [
-            'workspace_id' => 1,
-            'content' => 'Test Tweet content for social dashboard integration.',
-            'status' => 'published',
-        ]);
+        $this->assertDatabaseMissing('facebook_posts', ['workspace_id' => 1]);
+        $this->assertDatabaseMissing('posts', ['workspace_id' => 1]);
     }
 
     /**
@@ -191,7 +183,7 @@ class TwitterIntegrationTest extends TestCase
      */
     public function test_connect_mock_creates_integration_connection()
     {
-        $response = $this->postJson('/api/twitter/connect-mock', [
+        $response = $this->postJson('/api/v1/twitter/connect-mock', [
             'workspace_id' => 1,
         ]);
 

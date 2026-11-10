@@ -21,27 +21,65 @@ class FacebookAuthController extends Controller
     }
 
     /**
-     * Get Meta App ID from config/env
+     * Check if workspace is designated as the Testing workspace.
      */
-    protected function getAppId(): string
+    protected function isTestingWorkspace(?int $workspaceId): bool
     {
-        return (string) (config('services.facebook.client_id') ?? env('FACEBOOK_APP_ID', ''));
+        if (!$workspaceId) {
+            return false;
+        }
+
+        $rawConfig = (string) (config('services.facebook.testing_workspace_id') ?? '8');
+        $configuredTestingIds = array_filter(array_map('trim', explode(',', $rawConfig)));
+
+        return in_array((string) $workspaceId, $configuredTestingIds, true);
     }
 
     /**
-     * Get Meta App Secret from config/env
+     * Get Meta App ID from config/env (workspace-aware).
      */
-    protected function getAppSecret(): string
+    protected function getAppId(?int $workspaceId = null): string
     {
-        return config('services.facebook.client_secret') ?? env('FACEBOOK_APP_SECRET', '');
+        if ($this->isTestingWorkspace($workspaceId)) {
+            $testingAppId = config('services.facebook.testing_client_id');
+            if (empty($testingAppId)) {
+                throw new \RuntimeException('Testing workspace (ID 8) requires FACEBOOK_TESTING_APP_ID to be configured. Fallback to default app credentials is prohibited.');
+            }
+            return (string) $testingAppId;
+        }
+
+        return (string) (config('services.facebook.client_id') ?? '');
     }
 
     /**
-     * Get OAuth Redirect URI from config/env
+     * Get Meta App Secret from config/env (workspace-aware).
      */
-    protected function getRedirectUri(): string
+    protected function getAppSecret(?int $workspaceId = null): string
     {
-        return config('services.facebook.redirect') ?? env('FACEBOOK_REDIRECT_URI', 'http://localhost:8000/api/v1/auth/facebook/callback');
+        if ($this->isTestingWorkspace($workspaceId)) {
+            $testingSecret = config('services.facebook.testing_client_secret');
+            if (empty($testingSecret)) {
+                throw new \RuntimeException('Testing workspace (ID 8) requires FACEBOOK_TESTING_APP_SECRET to be configured. Fallback to default app credentials is prohibited.');
+            }
+            return (string) $testingSecret;
+        }
+
+        return (string) (config('services.facebook.client_secret') ?? '');
+    }
+
+    /**
+     * Get OAuth Redirect URI from config/env (workspace-aware).
+     */
+    protected function getRedirectUri(?int $workspaceId = null): string
+    {
+        if ($this->isTestingWorkspace($workspaceId)) {
+            $testingRedirect = config('services.facebook.testing_redirect');
+            if (!empty($testingRedirect)) {
+                return (string) $testingRedirect;
+            }
+        }
+
+        return (string) (config('services.facebook.redirect') ?? 'http://localhost:8000/api/v1/auth/facebook/callback');
     }
 
     /**
@@ -49,19 +87,23 @@ class FacebookAuthController extends Controller
      */
     protected function getScopes(): string
     {
-        $raw = config('services.facebook.scopes') ?? env('FACEBOOK_OAUTH_SCOPES', 'public_profile,pages_show_list,pages_read_engagement,pages_read_user_content,pages_manage_metadata,pages_messaging,instagram_basic,instagram_content_publish,instagram_manage_insights,instagram_manage_comments,instagram_manage_messages,read_insights');
+        $raw = config('services.facebook.scopes') ?? env('FACEBOOK_OAUTH_SCOPES', 'public_profile,pages_show_list,pages_read_engagement,pages_manage_posts,pages_read_user_content,pages_manage_metadata,pages_messaging,instagram_basic,instagram_content_publish,instagram_manage_insights,instagram_manage_comments,instagram_manage_messages,read_insights');
         $scopeList = array_filter(array_map('trim', explode(',', $raw)));
-        if (!in_array('instagram_manage_messages', $scopeList)) {
-            $scopeList[] = 'instagram_manage_messages';
+
+        // Ensure required base permissions for Page discovery, messaging & insights
+        foreach (['pages_show_list', 'pages_read_engagement', 'pages_read_user_content', 'instagram_manage_messages', 'read_insights'] as $req) {
+            if (!in_array($req, $scopeList, true)) {
+                $scopeList[] = $req;
+            }
         }
-        // Ensure pages_read_user_content is always requested — required for /{postId}/comments
-        if (!in_array('pages_read_user_content', $scopeList)) {
-            $scopeList[] = 'pages_read_user_content';
+
+        // When Facebook publishing is enabled, ensure pages_manage_posts is explicitly requested during OAuth
+        if (filter_var(config('services.facebook.publishing_enabled', true), FILTER_VALIDATE_BOOLEAN)) {
+            if (!in_array('pages_manage_posts', $scopeList, true)) {
+                $scopeList[] = 'pages_manage_posts';
+            }
         }
-        // Ensure read_insights is always requested — required for post views, impressions & insights
-        if (!in_array('read_insights', $scopeList)) {
-            $scopeList[] = 'read_insights';
-        }
+
         return implode(',', array_unique($scopeList));
     }
 
@@ -159,15 +201,55 @@ class FacebookAuthController extends Controller
             }
         }
 
-        $appId       = $this->getAppId();
-        $redirectUri = $this->getRedirectUri();
+        try {
+            $appId = $this->getAppId($workspaceId);
+        } catch (\Throwable $e) {
+            Log::error('[FACEBOOK OAUTH REDIRECT ERROR] ' . $e->getMessage(), ['workspace_id' => $workspaceId]);
+            return response()->json([
+                'success' => false,
+                'error'   => 'configuration_error',
+                'message' => $e->getMessage(),
+            ], 500);
+        }
+
+        $redirectUri = $this->getRedirectUri($workspaceId);
         $scopes      = $request->query('scope') ?: $this->getScopes();
         $version     = $this->getGraphVersion();
 
-        $state = base64_encode(json_encode([
+        // Ask Meta whether it accepts this App ID/Secret before sending the user to facebook.com, so a
+        // misconfigured app shows Meta's real error here instead of a dead-end page on Facebook.
+        $metaError = $this->preflightApp($workspaceId, $appId);
+        if ($metaError !== null) {
+            $friendly = $this->translateOAuthError($metaError['code'] ?? '', $metaError['message'] ?? '', '', $appId, $redirectUri);
+
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'success'    => false,
+                    'error'      => 'meta_app_error',
+                    'message'    => $friendly,
+                    'meta_error' => $metaError,
+                ], 502);
+            }
+
+            return $this->renderOAuthResponse(false, 'Meta App Configuration Error', $friendly, ['meta_error' => $metaError]);
+        }
+
+        // 1. Generate cryptographically secure one-time nonce (128-bit)
+        $nonce = bin2hex(random_bytes(16));
+
+        // 2. Store nonce in server cache with 15-minute TTL for single-use consumption
+        Cache::put("fb_oauth_nonce_{$nonce}", $workspaceId, now()->addMinutes(15));
+
+        // 3. Construct state payload and sign with HMAC-SHA256 using APP_KEY
+        $statePayload = json_encode([
             'workspace_id' => $workspaceId,
             'ts'           => time(),
-            'nonce'        => bin2hex(random_bytes(8)),
+            'nonce'        => $nonce,
+        ]);
+        $stateSig = hash_hmac('sha256', $statePayload, config('app.key'));
+        $state    = base64_encode(json_encode([
+            'payload' => $statePayload,
+            'sig'     => $stateSig,
         ]));
 
         $dialogUrl = "https://www.facebook.com/{$version}/dialog/oauth?" . http_build_query([
@@ -194,6 +276,7 @@ class FacebookAuthController extends Controller
                 'url'          => $dialogUrl,
                 'app_id'       => $appId,
                 'redirect_uri' => $redirectUri,
+                'state'        => $state,
             ]);
         }
 
@@ -210,31 +293,176 @@ class FacebookAuthController extends Controller
         $stateRaw    = $request->query('state', '');
         $workspaceId = null;
 
-        if ($stateRaw) {
-            $decoded = json_decode(base64_decode($stateRaw), true);
-            if (is_array($decoded) && !empty($decoded['workspace_id'])) {
-                $workspaceId = (int) $decoded['workspace_id'];
+        // Strict HMAC verification: reject any state missing a valid HMAC signature (zero legacy fallback)
+        if (empty($stateRaw)) {
+            Log::warning('[FACEBOOK OAUTH CALLBACK] Missing OAuth state parameter.');
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'error'   => 'missing_state',
+                    'message' => 'Missing OAuth state parameter. Request rejected for security.',
+                ], 403);
             }
-        }
-
-        if (!$workspaceId && $request->filled('workspace_id')) {
-            $workspaceId = (int) $request->query('workspace_id');
-        }
-
-        if (!$workspaceId) {
-            $workspaceId = \App\Models\Workspace::first()?->id;
-        }
-
-        if (!$workspaceId) {
             return $this->renderErrorPopup(
-                'Workspace Not Found',
-                'Facebook authentication failed because no valid workspace could be resolved from OAuth state or database.'
+                'Invalid OAuth State',
+                'Missing OAuth state parameter. Authentication request rejected for security.'
             );
         }
 
-        $appId       = $this->getAppId();
-        $appSecret   = $this->getAppSecret();
-        $redirectUri = $this->getRedirectUri();
+        $container = json_decode(base64_decode($stateRaw), true);
+        if (!is_array($container) || empty($container['payload']) || empty($container['sig'])) {
+            Log::warning('[FACEBOOK OAUTH CALLBACK] Unsigned or malformed OAuth state envelope.');
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'error'   => 'invalid_state_format',
+                    'message' => 'OAuth state format is invalid or unsigned. Legacy fallback is disabled.',
+                ], 403);
+            }
+            return $this->renderErrorPopup(
+                'Invalid OAuth State',
+                'OAuth state signature is missing or malformed. Unsigned legacy requests are rejected.'
+            );
+        }
+
+        $expectedSig = hash_hmac('sha256', $container['payload'], config('app.key'));
+        if (!hash_equals($expectedSig, $container['sig'])) {
+            Log::warning('[FACEBOOK OAUTH CALLBACK] HMAC signature mismatch on OAuth state.');
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'error'   => 'tampered_state',
+                    'message' => 'OAuth state cryptographic signature verification failed. Tampering detected.',
+                ], 403);
+            }
+            return $this->renderErrorPopup(
+                'Tampered OAuth State',
+                'OAuth state signature verification failed. The request has been tampered with or is invalid.'
+            );
+        }
+
+        $decoded = json_decode($container['payload'], true);
+        if (!is_array($decoded) || !isset($decoded['workspace_id']) || !isset($decoded['ts']) || empty($decoded['nonce'])) {
+            Log::warning('[FACEBOOK OAUTH CALLBACK] Incomplete payload claims in OAuth state.');
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'error'   => 'invalid_payload',
+                    'message' => 'OAuth state payload is malformed or missing required claims.',
+                ], 403);
+            }
+            return $this->renderErrorPopup(
+                'Invalid OAuth State',
+                'OAuth state payload is malformed or missing required security claims.'
+            );
+        }
+
+        // Strict timestamp validation
+        $ts  = $decoded['ts'];
+        $now = time();
+        if (!is_int($ts)) {
+            Log::warning('[FACEBOOK OAUTH CALLBACK] Non-integer timestamp in OAuth state.');
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'error'   => 'invalid_timestamp',
+                    'message' => 'OAuth state timestamp is invalid.',
+                ], 403);
+            }
+            return $this->renderErrorPopup(
+                'Invalid OAuth Timestamp',
+                'OAuth state timestamp is invalid.'
+            );
+        }
+
+        if ($ts > ($now + 60)) {
+            Log::warning('[FACEBOOK OAUTH CALLBACK] Future-dated timestamp in OAuth state.', ['ts' => $ts, 'now' => $now]);
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'error'   => 'future_timestamp',
+                    'message' => 'OAuth state timestamp is future-dated. Clock skew violation.',
+                ], 403);
+            }
+            return $this->renderErrorPopup(
+                'Invalid OAuth Timestamp',
+                'OAuth state timestamp is future-dated. Clock skew violation.'
+            );
+        }
+
+        if (($now - $ts) > 900) {
+            Log::warning('[FACEBOOK OAUTH CALLBACK] Expired OAuth state.', ['ts' => $ts, 'now' => $now]);
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'error'   => 'expired_timestamp',
+                    'message' => 'OAuth state has expired (15-minute TTL).',
+                ], 403);
+            }
+            return $this->renderErrorPopup(
+                'OAuth Session Expired',
+                'OAuth state has expired (15-minute TTL). Please initiate Facebook connection again.'
+            );
+        }
+
+        $workspaceId = (int) $decoded['workspace_id'];
+        $nonce       = (string) $decoded['nonce'];
+
+        // Single-use atomic nonce validation (OAuth CSRF & Replay protection)
+        $cachedWorkspaceId = Cache::pull("fb_oauth_nonce_{$nonce}");
+        if ($cachedWorkspaceId === null || (int) $cachedWorkspaceId !== $workspaceId) {
+            Log::warning('[FACEBOOK OAUTH CALLBACK] Nonce already consumed or invalid.', [
+                'nonce'        => $nonce,
+                'workspace_id' => $workspaceId,
+            ]);
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'error'   => 'nonce_consumed_or_invalid',
+                    'message' => 'OAuth state nonce is invalid or has already been used. Replay attempt blocked.',
+                ], 403);
+            }
+            return $this->renderErrorPopup(
+                'Invalid OAuth Nonce',
+                'OAuth state nonce is invalid or has already been used. Replay attempt blocked.'
+            );
+        }
+
+        // Concurrent replay guard across multi-process workers using atomic Cache::add
+        if (!Cache::add("fb_oauth_consumed_{$nonce}", 1, now()->addMinutes(15))) {
+            Log::warning('[FACEBOOK OAUTH CALLBACK] Concurrent race replay detected for nonce.', [
+                'nonce'        => $nonce,
+                'workspace_id' => $workspaceId,
+            ]);
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'error'   => 'nonce_consumed_or_invalid',
+                    'message' => 'OAuth state nonce has already been consumed. Concurrent replay attempt blocked.',
+                ], 403);
+            }
+            return $this->renderErrorPopup(
+                'Invalid OAuth Nonce',
+                'OAuth state nonce has already been consumed. Concurrent replay attempt blocked.'
+            );
+        }
+
+        try {
+            $appId       = $this->getAppId($workspaceId);
+            $appSecret   = $this->getAppSecret($workspaceId);
+        } catch (\Throwable $e) {
+            Log::error('[FACEBOOK OAUTH CALLBACK CONFIG ERROR] ' . $e->getMessage(), ['workspace_id' => $workspaceId]);
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'error'   => 'configuration_error',
+                    'message' => $e->getMessage(),
+                ], 500);
+            }
+            return $this->renderErrorPopup('Configuration Error', $e->getMessage());
+        }
+
+        $redirectUri = $this->getRedirectUri($workspaceId);
         $version     = $this->getGraphVersion();
 
         // 1. Handle Meta OAuth Errors
@@ -282,7 +510,7 @@ class FacebookAuthController extends Controller
                 Log::error('[FACEBOOK OAUTH TOKEN EXCHANGE ERROR]', [
                     'status'    => $tokenRes->status(),
                     'error'     => $errJson,
-                    'body'      => $tokenRes->body(),
+                    'body'      => $this->redactSecrets($tokenRes->body()),
                 ]);
 
                 $friendly = $this->translateOAuthError($errCode, $errMsg, '', $appId, $redirectUri);
@@ -319,12 +547,23 @@ class FacebookAuthController extends Controller
             $grantedScopes  = $debugData['scopes'] ?? [];
             $granularScopes = $debugData['granular_scopes'] ?? [];
 
+            // Verify required permission chain for Facebook Page publishing
+            $isPublishingEnabled = filter_var(config('services.facebook.publishing_enabled', true), FILTER_VALIDATE_BOOLEAN);
+            $requiredChain = ['pages_show_list', 'pages_read_engagement'];
+            if ($isPublishingEnabled) {
+                $requiredChain[] = 'pages_manage_posts';
+            }
+            $missingScopes = array_values(array_diff($requiredChain, $grantedScopes));
+            $hasPublishingScope = in_array('pages_manage_posts', $grantedScopes, true);
+
             Log::info('[FACEBOOK OAUTH DEBUG]', [
-                'user_id'         => $userData['id'] ?? null,
-                'user_name'       => $userData['name'] ?? null,
-                'is_valid_token'  => $debugData['is_valid'] ?? false,
-                'granted_scopes'  => $grantedScopes,
-                'granular_scopes' => array_map(function ($g) {
+                'user_id'            => $userData['id'] ?? null,
+                'user_name'          => $userData['name'] ?? null,
+                'is_valid_token'     => $debugData['is_valid'] ?? false,
+                'granted_scopes'     => $grantedScopes,
+                'missing_scopes'     => $missingScopes,
+                'publishing_ready'   => empty($missingScopes),
+                'granular_scopes'    => array_map(function ($g) {
                     return [
                         'scope'      => $g['scope'] ?? '',
                         'target_ids' => $g['target_ids'] ?? [],
@@ -337,7 +576,7 @@ class FacebookAuthController extends Controller
             $seenPageIds = [];
 
             // Helper to safely add unique page
-            $addPage = function ($p) use (&$pages, &$seenPageIds, $version, $longLivedToken) {
+            $addPage = function ($p) use (&$pages, &$seenPageIds, $version, $longLivedToken, $hasPublishingScope, $missingScopes) {
                 if (empty($p['id']) || isset($seenPageIds[$p['id']])) return;
                 $seenPageIds[$p['id']] = true;
 
@@ -366,6 +605,13 @@ class FacebookAuthController extends Controller
                         }
                     } catch (\Throwable $e) {}
                 }
+
+                // Validate Page tasks for publishing rights (CREATE_CONTENT or MANAGE)
+                $pageTasks = (array) ($p['tasks'] ?? []);
+                $hasContentTask = empty($pageTasks) || in_array('CREATE_CONTENT', $pageTasks, true) || in_array('MANAGE', $pageTasks, true);
+                $p['can_publish'] = $hasPublishingScope && $hasContentTask;
+                $p['tasks'] = $pageTasks;
+                $p['missing_permissions'] = $missingScopes;
 
                 $pages[] = $p;
             };
@@ -500,22 +746,27 @@ class FacebookAuthController extends Controller
             // 7. Secure server-side session cache for page access tokens (Never expose raw tokens to client JS)
             $oauthSessionId = 'fb_auth_' . bin2hex(random_bytes(16));
             Cache::put($oauthSessionId, [
-                'workspace_id' => $workspaceId,
-                'user_token'   => $longLivedToken,
-                'user_data'    => $userData,
-                'pages'        => $pages,
+                'workspace_id'    => $workspaceId,
+                'user_token'      => $longLivedToken,
+                'user_data'       => $userData,
+                'pages'           => $pages,
+                'granted_scopes'  => $grantedScopes,
+                'granular_scopes' => $granularScopes,
+                'missing_scopes'  => $missingScopes,
             ], now()->addMinutes(15));
 
             // Sanitize pages for frontend payload: keep metadata, keep access_token accessible via session ticket
-            $sanitizedPages = array_map(function ($page) {
+            $sanitizedPages = array_map(function ($page) use ($hasPublishingScope, $missingScopes) {
                 return [
                     'id'                         => $page['id'],
                     'name'                       => $page['name'],
                     'category'                   => $page['category'] ?? 'General',
                     'picture'                    => $page['picture'] ?? null,
                     'instagram_business_account' => $page['instagram_business_account'] ?? null,
-                    // Keep access_token inside page object for backwards-compatibility if needed, but primary security via session ID
-                    'access_token'               => $page['access_token'] ?? null,
+                    'access_token'               => null,
+                    'can_publish'                => $page['can_publish'] ?? $hasPublishingScope,
+                    'tasks'                      => $page['tasks'] ?? [],
+                    'missing_permissions'        => $missingScopes,
                 ];
             }, $pages);
 
@@ -543,6 +794,29 @@ class FacebookAuthController extends Controller
                     $igId = $targetPageToAutoConnect['instagram_business_account']['id'] ?? null;
                     $igUsername = $targetPageToAutoConnect['instagram_business_account']['username'] ?? null;
 
+                    $targetTasks = (array) ($targetPageToAutoConnect['tasks'] ?? []);
+                    $hasContentTask = empty($targetTasks) || in_array('CREATE_CONTENT', $targetTasks, true) || in_array('MANAGE', $targetTasks, true);
+
+                    $errorMessage = null;
+                    if ($isPublishingEnabled && !$hasPublishingScope) {
+                        $errorMessage = "Live Facebook publishing is unavailable: Meta permission 'pages_manage_posts' was not granted. Reconnect with publishing permissions, or submit 'pages_manage_posts' for Meta App Review (Advanced Access).";
+                        Log::warning('[FACEBOOK OAUTH] Auto-connected Page lacks pages_manage_posts permission', [
+                            'workspace_id' => $workspaceId,
+                            'page_id'      => $pId,
+                            'missing'      => $missingScopes,
+                        ]);
+                    } elseif ($isPublishingEnabled && !$hasContentTask) {
+                        $errorMessage = "Live Facebook publishing is unavailable: Connected user lacks the 'CREATE_CONTENT' task on Page '{$pName}'. Must be a Page Admin or Editor.";
+                        Log::warning('[FACEBOOK OAUTH] Auto-connected Page lacks CREATE_CONTENT task', [
+                            'workspace_id' => $workspaceId,
+                            'page_id'      => $pId,
+                            'tasks'        => $targetTasks,
+                        ]);
+                    }
+
+                    // Remember which Facebook user and Meta app granted this connection (used for data deletion requests).
+                    $fbOwner = $this->facebookOwner($workspaceId, $userData['id'] ?? null);
+
                     FacebookPage::updateOrCreate(
                         [
                             'workspace_id' => $workspaceId,
@@ -554,7 +828,7 @@ class FacebookAuthController extends Controller
                             'user_access_token' => $longLivedToken,
                             'token_status'      => 'valid',
                             'connected_since'   => now(),
-                        ]
+                        ] + $fbOwner
                     );
 
                     Integration::updateOrCreate(
@@ -568,8 +842,9 @@ class FacebookAuthController extends Controller
                             'refresh_token'     => $pTok,
                             'is_connected'      => true,
                             'connection_status' => 'connected',
+                            'error_message'     => $errorMessage,
                             'last_sync_at'      => now(),
-                        ]
+                        ] + $fbOwner
                     );
 
                     if ($igId) {
@@ -585,7 +860,7 @@ class FacebookAuthController extends Controller
                                 'is_connected'      => true,
                                 'connection_status' => 'connected',
                                 'last_sync_at'      => now(),
-                            ]
+                            ] + $fbOwner
                         );
                     }
 
@@ -605,7 +880,7 @@ class FacebookAuthController extends Controller
                 }
             }
 
-            return $this->renderSuccessResponse($sanitizedPages, $oauthSessionId, $userData, $workspaceId);
+            return $this->renderSuccessResponse($sanitizedPages, $oauthSessionId, $userData, $workspaceId, $missingScopes);
 
         } catch (Exception $e) {
             Log::error('[FACEBOOK OAUTH EXCEPTION]', [
@@ -677,6 +952,61 @@ class FacebookAuthController extends Controller
             Log::warning('[FACEBOOK CONNECT PAGE] Could not fetch live Page details, using defaults: ' . $e->getMessage());
         }
 
+        // Verify publishing permissions and tasks for the selected Page
+        $isPublishingEnabled = filter_var(config('services.facebook.publishing_enabled', true), FILTER_VALIDATE_BOOLEAN);
+        $cachedSession = !empty($validated['oauth_session_id']) ? Cache::get($validated['oauth_session_id']) : null;
+        $grantedScopes = is_array($cachedSession) ? ($cachedSession['granted_scopes'] ?? []) : [];
+        $selectedPageData = null;
+        if (is_array($cachedSession) && !empty($cachedSession['pages'])) {
+            foreach ($cachedSession['pages'] as $p) {
+                if ($p['id'] === $pageId) {
+                    $selectedPageData = $p;
+                    break;
+                }
+            }
+        }
+        $pageTasks = (array) ($selectedPageData['tasks'] ?? []);
+        $hasPublishScope = in_array('pages_manage_posts', $grantedScopes, true);
+        $hasContentTask = empty($pageTasks) || in_array('CREATE_CONTENT', $pageTasks, true) || in_array('MANAGE', $pageTasks, true);
+
+        // Fallback scope check if token was provided manually without session
+        if (empty($grantedScopes) && $isPublishingEnabled) {
+            try {
+                $appId = $this->getAppId($workspaceId);
+                $secret = $this->getAppSecret($workspaceId);
+                if ($appId && $secret) {
+                    $debugRes = $this->client()->get("https://graph.facebook.com/{$this->getGraphVersion()}/debug_token", [
+                        'input_token'  => $token,
+                        'access_token' => "{$appId}|{$secret}",
+                    ]);
+                    if ($debugRes->successful()) {
+                        $scopes = $debugRes->json('data.scopes') ?? [];
+                        $hasPublishScope = in_array('pages_manage_posts', $scopes, true);
+                    }
+                }
+            } catch (\Throwable $e) {}
+        }
+
+        $isPublishingReady = !$isPublishingEnabled || ($hasPublishScope && $hasContentTask);
+        $warningMessage = null;
+        if ($isPublishingEnabled && !$isPublishingReady) {
+            if (!$hasPublishScope) {
+                $warningMessage = "Live Facebook publishing is unavailable: Meta permission 'pages_manage_posts' was not granted. Reconnect with publishing permissions, or submit 'pages_manage_posts' for Meta App Review (Advanced Access).";
+            } elseif (!$hasContentTask) {
+                $warningMessage = "Live Facebook publishing is unavailable: Connected user lacks the 'CREATE_CONTENT' task on Page '{$pageName}'. Must be a Page Admin or Editor.";
+            }
+        }
+
+        // Which Facebook user granted this connection (from the server-side OAuth session), for data deletion requests.
+        $sessionUserId = null;
+        if (!empty($validated['oauth_session_id'])) {
+            $ownerSession = Cache::get($validated['oauth_session_id']);
+            if (is_array($ownerSession) && (int) ($ownerSession['workspace_id'] ?? 0) === $workspaceId) {
+                $sessionUserId = $ownerSession['user_data']['id'] ?? null;
+            }
+        }
+        $fbOwner = $this->facebookOwner($workspaceId, $sessionUserId);
+
         \Illuminate\Support\Facades\DB::beginTransaction();
         try {
         // Keep history, but only the chosen account remains active.
@@ -705,7 +1035,7 @@ class FacebookAuthController extends Controller
                 'profile_picture_url' => $pictureUrl,
                 'token_status'        => 'valid',
                 'connected_since'     => now(),
-            ]
+            ] + $fbOwner
         );
 
         // Update unified Integration table for Facebook without overwriting other pages
@@ -720,8 +1050,9 @@ class FacebookAuthController extends Controller
                 'refresh_token'     => $token,
                 'is_connected'      => true,
                 'connection_status' => 'connected',
+                'error_message'     => $warningMessage,
                 'last_sync_at'      => now(),
-            ]
+            ] + $fbOwner
         );
 
         // If linked Instagram account ID provided, update Instagram integration record without overwriting
@@ -752,7 +1083,7 @@ class FacebookAuthController extends Controller
                     'is_connected'      => true,
                     'connection_status' => 'connected',
                     'last_sync_at'      => now(),
-                ]
+                ] + $fbOwner
             );
         }
 
@@ -763,8 +1094,11 @@ class FacebookAuthController extends Controller
         }
 
         return response()->json([
-            'success' => true,
-            'message' => "Facebook Page '{$pageName}' connected successfully!",
+            'success'             => true,
+            'message'             => $warningMessage ? "Facebook Page '{$pageName}' connected with limitations: {$warningMessage}" : "Facebook Page '{$pageName}' connected successfully!",
+            'warning'             => $warningMessage,
+            'publishing_ready'    => $isPublishingReady,
+            'missing_permissions' => $hasPublishScope ? [] : ['pages_manage_posts'],
             'data'    => [
                 'id'                  => $page->id,
                 'workspace_id'        => $page->workspace_id,
@@ -875,10 +1209,39 @@ class FacebookAuthController extends Controller
 
         try {
             $details = $this->graphService->getPageDetails($page->page_id, $page->page_access_token);
+
+            $publishingReady = true;
+            $missingPermissions = [];
+            $warning = null;
+
+            if (filter_var(config('services.facebook.publishing_enabled', true), FILTER_VALIDATE_BOOLEAN)) {
+                $appId = $this->getAppId($workspaceId);
+                $secret = $this->getAppSecret($workspaceId);
+                if ($appId && $secret) {
+                    try {
+                        $debugRes = $this->client()->get("https://graph.facebook.com/{$this->getGraphVersion()}/debug_token", [
+                            'input_token'  => $page->page_access_token,
+                            'access_token' => "{$appId}|{$secret}",
+                        ]);
+                        if ($debugRes->successful()) {
+                            $scopes = $debugRes->json('data.scopes') ?? [];
+                            if (!in_array('pages_manage_posts', $scopes, true)) {
+                                $publishingReady = false;
+                                $missingPermissions[] = 'pages_manage_posts';
+                                $warning = "Connected for read and insights, but live publishing is unavailable: 'pages_manage_posts' permission is not granted. Meta App Review (Advanced Access) or reconnection by an App Admin is required.";
+                            }
+                        }
+                    } catch (\Throwable $e) {}
+                }
+            }
+
             return response()->json([
-                'success' => true,
-                'message' => "Facebook connection active for '{$details['page_name']}'!",
-                'data'    => $details,
+                'success'             => true,
+                'message'             => $warning ? "Facebook connection active with limitations: {$warning}" : "Facebook connection active for '{$details['page_name']}'!",
+                'publishing_ready'    => $publishingReady,
+                'missing_permissions' => $missingPermissions,
+                'warning'             => $warning,
+                'data'                => $details,
             ]);
         } catch (Exception $e) {
             return response()->json([
@@ -889,11 +1252,254 @@ class FacebookAuthController extends Controller
     }
 
     /**
+     * Attributes that record which Facebook user and Meta app granted a connection. Empty when the Facebook user
+     * is unknown (manual token connects), which keeps such rows out of automatic data-deletion matching.
+     *
+     * @return array{facebook_user_id: string, facebook_app_id: string}|array{}
+     */
+    protected function facebookOwner(int $workspaceId, $facebookUserId): array
+    {
+        if (empty($facebookUserId)) {
+            return [];
+        }
+
+        try {
+            return ['facebook_user_id' => (string) $facebookUserId, 'facebook_app_id' => $this->getAppId($workspaceId)];
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
+     * Strip credentials from text before it is logged or shown to a user.
+     */
+    protected function redactSecrets(string $text): string
+    {
+        $text = preg_replace('/(access_token|client_secret|fb_exchange_token|input_token|code)=[^&\s"\']+/i', '$1=[redacted]', $text);
+        $text = preg_replace('/\b\d{10,}\|[A-Za-z0-9_\-]{20,}\b/', '[redacted-app-token]', $text);
+
+        return preg_replace('/\bEAA[A-Za-z0-9]{20,}\b/', '[redacted-token]', $text);
+    }
+
+    /**
+     * Look the Meta App up with its own app token. The token travels in the Authorization header so it
+     * never appears in a URL or log line.
+     *
+     * @return array{reachable: bool, status: int|null, data: array, error: array|null}
+     */
+    protected function lookupApp(string $appId, string $appSecret): array
+    {
+        try {
+            $res = Http::timeout(10)->connectTimeout(5)->acceptJson()
+                ->withToken($appId . '|' . $appSecret)
+                ->get('https://graph.facebook.com/' . $this->getGraphVersion() . '/' . $appId, [
+                    'fields' => 'name,category,link,privacy_policy_url,terms_of_service_url,app_domains,restrictions',
+                ]);
+        } catch (\Throwable $e) {
+            Log::warning('[FACEBOOK OAUTH] Meta app lookup unreachable: ' . $this->redactSecrets($e->getMessage()));
+
+            return ['reachable' => false, 'status' => null, 'data' => [], 'error' => null];
+        }
+
+        if ($res->successful()) {
+            return ['reachable' => true, 'status' => $res->status(), 'data' => (array) $res->json(), 'error' => null];
+        }
+
+        $error = (array) ($res->json('error') ?? []);
+
+        return [
+            'reachable' => true,
+            'status'    => $res->status(),
+            'data'      => [],
+            'error'     => [
+                'code'    => $error['code'] ?? null,
+                'subcode' => $error['error_subcode'] ?? null,
+                'type'    => $error['type'] ?? null,
+                'message' => $this->redactSecrets((string) ($error['message'] ?? 'Meta returned an error.')),
+            ],
+        ];
+    }
+
+    /**
+     * Returns Meta's error when it explicitly rejects the app credentials (invalid App ID / signature);
+     * null when the app looks usable or Meta could not be reached (a network issue never blocks login).
+     */
+    protected function preflightApp(int $workspaceId, string $appId): ?array
+    {
+        if (!config('services.facebook.preflight', true)) {
+            return null;
+        }
+
+        try {
+            $secret = $this->getAppSecret($workspaceId);
+        } catch (\Throwable $e) {
+            return ['code' => null, 'type' => 'ConfigurationError', 'message' => $e->getMessage()];
+        }
+
+        $lookup = $this->lookupApp($appId, $secret);
+        if (!$lookup['reachable'] || $lookup['error'] === null) {
+            return null;
+        }
+
+        return in_array((int) ($lookup['error']['code'] ?? 0), [101, 190], true) ? $lookup['error'] : null;
+    }
+
+    /**
+     * GET /api/v1/auth/facebook/diagnose (administrators only)
+     * Reports how Facebook Login is configured and what Meta says about the app. Never returns secrets.
+     */
+    public function diagnose(Request $request)
+    {
+        if (($request->user()?->role ?? null) !== 'admin') {
+            return response()->json(['success' => false, 'message' => 'Only administrators can run Facebook diagnostics.'], 403);
+        }
+
+        $workspaceId = $request->query('workspace_id');
+        if (empty($workspaceId) || $workspaceId === 'all') {
+            $workspaceId = \App\Models\Workspace::first()?->id;
+        }
+        $workspaceId = $workspaceId ? (int) $workspaceId : null;
+
+        try {
+            $appId  = $this->getAppId($workspaceId);
+            $secret = $this->getAppSecret($workspaceId);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => false, 'error' => 'configuration_error', 'message' => $e->getMessage()], 422);
+        }
+
+        $redirectUri = $this->getRedirectUri($workspaceId);
+        $scopes      = array_values(array_filter(array_map('trim', explode(',', $this->getScopes()))));
+        $lookup      = ($secret !== '' && $appId !== '')
+            ? $this->lookupApp($appId, $secret)
+            : ['reachable' => false, 'data' => [], 'error' => null];
+        $app         = $lookup['data'];
+        $secretOk    = (bool) preg_match('/^[a-f0-9]{32}$/i', $secret);
+        $redirectHost = (string) parse_url($redirectUri, PHP_URL_HOST);
+
+        $warnings = [];
+        $warn = function (string $level, string $source, string $code, string $message) use (&$warnings) {
+            $warnings[] = ['level' => $level, 'source' => $source, 'code' => $code, 'message' => $message];
+        };
+
+        if ($appId === '' || $secret === '') {
+            $warn('error', 'app-config', 'credentials_missing', 'FACEBOOK_APP_ID or FACEBOOK_APP_SECRET is not set in the backend .env.');
+        } elseif (!$secretOk) {
+            $warn('error', 'app-config', 'secret_format', 'The configured App Secret is not 32 hexadecimal characters, so it cannot be a valid Meta App Secret. Re-copy it from Meta App Dashboard > App settings > Basic.');
+        }
+
+        if ($appId !== '' && $secret !== '') {
+            if (!$lookup['reachable']) {
+                $warn('warning', 'network', 'meta_unreachable', 'Meta Graph API could not be reached from this server, so the app settings could not be checked.');
+            } elseif ($lookup['error'] !== null) {
+                $configError = in_array((int) $lookup['error']['code'], [101, 190], true);
+                $warn('error', $configError ? 'app-config' : 'meta', 'meta_rejects_app', 'Meta rejected the app lookup: [' . ($lookup['error']['code'] ?? '?') . '] ' . $lookup['error']['message']);
+            } else {
+                $privacyPath = trim((string) parse_url((string) ($app['privacy_policy_url'] ?? ''), PHP_URL_PATH), '/');
+                if (empty($app['privacy_policy_url'])) {
+                    $warn('error', 'meta', 'privacy_policy_missing', 'No Privacy Policy URL is set on the Meta App. Meta can block Facebook Login for Live apps without one.');
+                } elseif ($privacyPath === '') {
+                    $warn('warning', 'meta', 'privacy_policy_is_homepage', 'The Meta App Privacy Policy URL (' . $app['privacy_policy_url'] . ') is only a website homepage. Meta expects a dedicated privacy policy page; a homepage URL commonly accompanies "we are updating additional details for this app" restrictions.');
+                }
+                if (empty($app['app_domains'])) {
+                    $warn('warning', 'meta', 'app_domains_empty', 'The Meta App has no App Domains. Add the domains of the website and the API (for example the host of the redirect URI).');
+                } elseif ($redirectHost !== '') {
+                    $covered = collect($app['app_domains'])->contains(fn ($d) => $redirectHost === $d || str_ends_with($redirectHost, '.' . ltrim($d, '.')));
+                    if (!$covered) {
+                        $warn('warning', 'meta', 'redirect_host_not_in_app_domains', "The redirect URI host '{$redirectHost}' is not covered by the Meta App Domains.");
+                    }
+                }
+            }
+        }
+
+        if (!str_starts_with($redirectUri, 'https://')) {
+            $warn('warning', 'app-config', 'redirect_not_https', 'The redirect URI is not HTTPS. Live Meta apps require HTTPS redirect URIs.');
+        }
+        if ($redirectHost !== '' && strcasecmp($redirectHost, $request->getHost()) !== 0) {
+            $warn('info', 'app-config', 'redirect_points_to_other_server', "The redirect URI host is '{$redirectHost}' but this API is running on '" . $request->getHost() . "'. Meta returns the user to the redirect URI, so the login can only complete on that server (the signed state and nonce are stored in this server's cache).");
+        }
+        if (filter_var(config('services.facebook.publishing_enabled'), FILTER_VALIDATE_BOOLEAN) && !in_array('pages_manage_posts', $scopes, true)) {
+            $warn('warning', 'app-config', 'publish_scope_not_requested', 'Publishing is enabled but the pages_manage_posts permission is not in the requested OAuth scopes (FACEBOOK_OAUTH_SCOPES), so publishing to Pages may be refused by Meta. Adding it also requires Advanced Access when the app is Live.');
+        }
+
+        $needsReview = array_values(array_intersect($scopes, [
+            'pages_manage_posts', 'pages_messaging', 'pages_read_user_content', 'pages_read_engagement', 'pages_manage_metadata', 'read_insights',
+            'instagram_manage_messages', 'instagram_manage_comments', 'instagram_manage_insights', 'instagram_content_publish',
+        ]));
+        if ($needsReview) {
+            $warn('info', 'meta', 'advanced_access_permissions', 'These requested permissions need Advanced Access (App Review) for people who have no role on the app once the app is Live: ' . implode(', ', $needsReview) . '.');
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'workspace_id'  => $workspaceId,
+                'graph_version' => $this->getGraphVersion(),
+                'redirect_uri'  => $redirectUri,
+                'scopes'        => $scopes,
+                'credentials'   => [
+                    'app_id'                   => $appId !== '' ? substr($appId, 0, 4) . '...' . substr($appId, -3) : null,
+                    'secret_present'           => $secret !== '',
+                    'secret_format_ok'         => $secretOk,
+                    'meta_accepts_credentials' => $lookup['reachable'] ? $lookup['error'] === null : null,
+                    'meta_error'               => $lookup['error'],
+                ],
+                'meta_app' => ($lookup['reachable'] && $lookup['error'] === null && $appId !== '' && $secret !== '') ? [
+                    'name'                 => $app['name'] ?? null,
+                    'category'             => $app['category'] ?? null,
+                    'privacy_policy_url'   => $app['privacy_policy_url'] ?? null,
+                    'terms_of_service_url' => $app['terms_of_service_url'] ?? null,
+                    'app_domains'          => $app['app_domains'] ?? [],
+                ] : null,
+                'warnings' => $warnings,
+                'cannot_be_checked_from_code' => [
+                    'App Mode (Development / Live)',
+                    'Dashboard alerts, Data Use Checkup and Business Verification status',
+                    'Facebook Login > Settings > Valid OAuth Redirect URIs (check that the redirect URI above is listed)',
+                    'Whether Meta has temporarily restricted the app. The message "Facebook Login is currently unavailable for this app, since we are updating additional details" is produced by facebook.com and is resolved only in the Meta App Dashboard.',
+                ],
+            ],
+        ]);
+    }
+
+    /**
      * Translate Meta OAuth error codes into clear, actionable instructions.
      */
     protected function translateOAuthError($code, $description, $reason, string $appId, string $redirectUri): string
     {
+        $explained = $this->explainOAuthError($code, $description, $reason, $appId, $redirectUri);
+
+        // Always show what Meta actually reported, not only our interpretation of it.
+        $raw = trim($this->redactSecrets((string) $description) . ($reason ? " (reason: {$reason})" : ''));
+        if ($raw !== '' && !str_contains($explained, $raw)) {
+            $explained .= ' - Meta reported: ' . ($code !== '' && $code !== null ? "[{$code}] " : '') . $raw;
+        }
+
+        return $explained;
+    }
+
+    protected function explainOAuthError($code, $description, $reason, string $appId, string $redirectUri): string
+    {
         $descLower = strtolower($description . ' ' . $reason);
+
+        if (
+            str_contains($descLower, 'currently unavailable for this app') ||
+            str_contains($descLower, 'updating additional details') ||
+            str_contains($descLower, 'login is currently unavailable')
+        ) {
+            return "Meta has temporarily disabled Facebook Login for this Meta App (App ID: {$appId}) while its details are being updated. "
+                . 'This restriction is applied by Meta on the app itself and cannot be fixed by changing this application. '
+                . 'In the Meta App Dashboard (developers.facebook.com) check: App settings > Basic (Privacy Policy URL pointing to a real privacy page, Terms, App Icon, Category, App Domains, Data Deletion URL), '
+                . 'App Mode = Live, Dashboard alerts and Data Use Checkup, Business Verification, and that Facebook Login > Valid OAuth Redirect URIs contains the callback URL. '
+                . 'Then wait a few minutes and retry. An administrator can run GET /api/v1/auth/facebook/diagnose for a configuration report.';
+        }
+
+        if ((string) $code === '190' || str_contains($descLower, 'invalid oauth access token signature') || str_contains($descLower, 'error validating client secret')) {
+            return "Meta rejected the App ID / App Secret pair (App ID: {$appId}). The App Secret in the backend .env does not belong to this App ID. Copy the current secret from Meta App Dashboard > App settings > Basic (32 hexadecimal characters) into the matching FACEBOOK_APP_SECRET / FACEBOOK_TESTING_APP_SECRET value, with no quotes or spaces.";
+        }
+
+        if (str_contains($descLower, 'invalid scopes') || str_contains($descLower, 'invalid permission')) {
+            return 'Meta rejected one or more requested permissions. Permissions beyond public_profile need Advanced Access (App Review) when the app is Live, or the logging-in user must hold a role on the app while it is in Development mode.';
+        }
 
         if (
             str_contains($descLower, 'app not active') ||
@@ -922,7 +1528,7 @@ class FacebookAuthController extends Controller
         }
 
         return !empty($description)
-            ? "Meta OAuth Error: {$description}"
+            ? 'Meta OAuth Error: ' . $this->redactSecrets((string) $description)
             : "Facebook login failed (Code: {$code}). Please check your Meta App configuration and permissions.";
     }
 
@@ -1034,12 +1640,25 @@ HTML;
     /**
      * Render styled HTML response for popup window on success.
      */
-    protected function renderSuccessResponse(array $pages, string $sessionId, array $user, int $workspaceId)
+    protected function renderSuccessResponse(array $pages, string $sessionId, array $user, int $workspaceId, array $missingScopes = [])
     {
         $escapedName = htmlspecialchars($user['name'] ?? 'Facebook User');
         $pageCount   = count($pages);
         $pagesJson   = json_encode($pages);
         $userJson    = json_encode($user);
+        $missingJson = json_encode($missingScopes);
+        $publishingReady = !in_array('pages_manage_posts', $missingScopes, true);
+        $publishingReadyJson = json_encode($publishingReady);
+
+        $warningBannerHtml = '';
+        if (!$publishingReady) {
+            $warningBannerHtml = <<<HTML
+        <div style="background: #fffbeb; border: 1px solid #fef3c7; border-left: 4px solid #f59e0b; padding: 12px; border-radius: 8px; margin: 16px 0; text-align: left; font-size: 13px; color: #92400e;">
+            <strong>⚠️ Limited Publishing Permissions:</strong><br>
+            Meta did not grant the <code>pages_manage_posts</code> permission. The Page can receive messages and sync analytics, but publishing will fail until <code>pages_manage_posts</code> is approved via Meta App Review (for Live apps) or granted by an App Admin (in Development mode).
+        </div>
+HTML;
+        }
 
         $html = <<<HTML
 <!DOCTYPE html>
@@ -1059,6 +1678,7 @@ HTML;
             Logged in as <strong>{$escapedName}</strong>.<br>
             Retrieved <strong>{$pageCount}</strong> managed Facebook Page(s). Select your page in the dashboard.
         </p>
+        {$warningBannerHtml}
         <p style="font-size: 12px; color: #9ca3af; margin: 0;">Closing popup and loading pages...</p>
     </div>
 
@@ -1070,7 +1690,9 @@ HTML;
                     pages: {$pagesJson},
                     oauth_session_id: "{$sessionId}",
                     user: {$userJson},
-                    workspaceId: {$workspaceId}
+                    workspaceId: {$workspaceId},
+                    missing_permissions: {$missingJson},
+                    publishing_ready: {$publishingReadyJson}
                 }, "*");
             } catch (e) {
                 console.error("Failed to postMessage to opener:", e);

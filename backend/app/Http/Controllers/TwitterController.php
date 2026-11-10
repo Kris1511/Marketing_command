@@ -230,7 +230,6 @@ class TwitterController extends Controller
             ->where('platform', 'twitter')
             ->update([
                 'is_connected' => false,
-                'access_token' => null,
                 'refresh_token' => null,
                 'connection_status' => 'pending_auth'
             ]);
@@ -258,7 +257,7 @@ class TwitterController extends Controller
                     'account_id'   => 'mock_twitter_user_998877',
                 ],
                 [
-                    'account_name'            => '@Chandramohan_K1',
+                    'account_name'            => '@DemoAgency_X',
                     'refresh_token'           => 'mock_refresh_token_' . bin2hex(random_bytes(16)),
                     'access_token_expires_at' => now()->addHours(2),
                     'token_expires_at'        => now()->addHours(2),

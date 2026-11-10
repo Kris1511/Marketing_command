@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\FacebookMessengerWebhookEvent;
 use App\Models\FacebookPage;
 use App\Models\Integration;
+use App\Models\User;
 use App\Models\Workspace;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -13,6 +14,13 @@ use Tests\TestCase;
 class InstagramInboxTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->actingAs(User::factory()->create(['role' => 'admin']));
+    }
 
     public function test_instagram_conversations_returns_404_when_no_account_connected(): void
     {

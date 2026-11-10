@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import axiosInstance, { BACKEND_URL } from '../api/axiosInstance';
+import axiosInstance from '../api/axiosInstance';
+import { openYouTubeOAuth } from '../api/youtubeOAuth';
 import { useWorkspace } from '../context/WorkspaceContext';
 import {
   Eye,
@@ -139,20 +140,15 @@ export default function YouTubeAnalyticsSection() {
     }
   };
 
-  const handleConnectClick = () => {
-    const width = 600;
-    const height = 700;
-    const left = window.screen.width / 2 - width / 2;
+  const handleConnectClick = async () => {
     if (!selectedWorkspaceId) {
       alert('Please select a workspace before connecting YouTube.');
       return;
     }
 
-    window.open(
-      `${BACKEND_URL}/api/youtube/connect?workspace_id=${selectedWorkspaceId}`,
-      'YouTube OAuth Login',
-      `width=${width},height=${height},top=${top},left=${left}`
-    );
+    const r = await openYouTubeOAuth({ workspaceId: selectedWorkspaceId, popupName: 'YouTube OAuth Login' });
+    if (r.status === 'already_connected') alert(r.message);
+    else if (r.status !== 'opened') alert(r.message);
   };
 
   const channel = data?.channel;

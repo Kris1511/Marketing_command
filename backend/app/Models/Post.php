@@ -12,6 +12,7 @@ class Post extends Model
 
     protected $fillable = [
         'workspace_id',
+        'facebook_post_id',
         'content',
         'platform_list',
         'status',

@@ -34,7 +34,7 @@ return new class extends Migration
             $table->enum('post_type', ['text', 'single_image', 'multi_image', 'video', 'link'])->default('text');
             $table->longText('content')->nullable();
             $table->text('link_url')->nullable();
-            $table->enum('status', ['draft', 'scheduled', 'published', 'failed'])->default('draft');
+            $table->enum('status', ['draft', 'scheduled', 'processing', 'published', 'failed'])->default('draft');
             $table->timestamp('scheduled_at')->nullable();
             $table->timestamp('published_at')->nullable();
             $table->string('fb_post_id')->nullable();

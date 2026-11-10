@@ -6,11 +6,18 @@ use Illuminate\Http\Request;
 use App\Services\YouTubeService;
 use App\Models\YouTubeConnection;
 use App\Models\Integration;
+use App\Models\User;
+use App\Models\Workspace;
+use App\Support\WorkspaceAccess;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Exception;
 
 class YouTubeController extends Controller
 {
+    /** OAuth state lifetime (seconds). */
+    private const OAUTH_STATE_TTL = 900;
+
     protected YouTubeService $youtubeService;
 
     public function __construct(YouTubeService $youtubeService)
@@ -19,8 +26,8 @@ class YouTubeController extends Controller
     }
 
     /**
-     * Resolve and validate workspace_id from request.
-     * Prevents unintentional default fallbacks to workspace 1.
+     * Resolve workspace_id from the request. A missing id is an error: it is never replaced by the first
+     * workspace or a hard-coded one (that could expose or write another client's channel).
      */
     protected function getWorkspaceId(Request $request): int
     {
@@ -29,9 +36,7 @@ class YouTubeController extends Controller
             $id = $request->user()->current_workspace_id;
         }
         if (empty($id)) {
-            // Default to first available workspace or fallback to 9
-            $firstWs = \App\Models\Workspace::first();
-            $id = $firstWs ? $firstWs->id : 9;
+            throw new \InvalidArgumentException('A workspace_id is required. Select a client workspace first.');
         }
         return (int)$id;
     }
@@ -65,23 +70,40 @@ class YouTubeController extends Controller
     }
 
     /**
-     * GET /api/youtube/connect
-     * Redirect user to Google OAuth login screen.
+     * GET /api/v1/youtube/connect
+     * Starts the Google OAuth flow for ONE client workspace.
+     *
+     * Requires a signed-in user (Bearer token). The browser-popup version of this route used to accept any
+     * workspace_id from the query string; a stale/deleted/foreign id then travelled through OAuth and blew up in
+     * the callback as a foreign-key error. The workspace is now validated here and bound into a signed state.
      */
     public function connect(Request $request)
     {
         try {
-            $workspaceId = $this->getWorkspaceId($request);
+            $user = $request->user('sanctum');
+            if (! $user) {
+                return $this->connectFailure($request, 401, 'Sign-in Required', 'Please sign in to Marketing Command and start the YouTube connection from the Integrations page.');
+            }
+            if (($user->role ?: 'viewer') === 'viewer') {
+                return $this->connectFailure($request, 403, 'Not Allowed', 'Viewers have read-only access and cannot connect accounts.');
+            }
+
+            $rawWorkspace = $request->input('workspace_id', $request->query('workspace_id'));
+            // Missing, "all", unknown, deleted or not-yours: rejected here - never replaced by another workspace.
+            if ($denied = WorkspaceAccess::guard($request, $rawWorkspace, $user)) {
+                return $denied;
+            }
+            $workspaceId = (int) $rawWorkspace;
             $force       = $request->boolean('force') || $request->boolean('reconnect');
 
-            // 1. Check if a valid YouTube connection already exists for this workspace or across workspaces
+            // 1. Check if a valid YouTube connection already exists for this workspace
             if (!$force) {
                 $existing = $this->resolveConnection($workspaceId);
                 if ($existing && (!empty($existing->access_token) || !empty($existing->refresh_token))) {
                     try {
                         $existing = $this->youtubeService->refreshAccessTokenIfNeeded($existing);
                     } catch (\Throwable $refreshErr) {
-                        Log::warning('[YOUTUBE OAUTH] Proactive token refresh notice: ' . $refreshErr->getMessage());
+                        Log::warning('[YOUTUBE OAUTH] Proactive token refresh notice', ['workspace_id' => $workspaceId, 'reason' => $this->safeLogMessage($refreshErr)]);
                     }
 
                     if (!empty($existing->access_token)) {
@@ -114,20 +136,24 @@ class YouTubeController extends Controller
                 }
             }
 
-            $state = base64_encode(json_encode([
-                'user_id'      => $request->user()?->id ?? 1,
-                'workspace_id' => $workspaceId,
-                'time'         => time(),
-            ]));
+            $state = $this->buildOAuthState((int) $user->id, $workspaceId);
 
             $loginHint = $request->query('login_hint', env('YOUTUBE_LOGIN_HINT', null));
             $authUrl = $this->youtubeService->getAuthUrl($state, $loginHint);
 
+            // The signed state (and its single-use nonce, kept in this server's cache) can only be validated by the
+            // server Google redirects back to. If that is a different host, say so now instead of failing after login.
+            $warning = $this->callbackHostWarning($request);
+            if ($warning) {
+                Log::warning('[YOUTUBE OAUTH] ' . $warning, ['workspace_id' => $workspaceId]);
+            }
+
             if ($request->wantsJson()) {
-                return response()->json([
+                return response()->json(array_filter([
                     'success' => true,
                     'url'     => $authUrl,
-                ]);
+                    'warning' => $warning,
+                ]));
             }
 
             return redirect()->away($authUrl);
@@ -137,10 +163,10 @@ class YouTubeController extends Controller
                 'message' => $ve->getMessage(),
             ], 400);
         } catch (Exception $e) {
-            Log::error('YouTube connect error', ['error' => $e->getMessage()]);
+            Log::error('YouTube connect error', ['reason' => $this->safeLogMessage($e)]);
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to initialize Google OAuth connection: ' . $e->getMessage(),
+                'message' => 'Failed to initialize Google OAuth connection. Please try again.',
             ], 500);
         }
     }
@@ -151,65 +177,46 @@ class YouTubeController extends Controller
      */
     public function callback(Request $request)
     {
-        // 1. Check for OAuth error / denied permission
+        // 1. Check for OAuth error / denied permission (only the short error code is shown, never raw text)
         if ($request->has('error')) {
-            $error = $request->query('error_description', $request->query('error', 'User denied permission.'));
-            return $this->renderOAuthResponse(false, 'Google OAuth Failed', $error);
+            $code = preg_replace('/[^a-z_]/', '', strtolower((string) $request->query('error', '')));
+            $message = $code === 'access_denied'
+                ? 'Google permission was denied, so nothing was connected.'
+                : 'Google returned an error' . ($code !== '' ? " ({$code})" : '') . '. Please try connecting again.';
+            return $this->renderOAuthResponse(false, 'Google OAuth Failed', $message);
         }
 
         $code = $request->query('code');
-        $stateRaw = $request->query('state');
-
         if (!$code) {
             return $this->renderOAuthResponse(false, 'Invalid Request', 'Missing authorization code from Google.');
         }
 
-        // 2. Validate state
-        $userId = $request->user()?->id ?? 1;
-        $workspaceId = null;
-        if ($stateRaw) {
-            $decoded = json_decode(base64_decode($stateRaw), true);
-            if (is_array($decoded)) {
-                if (isset($decoded['user_id'])) $userId = (int)$decoded['user_id'];
-                if (isset($decoded['workspace_id'])) $workspaceId = (int)$decoded['workspace_id'];
-            }
+        // 2. Validate the signed, expiring, single-use state
+        [$claims, $stateError] = $this->verifyOAuthState((string) $request->query('state', ''));
+        if ($claims === null) {
+            return $this->renderOAuthResponse(false, 'Invalid State', $stateError);
         }
+        $workspaceId = (int) $claims['workspace_id'];
 
-        if (empty($workspaceId)) {
-            return $this->renderOAuthResponse(false, 'Invalid State', 'Missing workspace_id in OAuth state parameter.');
+        // 3. The workspace must still exist and the user who started the flow must still be allowed to use it.
+        //    All of this happens BEFORE the authorization code is exchanged or anything is written.
+        if (! Workspace::whereKey($workspaceId)->exists()) {
+            return $this->renderOAuthResponse(false, 'Workspace Not Found', 'The client workspace selected for this connection no longer exists. Select a valid client and connect YouTube again.');
+        }
+        $user = User::find((int) $claims['user_id']);
+        if (! $user || $user->is_active === false || ($user->role ?: 'viewer') === 'viewer' || ! WorkspaceAccess::canAccess($user, $workspaceId)) {
+            return $this->renderOAuthResponse(false, 'Access Denied', 'You do not have permission to connect YouTube for this client workspace.');
         }
 
         try {
-            // 3. Exchange code for tokens
+            // 4. Exchange code for tokens
             $tokens = $this->youtubeService->exchangeCodeForTokens($code);
 
-            // 4. Call YouTube API & Get Channel Info
+            // 5. Call YouTube API & Get Channel Info
             $channelData = $this->youtubeService->getChannelInfo($tokens['access_token']);
 
-            // 5. Save Channel Information & Tokens (encrypted and workspace scoped)
-            $connection = $this->youtubeService->saveChannelConnection($userId, $tokens, $channelData, $workspaceId);
-
-            // 6. Persist to unified integrations table without wiping existing refresh_token
-            $integrationData = [
-                'account_id'        => $channelData['channel_id'] ?? $connection->channel_id,
-                'account_name'      => $channelData['channel_name'] ?? $connection->channel_name,
-                'is_connected'      => true,
-                'connection_status' => 'connected',
-                'followers_count'   => $connection->subscriber_count ?? 0,
-                'last_sync_at'      => now(),
-            ];
-            if (!empty($tokens['refresh_token'])) {
-                $integrationData['refresh_token'] = $tokens['refresh_token'];
-            }
-
-            Integration::updateOrCreate(
-                [
-                    'workspace_id' => $workspaceId,
-                    'platform'     => 'youtube',
-                    'account_id'   => $channelData['channel_id'] ?? $connection->channel_id,
-                ],
-                $integrationData
-            );
+            // 6. Save the channel and the unified integration row in ONE transaction, scoped to this workspace
+            $connection = $this->youtubeService->saveChannelConnection((int) $user->id, $tokens, $channelData, $workspaceId);
 
             // 7. Render OAuth response popup
             return $this->renderOAuthResponse(
@@ -218,11 +225,140 @@ class YouTubeController extends Controller
                 "Successfully connected '{$connection->channel_name}'",
                 $connection
             );
-
-        } catch (Exception $e) {
-            Log::error('YouTube OAuth Callback Failed', ['error' => $e->getMessage()]);
-            return $this->renderOAuthResponse(false, 'YouTube Connection Error', $e->getMessage());
+        } catch (\Throwable $e) {
+            Log::error('YouTube OAuth Callback Failed', [
+                'workspace_id' => $workspaceId,
+                'exception'    => get_class($e),
+                'reason'       => $this->safeLogMessage($e),
+            ]);
+            return $this->renderOAuthResponse(false, 'YouTube Connection Error', $this->safeUserMessage($e));
         }
+    }
+
+    /** Signed (HMAC-SHA256 with APP_KEY), expiring and single-use OAuth state bound to user + workspace. */
+    protected function buildOAuthState(int $userId, int $workspaceId): string
+    {
+        $nonce = bin2hex(random_bytes(16));
+        Cache::put("yt_oauth_nonce_{$nonce}", ['user_id' => $userId, 'workspace_id' => $workspaceId], now()->addSeconds(self::OAUTH_STATE_TTL));
+
+        $payload = json_encode([
+            'user_id'      => $userId,
+            'workspace_id' => $workspaceId,
+            'ts'           => now()->timestamp,
+            'nonce'        => $nonce,
+        ]);
+
+        // URL-safe base64 (A-Z a-z 0-9 - _, no padding): nothing in it can be altered by query-string encoding,
+        // by Google echoing it back, or by a "+" being turned into a space somewhere along the redirect.
+        return rtrim(strtr(base64_encode(json_encode([
+            'payload' => $payload,
+            'sig'     => hash_hmac('sha256', $payload, config('app.key')),
+        ])), '+/', '-_'), '=');
+    }
+
+    /** Decodes a state produced by buildOAuthState() (also tolerates the standard alphabet / a "+" turned into a space). */
+    protected function decodeStateEnvelope(string $raw): ?array
+    {
+        $b64 = rtrim(strtr(str_replace(' ', '+', trim($raw)), '-_', '+/'), '=');
+        $json = base64_decode(str_pad($b64, (int) (ceil(strlen($b64) / 4) * 4), '=', STR_PAD_RIGHT), true);
+        $envelope = $json === false ? null : json_decode($json, true);
+
+        return is_array($envelope) ? $envelope : null;
+    }
+
+    /** @return array{0: ?array, 1: string} claims (or null) and a user-safe error message */
+    protected function verifyOAuthState(string $raw): array
+    {
+        $invalid = 'The OAuth state is missing, invalid or tampered with. Please start the YouTube connection again from Integrations.';
+        if ($raw === '') {
+            return [null, $invalid];
+        }
+
+        $envelope = $this->decodeStateEnvelope($raw);
+        if ($envelope === null || ! isset($envelope['payload'], $envelope['sig']) || ! is_string($envelope['payload']) || ! is_string($envelope['sig'])) {
+            return [null, $invalid];
+        }
+        if (! hash_equals(hash_hmac('sha256', $envelope['payload'], config('app.key')), $envelope['sig'])) {
+            return [null, $invalid];
+        }
+
+        $claims = json_decode($envelope['payload'], true);
+        if (! is_array($claims)
+            || ! isset($claims['user_id'], $claims['workspace_id'], $claims['nonce'])
+            || ! is_int($claims['ts'] ?? null)
+            || ! is_string($claims['nonce'])) {
+            return [null, $invalid];
+        }
+
+        $age = now()->timestamp - $claims['ts'];
+        if ($age > self::OAUTH_STATE_TTL || $age < -60) {
+            return [null, 'The YouTube connection request expired. Please start it again from Integrations.'];
+        }
+
+        // Single use: the nonce is consumed here, so a replayed callback URL is refused.
+        $stored = Cache::pull("yt_oauth_nonce_{$claims['nonce']}");
+        if (! is_array($stored)
+            || (int) $stored['workspace_id'] !== (int) $claims['workspace_id']
+            || (int) $stored['user_id'] !== (int) $claims['user_id']) {
+            return [null, 'This YouTube connection request was already used or is no longer valid. Please start it again from Integrations.'];
+        }
+
+        return [$claims, ''];
+    }
+
+    /** Non-null when Google will redirect to a different host than the one serving this request. */
+    protected function callbackHostWarning(Request $request): ?string
+    {
+        $redirect = (string) config('services.google.redirect_uri');
+        $redirectHost = parse_url($redirect, PHP_URL_HOST);
+        $thisHost = $request->getHost();
+
+        if (! $redirectHost || ! $thisHost || strcasecmp($redirectHost, $thisHost) === 0) {
+            return null;
+        }
+
+        return "Google will return to {$redirectHost}, but this connection was started on {$thisHost}. "
+            . 'The connection only completes if that address runs this same backend version (same APP_KEY and cache). '
+            . 'For local testing set GOOGLE_REDIRECT_URI to the /api/youtube/callback URL of the server you are using and register it in Google Cloud.';
+    }
+
+    protected function connectFailure(Request $request, int $status, string $title, string $message)
+    {
+        if ($request->wantsJson()) {
+            return response()->json(['success' => false, 'message' => $message], $status);
+        }
+
+        return $this->renderOAuthResponse(false, $title, $message)->setStatusCode($status);
+    }
+
+    /** Message that is safe to show: our own validation messages and one known Google message pass; everything else is generic. */
+    protected function safeUserMessage(\Throwable $e): string
+    {
+        if ($e instanceof \InvalidArgumentException || $e instanceof \DomainException) {
+            return $e->getMessage();
+        }
+        if ($e instanceof \Illuminate\Database\QueryException || $e instanceof \PDOException) {
+            return 'A database error occurred while saving the YouTube connection. Nothing was changed. Please try again or contact support.';
+        }
+        $m = $e->getMessage();
+        if (str_contains($m, 'No YouTube Channel found')) {
+            return 'No YouTube channel was found for that Google account. Choose an account that owns a channel.';
+        }
+        if (stripos($m, 'invalid_grant') !== false || stripos($m, 'expired') !== false) {
+            return 'Google rejected the authorization (it may have expired or already been used). Please start the connection again.';
+        }
+
+        return 'Could not complete the YouTube connection. Please try again.';
+    }
+
+    /** Log text without SQL, bindings or anything token-shaped. */
+    protected function safeLogMessage(\Throwable $e): string
+    {
+        if ($e instanceof \Illuminate\Database\QueryException) {
+            return 'database error (state ' . ($e->errorInfo[0] ?? $e->getCode() ?: 'unknown') . ', driver code ' . ($e->errorInfo[1] ?? 'unknown') . ')';
+        }
+
+        return substr(preg_replace('/[A-Za-z0-9_\-\.\/+=]{32,}/', '[redacted]', $e->getMessage()), 0, 300);
     }
 
     /**
@@ -921,18 +1057,14 @@ class YouTubeController extends Controller
             'video_count'       => $connection->video_count,
             'view_count'        => $connection->view_count,
             'channel_thumbnail' => $connection->channel_thumbnail,
-        ]) : 'null';
+        ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) : 'null';
 
         $successJs = $success ? 'true' : 'false';
-        $messageJs = json_encode($message);
+        $messageJs = json_encode($message, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
         $targetOriginJs = json_encode($frontendUrl);
 
         $extraButtonHtml = '';
-        $autoCloseDelay = 1500;
-        if ($title === 'Already Connected' && $workspaceId) {
-            $extraButtonHtml = '<p style="margin-top: 15px;"><a href="/api/youtube/connect?workspace_id=' . $workspaceId . '&force=true" style="display: inline-block; padding: 8px 16px; background: #4f46e5; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 500; font-size: 13px;">Connect Another Channel &rarr;</a></p>';
-            $autoCloseDelay = 5000;
-        }
+        $autoCloseDelay = $title === 'Already Connected' ? 3000 : 1500;
 
         $html = <<<HTML
 <!DOCTYPE html>

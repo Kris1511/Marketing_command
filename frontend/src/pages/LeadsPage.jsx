@@ -13,6 +13,18 @@ export default function LeadsPage() {
   const [stageFilter, setStageFilter] = useState('all');
   const [showModal, setShowModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [actionError, setActionError] = useState('');
+
+  // The UI calls a converted lead "won"; the database stores it as "converted".
+  const toUiStage = (status) => (status === 'converted' ? 'won' : status || 'new');
+  const toApiStage = (stage) => (stage === 'won' ? 'converted' : stage);
+
+  const errorMessage = (err, fallback) => {
+    const data = err.response?.data;
+    const firstValidation = data?.errors ? Object.values(data.errors).flat()[0] : null;
+    return firstValidation || data?.message || fallback;
+  };
 
   // Form State
   const [formData, setFormData] = useState({
@@ -45,7 +57,7 @@ export default function LeadsPage() {
             campaign: l.campaign?.name || '',
             owner: l.assigned_to?.name || '',
             created_at: l.created_at ? l.created_at.substring(0, 10) : '',
-            status: l.status || 'new',
+            status: toUiStage(l.status),
             initials: (l.name || '?').split(' ').map((n) => n[0] || '').join('').substring(0, 2).toUpperCase(),
           }));
           setLeads(formatted);
@@ -69,30 +81,19 @@ export default function LeadsPage() {
     if (!formData.name.trim()) return;
 
     setSubmitting(true);
+    setFormError('');
     axiosInstance
       .post('/leads', {
-        name: formData.name,
-        phone: formData.phone || '+91 98765 00000',
-        email: formData.email || `${formData.name.toLowerCase().replace(/\s+/g, '')}@example.com`,
+        workspace_id: selectedWorkspaceId || undefined,
+        name: formData.name.trim(),
+        phone: formData.phone || undefined,
+        email: formData.email || undefined,
         source: formData.source,
-        campaign_name: formData.campaign_name || 'General',
-        assigned_to: formData.assigned_to,
-        notes: formData.notes,
+        campaign_name: formData.campaign_name || undefined,
+        assigned_to: formData.assigned_to || undefined,
+        notes: formData.notes || undefined,
       })
-      .then((res) => {
-        const newLead = {
-          id: res.data.data.id || Date.now(),
-          name: formData.name,
-          phone: formData.phone || '+91 98765 00000',
-          email: formData.email || `${formData.name.toLowerCase().replace(/\s+/g, '')}@example.com`,
-          source_display: formData.source,
-          campaign: formData.campaign_name || 'General Campaign',
-          owner: formData.assigned_to || 'Nisha',
-          created_at: new Date().toISOString().substring(0, 10),
-          status: 'new',
-          initials: formData.name.split(' ').map((n) => n[0]).join('').substring(0, 2).toUpperCase(),
-        };
-        setLeads((prev) => [newLead, ...prev]);
+      .then(() => {
         setShowModal(false);
         setFormData({
           name: '',
@@ -103,33 +104,25 @@ export default function LeadsPage() {
           assigned_to: 'Nisha',
           notes: '',
         });
+        fetchLeads();
       })
       .catch((err) => {
         console.error('Error creating lead:', err);
-        // Fallback local append if backend offline
-        const newLead = {
-          id: Date.now(),
-          name: formData.name,
-          phone: formData.phone || '+91 98765 00000',
-          email: formData.email || 'lead@example.com',
-          source_display: formData.source,
-          campaign: formData.campaign_name || 'General Campaign',
-          owner: formData.assigned_to || 'Nisha',
-          created_at: new Date().toISOString().substring(0, 10),
-          status: 'new',
-          initials: formData.name.split(' ').map((n) => n[0]).join('').substring(0, 2).toUpperCase(),
-        };
-        setLeads((prev) => [newLead, ...prev]);
-        setShowModal(false);
+        setFormError(errorMessage(err, 'Unable to save the lead. Please try again.'));
       })
       .finally(() => setSubmitting(false));
   };
 
   const handleStageUpdate = (id, newStage) => {
+    const previous = leads.find((l) => l.id === id)?.status;
+    setActionError('');
     setLeads((prev) =>
       prev.map((l) => (l.id === id ? { ...l, status: newStage } : l))
     );
-    axiosInstance.patch(`/leads/${id}`, { status: newStage }).catch(() => {});
+    axiosInstance.patch(`/leads/${id}`, { status: toApiStage(newStage) }).catch((err) => {
+      setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, status: previous } : l)));
+      setActionError(errorMessage(err, 'Unable to update the lead stage. Please try again.'));
+    });
   };
 
   // Filter leads for table
@@ -165,7 +158,7 @@ export default function LeadsPage() {
         <button
           type="button"
           className="btn btn-primary"
-          onClick={() => setShowModal(true)}
+          onClick={() => { setFormError(''); setShowModal(true); }}
           style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
         >
           <Plus size={16} /> Add lead
@@ -241,6 +234,12 @@ export default function LeadsPage() {
             </select>
           </div>
         </div>
+
+        {(loadError || actionError) && (
+          <div role="alert" style={{ margin: '0 0 12px', padding: '10px 12px', borderRadius: '8px', background: '#fef2f2', color: '#b91c1c', fontSize: '13px' }}>
+            {loadError || actionError}
+          </div>
+        )}
 
         <div className="table-wrap">
           <table>
@@ -380,6 +379,11 @@ export default function LeadsPage() {
 
             <form onSubmit={handleSubmit}>
               <div className="modal-body">
+                {formError && (
+                  <div role="alert" style={{ marginBottom: '12px', padding: '10px 12px', borderRadius: '8px', background: '#fef2f2', color: '#b91c1c', fontSize: '13px' }}>
+                    {formError}
+                  </div>
+                )}
                 <div className="form-grid">
                   <div className="form-field">
                     <label className="form-label">Lead name</label>

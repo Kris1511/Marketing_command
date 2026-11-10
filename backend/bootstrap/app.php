@@ -14,6 +14,9 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->statefulApi();
+        $middleware->alias([
+            'role.permissions' => \App\Http\Middleware\EnforceRolePermissions::class,
+        ]);
         $middleware->validateCsrfTokens(except: [
             'api/*',
             'api/v1/*',

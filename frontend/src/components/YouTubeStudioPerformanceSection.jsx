@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import axios from 'axios';
-import axiosInstance, { BACKEND_URL } from '../api/axiosInstance';
+import axiosInstance from '../api/axiosInstance';
+import { openYouTubeOAuth } from '../api/youtubeOAuth';
 import { useWorkspace } from '../context/WorkspaceContext';
 import {
   Eye,
@@ -395,16 +396,10 @@ export default function YouTubeStudioPerformanceSection({
   }, [refreshTrigger, fetchData, activeStartDate, activeEndDate]);
 
   // Reconnect popup handler
-  const handleReconnect = () => {
-    const width = 600;
-    const height = 700;
-    const left = window.screen.width / 2 - width / 2;
-    const top = window.screen.height / 2 - height / 2;
-    window.open(
-      `${BACKEND_URL}/api/youtube/connect?workspace_id=${effectiveWorkspaceId || 1}&force=true`,
-      'GoogleYouTubeOAuth',
-      `width=${width},height=${height},top=${top},left=${left}`
-    );
+  const handleReconnect = async () => {
+    // No "|| 1" fallback: the client that is actually selected, or nothing.
+    const r = await openYouTubeOAuth({ workspaceId: effectiveWorkspaceId, force: true });
+    if (r.status !== 'opened') alert(r.message);
   };
 
   // Derived values from real API

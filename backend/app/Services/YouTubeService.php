@@ -250,69 +250,79 @@ class YouTubeService
      */
     public function saveChannelConnection(?int $userId, array $tokens, array $channelData, int $workspaceId): YouTubeConnection
     {
-        if (empty($workspaceId)) {
-            throw new \InvalidArgumentException('A valid workspace_id is required to save a YouTube connection.');
+        if (empty($workspaceId) || ! \App\Models\Workspace::whereKey($workspaceId)->exists()) {
+            // Checked up front so a missing/deleted client never reaches the database as a foreign-key error.
+            throw new \InvalidArgumentException('The selected client workspace no longer exists. Select a valid client and connect YouTube again.');
+        }
+        if (empty($channelData['channel_id'])) {
+            throw new \DomainException('Google did not return a YouTube channel for this account.');
         }
 
-        $expiresIn = $tokens['expires_in'] ?? 3600;
-        $expiresAt = now()->addSeconds($expiresIn);
+        $channelId = $channelData['channel_id'];
+        $expiresAt = now()->addSeconds($tokens['expires_in'] ?? 3600);
 
-        $updateData = [
-            'user_id'             => $userId,
-            'workspace_id'        => $workspaceId,
-            'channel_name'        => $channelData['channel_name'],
-            'channel_description' => $channelData['channel_description'],
-            'channel_thumbnail'   => $channelData['channel_thumbnail'],
-            'subscriber_count'    => $channelData['subscriber_count'],
-            'video_count'         => $channelData['video_count'],
-            'view_count'          => $channelData['view_count'],
-            'access_token'        => $tokens['access_token'],
-            'token_expires_at'    => $expiresAt,
-        ];
+        // Connection + unified integration row are saved together or not at all.
+        return \Illuminate\Support\Facades\DB::transaction(function () use ($userId, $tokens, $channelData, $workspaceId, $channelId, $expiresAt) {
+            $existing = YouTubeConnection::where('channel_id', $channelId)->lockForUpdate()->first();
 
-        if (!empty($tokens['refresh_token'])) {
-            $updateData['refresh_token'] = $tokens['refresh_token'];
-        } else {
-            // Retain existing refresh token if Google omitted it in this callback
-            $existingRt = YouTubeConnection::where('channel_id', $channelData['channel_id'])
-                ->whereNotNull('refresh_token')
-                ->value('refresh_token');
-            if ($existingRt) {
-                $updateData['refresh_token'] = $existingRt;
+            // channel_id is globally unique. A channel that belongs to ANOTHER client must never be silently
+            // moved; a channel whose workspace is gone (or unset) can be claimed.
+            if ($existing
+                && ! empty($existing->workspace_id)
+                && (int) $existing->workspace_id !== $workspaceId
+                && \App\Models\Workspace::whereKey($existing->workspace_id)->exists()) {
+                throw new \DomainException('This YouTube channel is already connected to a different client workspace. Disconnect it there first, then connect it here.');
             }
-        }
 
-        $connection = YouTubeConnection::updateOrCreate(
-            ['channel_id' => $channelData['channel_id']],
-            $updateData
-        );
+            $data = [
+                'user_id'             => $userId,
+                'workspace_id'        => $workspaceId,
+                'channel_name'        => $channelData['channel_name'],
+                'channel_description' => $channelData['channel_description'],
+                'channel_thumbnail'   => $channelData['channel_thumbnail'],
+                'subscriber_count'    => $channelData['subscriber_count'],
+                'video_count'         => $channelData['video_count'],
+                'view_count'          => $channelData['view_count'],
+                'access_token'        => $tokens['access_token'],
+                'token_expires_at'    => $expiresAt,
+            ];
 
-        // Permanently persist to unified integrations table with composite key
-        try {
-            $integData = [
+            // Google omits the refresh token on re-consent sometimes: keep the stored one (never wipe it).
+            if (! empty($tokens['refresh_token'])) {
+                $data['refresh_token'] = $tokens['refresh_token'];
+            }
+
+            if ($existing) {
+                $existing->update($data);
+                $connection = $existing;
+            } else {
+                $connection = YouTubeConnection::create($data + ['channel_id' => $channelId]);
+            }
+
+            // One integrations row per (workspace, youtube, channel): re-connecting updates it (and revives a
+            // soft-deleted or disconnected one) instead of creating a duplicate.
+            $integration = Integration::withTrashed()->firstOrNew([
+                'workspace_id' => $workspaceId,
+                'platform'     => 'youtube',
+                'account_id'   => $channelId,
+            ]);
+            if ($integration->trashed()) {
+                $integration->restore();
+            }
+            $integration->fill([
                 'account_name'      => $channelData['channel_name'],
-                'access_token'      => $tokens['access_token'] ?? null,
                 'is_connected'      => true,
                 'connection_status' => 'connected',
-                'followers_count'   => (int)($channelData['subscriber_count'] ?? 0),
+                'error_message'     => null,
                 'last_sync_at'      => now(),
-            ];
-            if (!empty($connection->refresh_token)) {
-                $integData['refresh_token'] = $connection->refresh_token;
+            ]);
+            if (! empty($connection->refresh_token)) {
+                $integration->refresh_token = $connection->refresh_token;
             }
-            Integration::updateOrCreate(
-                [
-                    'workspace_id' => $workspaceId,
-                    'platform'     => 'youtube',
-                    'account_id'   => $channelData['channel_id'],
-                ],
-                $integData
-            );
-        } catch (\Throwable $t) {
-            Log::warning('YouTubeService: failed persisting YouTube to integrations table: ' . $t->getMessage());
-        }
+            $integration->save();
 
-        return $connection;
+            return $connection;
+        });
     }
 
     /**

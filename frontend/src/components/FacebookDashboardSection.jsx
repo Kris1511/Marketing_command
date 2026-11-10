@@ -91,16 +91,33 @@ function Tooltip({ text }) {
   );
 }
 
+// Tracks an element's rendered width so SVG charts can lay themselves out at 1:1 scale.
+function useElementWidth(fallback = 540) {
+  const ref = useRef(null);
+  const [width, setWidth] = useState(fallback);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const update = () => setWidth(Math.max(240, Math.round(el.getBoundingClientRect().width)));
+    update();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, width];
+}
+
 function BarChart({ labels, counts, accentColor = "#2563eb" }) {
-  if (!labels || labels.length === 0) {
+  const [wrapRef, viewW] = useElementWidth();
+  if (!labels || labels.length === 0 || !counts || counts.every((c) => !c)) {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "160px", color: "#94a3b8", fontSize: "13px" }}>
+      <div ref={wrapRef} style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "160px", color: "#94a3b8", fontSize: "13px" }}>
         No posts in this date range
       </div>
     );
   }
   const maxVal = Math.max(...counts, 1);
-  const viewW = 540;
   const chartH = 160;
   const barAreaH = chartH - 26;
   const n = labels.length;
@@ -110,13 +127,16 @@ function BarChart({ labels, counts, accentColor = "#2563eb" }) {
   const barW = Math.max(2.5, Math.min(20, slotW - (slotW > 6 ? 2 : 0.5)));
 
   // Pick ~5 to 6 legible date labels across any range (prevents text overlapping)
-  const targetLabelCount = 6;
-  const labelStep = n <= 8 ? 1 : Math.ceil(n / targetLabelCount);
+  const targetLabelCount = Math.max(3, Math.floor(viewW / 90));
+  const labelStep = n <= targetLabelCount ? 1 : Math.ceil(n / targetLabelCount);
 
   return (
+    <div ref={wrapRef} style={{ width: "100%" }}>
     <svg
+      width={viewW}
+      height={chartH}
       viewBox={`0 0 ${viewW} ${chartH}`}
-      style={{ width: "100%", height: "160px", overflow: "visible" }}
+      style={{ display: "block", width: "100%", height: "160px", overflow: "visible" }}
     >
       {[0, 0.25, 0.5, 0.75, 1].map((frac, i) => {
         const y = barAreaH - frac * barAreaH;
@@ -168,7 +188,8 @@ function BarChart({ labels, counts, accentColor = "#2563eb" }) {
         );
       })}
       {labels.map((label, i) => {
-        if (i % labelStep !== 0 && i !== n - 1) return null;
+        const isLastLabel = i === n - 1 && (n - 1) % labelStep >= Math.ceil(labelStep * 0.75);
+        if (i % labelStep !== 0 && !isLastLabel) return null;
         const x = padX + i * slotW + slotW / 2;
         return (
           <text
@@ -185,6 +206,7 @@ function BarChart({ labels, counts, accentColor = "#2563eb" }) {
         );
       })}
     </svg>
+    </div>
   );
 }
 
@@ -231,7 +253,7 @@ function DonutChart({ photo, video, reel, carousel, other, total }) {
   });
   const svgVb = "0 0 " + size + " " + size;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "20px", flexWrap: "wrap" }}>
       <div style={{ position: "relative", flexShrink: 0 }}>
         <svg width={size} height={size} viewBox={svgVb}>
           {paths.map((p, i) => <path key={i} d={p.d} fill={p.color} />)}
@@ -239,7 +261,7 @@ function DonutChart({ photo, video, reel, carousel, other, total }) {
           <text x={cx} y={cy + 12} textAnchor="middle" fontSize={9} fill="#64748b">Posts</text>
         </svg>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: "8px", flex: 1 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "8px", flex: "1 1 150px", minWidth: 0, maxWidth: "280px" }}>
         {allItems.map((item) => {
           const pct = total > 0 ? ((item.value / total) * 100).toFixed(1) : "0.0";
           return (
@@ -261,23 +283,9 @@ function DonutChart({ photo, video, reel, carousel, other, total }) {
 function SummaryCard({ icon, iconBg, value, label, subtitle, tooltip, loading }) {
   return (
     <div
-      style={{
-        background: "#ffffff",
-        border: "1px solid #e2e8f0",
-        borderRadius: "12px",
-        padding: "18px 20px",
-        display: "flex",
-        alignItems: "center",
-        gap: "14px",
-        flex: "1 1 0",
-        minWidth: "160px",
-        boxShadow: "0 1px 3px rgba(0,0,0,0.03)",
-        transition: "box-shadow 0.15s",
-      }}
-      onMouseOver={e => e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.07)"}
-      onMouseOut={e => e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.03)"}
+      className="dash-kpi"
     >
-      <div style={{ width: "46px", height: "46px", borderRadius: "12px", background: iconBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+      <div style={{ width: "44px", height: "44px", borderRadius: "12px", background: iconBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
         {icon}
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -369,6 +377,18 @@ const fbInFlightRequests = new Map();
 const igStatsModuleCache = new Map();
 const igPostsModuleCache = new Map();
 const igInFlightRequests = new Map();
+
+// A post was just published to Instagram from the Publishing page: drop cached Instagram dashboard
+// data so the Overview shows the new post on the next visit instead of a 5-minute-old snapshot.
+if (typeof window !== "undefined") {
+  window.addEventListener("mc:post-published", (event) => {
+    const statuses = (event && event.detail && event.detail.platformStatuses) || {};
+    if (statuses.instagram && statuses.instagram.status === "published") {
+      igStatsModuleCache.clear();
+      igPostsModuleCache.clear();
+    }
+  });
+}
 
 export default function FacebookDashboardSection({ workspaceId, startDate, endDate, refreshTrigger, onViewAll, platform = "facebook" }) {
   const cfg = platformConfig[platform] || platformConfig.facebook;
@@ -601,7 +621,16 @@ export default function FacebookDashboardSection({ workspaceId, startDate, endDa
 
   return (
     <div style={{ marginBottom: "28px" }}>
-      <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "20px" }}>
+      {statsError && !statsLoading && (
+        <div role="alert" style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px", padding: "12px 16px", color: "#b91c1c", fontSize: "13px", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}><AlertCircle size={16} /> {statsError}</span>
+          <button type="button" onClick={() => fetchStats()} style={{ background: "#ffffff", border: "1px solid #fecaca", borderRadius: "6px", padding: "5px 12px", fontSize: "12.5px", fontWeight: "600", color: "#b91c1c", cursor: "pointer" }}>
+            Try again
+          </button>
+        </div>
+      )}
+
+      <div className="dash-kpi-grid" style={statsError && !statsLoading ? { opacity: 0.45 } : undefined} aria-busy={statsLoading}>
         <SummaryCard
           loading={statsLoading}
           icon={<Users size={22} color={cfg.followersColor} />}
@@ -641,8 +670,8 @@ export default function FacebookDashboardSection({ workspaceId, startDate, endDa
         />
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "20px" }}>
-        <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "20px 22px", boxShadow: "0 1px 3px rgba(0,0,0,0.03)" }}>
+      <div className="dash-chart-grid">
+        <div className="dash-card">
           <h4 style={{ margin: "0 0 16px 0", fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>Posts Published</h4>
           {statsLoading ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "160px", color: "#94a3b8" }}>
@@ -653,7 +682,7 @@ export default function FacebookDashboardSection({ workspaceId, startDate, endDa
           )}
         </div>
 
-        <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "20px 22px", boxShadow: "0 1px 3px rgba(0,0,0,0.03)" }}>
+        <div className="dash-card">
           <h4 style={{ margin: "0 0 16px 0", fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>Post Types</h4>
           {statsLoading ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "140px", color: "#94a3b8" }}>
@@ -688,13 +717,13 @@ export default function FacebookDashboardSection({ workspaceId, startDate, endDa
           </div>
         )}
 
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "700px" }}>
+        <div className="dash-table-wrap">
+          <table className="dash-table">
             <thead>
               <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
                 <th style={{ padding: "11px 22px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "left", width: "36%" }}>Post</th>
-                <th style={{ padding: "11px 14px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "left", width: "14%" }}>Date</th>
-                <th style={{ padding: "11px 10px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "center", width: "10%" }}>Type</th>
+                <th className="dash-col-md" style={{ padding: "11px 14px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "left", width: "14%" }}>Date</th>
+                <th className="dash-col-md" style={{ padding: "11px 10px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "center", width: "10%" }}>Type</th>
                 <th style={{ padding: "11px 10px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "center", width: "10%" }}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: "3px" }}>
                     Views <Tooltip text={cfg.viewsTooltip} />
@@ -702,20 +731,20 @@ export default function FacebookDashboardSection({ workspaceId, startDate, endDa
                 </th>
                 <th style={{ padding: "11px 10px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "center", width: "10%" }}>Likes</th>
                 <th style={{ padding: "11px 10px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "center", width: "10%" }}>Comments</th>
-                <th style={{ padding: "11px 10px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "center", width: "10%" }}>Shares</th>
+                <th className="dash-col-md" style={{ padding: "11px 10px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "center", width: "10%" }}>Shares</th>
               </tr>
             </thead>
             <tbody>
               {postsLoading ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: "36px", textAlign: "center", color: "#64748b" }}>
+                  <td colSpan={7} className="dash-span-all" style={{ padding: "36px", textAlign: "center", color: "#64748b" }}>
                     <RefreshCw size={20} className="spin" style={{ margin: "0 auto 8px", display: "block", color: cfg.accent || "#1877f2" }} />
                     <span style={{ fontSize: "13px" }}>Loading posts...</span>
                   </td>
                 </tr>
               ) : posts.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: "36px", textAlign: "center", color: "#94a3b8", fontSize: "13px" }}>
+                  <td colSpan={7} className="dash-span-all" style={{ padding: "36px", textAlign: "center", color: "#94a3b8", fontSize: "13px" }}>
                     {cfg.emptyPosts}
                   </td>
                 </tr>
@@ -733,8 +762,8 @@ export default function FacebookDashboardSection({ workspaceId, startDate, endDa
                       onMouseOver={e => { e.currentTarget.style.background = "#f8fafc"; }}
                       onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}
                     >
-                      <td style={{ padding: "13px 22px" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "11px" }}>
+                      <td className="dash-post-cell" style={{ padding: "13px 22px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "11px", minWidth: 0 }}>
                           <div style={{ width: "42px", height: "42px", borderRadius: "6px", overflow: "hidden", background: "#f1f5f9", border: "1px solid #e2e8f0", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                             {post.image_url ? (
                               <img src={post.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }}
@@ -745,6 +774,7 @@ export default function FacebookDashboardSection({ workspaceId, startDate, endDa
                               {isReel ? <Film size={16} /> : isVideo ? <Video size={16} /> : isCarousel ? <Layers size={16} /> : <Camera size={16} />}
                             </div>
                           </div>
+                          <div className="dash-post-text">
                           {post.permalink || post.permalink_url ? (
                             <a
                               href={post.permalink || post.permalink_url}
@@ -754,6 +784,7 @@ export default function FacebookDashboardSection({ workspaceId, startDate, endDa
                                 fontSize: "13px",
                                 fontWeight: "500",
                                 color: "#0f172a",
+                                display: "block",
                                 lineHeight: "1.3",
                                 maxWidth: "280px",
                                 overflow: "hidden",
@@ -769,31 +800,35 @@ export default function FacebookDashboardSection({ workspaceId, startDate, endDa
                               {post.content ? post.content.replace(/[\r\n]+/g, " ") : "Media post"}
                             </a>
                           ) : (
-                            <span style={{ fontSize: "13px", fontWeight: "500", color: "#0f172a", lineHeight: "1.3", maxWidth: "280px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={post.content || ""}>
+                            <span style={{ display: "block", fontSize: "13px", fontWeight: "500", color: "#0f172a", lineHeight: "1.3", maxWidth: "280px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={post.content || ""}>
                               {post.content ? post.content.replace(/[\r\n]+/g, " ") : "Media post"}
                             </span>
                           )}
+                          <div className="dash-post-meta">
+                            {[date, post.formatted_type || "Photo", post.shares_count != null ? `${formatNum(post.shares_count)} ${Number(post.shares_count) === 1 ? "share" : "shares"}` : null].filter(Boolean).join(" · ")}
+                          </div>
+                          </div>
                         </div>
                       </td>
-                      <td style={{ padding: "13px 14px" }}>
+                      <td className="dash-col-md dash-date-cell" style={{ padding: "13px 14px" }}>
                         <div style={{ fontSize: "13px", fontWeight: "500", color: "#0f172a" }}>{date}</div>
                         {time && <div style={{ fontSize: "11.5px", color: "#94a3b8", marginTop: "2px" }}>{time}</div>}
                       </td>
-                      <td style={{ padding: "13px 10px", textAlign: "center" }}>
+                      <td className="dash-col-md" style={{ padding: "13px 10px", textAlign: "center" }}>
                         <TypeBadge type={post.formatted_type || "Photo"} />
                       </td>
-                      <td style={{ padding: "13px 10px", textAlign: "center", fontSize: "13.5px", color: "#334155" }}>
+                      <td data-label="Views" style={{ padding: "13px 10px", textAlign: "center", fontSize: "13.5px", color: "#334155" }}>
                         {viewsValue !== null && viewsValue !== undefined ? formatNum(viewsValue) : (
                           <span title={cfg.viewsTooltip} style={{ color: "#94a3b8", cursor: "help" }}>{EM_DASH}</span>
                         )}
                       </td>
-                      <td style={{ padding: "13px 10px", textAlign: "center", fontSize: "13.5px", color: "#334155" }}>
+                      <td data-label="Likes" style={{ padding: "13px 10px", textAlign: "center", fontSize: "13.5px", color: "#334155" }}>
                         {post.likes_count != null ? formatNum(post.likes_count) : <span style={{ color: "#94a3b8" }}>{EM_DASH}</span>}
                       </td>
-                      <td style={{ padding: "13px 10px", textAlign: "center", fontSize: "13.5px", color: "#334155" }}>
+                      <td data-label="Comments" style={{ padding: "13px 10px", textAlign: "center", fontSize: "13.5px", color: "#334155" }}>
                         {post.comments_count != null ? formatNum(post.comments_count) : <span style={{ color: "#94a3b8" }}>{EM_DASH}</span>}
                       </td>
-                      <td style={{ padding: "13px 10px", textAlign: "center", fontSize: "13.5px", color: "#334155" }}>
+                      <td className="dash-col-md" style={{ padding: "13px 10px", textAlign: "center", fontSize: "13.5px", color: "#334155" }}>
                         {post.shares_count != null ? formatNum(post.shares_count) : <span style={{ color: "#94a3b8" }}>{EM_DASH}</span>}
                       </td>
                     </tr>

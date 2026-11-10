@@ -532,6 +532,22 @@ class FacebookGraphService
             $formatted .= " ({$userMsg})";
         }
 
+        // Expired / revoked access token: tell the user how to fix it (retrying cannot help until they reconnect).
+        if ((int) $code === 190) {
+            $formatted .= ' The access token has expired or was revoked. Reconnect the account in API Connections, then use Retry.';
+        }
+
+        // Instagram media-fetch / media-format failures: explain what Meta needs from the media URL.
+        if (str_starts_with($action, 'publishInstagram')
+            && (in_array((int) $code, [9004, 36000, 36001, 36003, 36004], true)
+                || in_array((int) $subcode, [2207003, 2207004, 2207005, 2207009, 2207026, 2207052], true))) {
+            $formatted .= ' Meta could not download or accept the media from its URL. Instagram needs a public HTTPS URL that returns HTTP 200 with a JPEG image (max 8 MB, aspect ratio between 4:5 and 1.91:1) or an MP4/MOV video.';
+        }
+
+        if ((int) $code === 200 && (str_contains($message, 'pages_manage_posts') || (str_contains($message, 'permission') && str_contains($message, 'App Review')))) {
+            $formatted = "Meta Permission Error (#200): 'pages_manage_posts' is not available. To resolve: (1) For Live Meta Apps, submit 'pages_manage_posts' for Meta App Review (Advanced Access); (2) For Development Mode Apps, add this Facebook account as an App Admin/Developer/Tester, and reconnect the Page in Integrations with publishing permissions approved.";
+        }
+
         throw new Exception($formatted);
     }
 
@@ -695,7 +711,57 @@ class FacebookGraphService
     /**
      * Publish Video Post
      */
-    public function publishVideo(string $pageId, string $accessToken, string $description, $fileOrUrl): array
+    public function publishVideo(string $pageId, string $accessToken, string $description, $fileOrUrl, ?string $thumbnailPath = null): array
+    {
+        $result = $this->uploadFacebookVideo($pageId, $accessToken, $description, $fileOrUrl);
+
+        if ($thumbnailPath !== null && $thumbnailPath !== '') {
+            $videoId = (string) ($result['id'] ?? '');
+            $result['thumbnail'] = $videoId === ''
+                ? ['requested' => true, 'applied' => false, 'message' => 'Facebook did not return a video ID, so the custom thumbnail could not be set.']
+                : $this->setFacebookVideoThumbnail($videoId, $accessToken, $thumbnailPath);
+        }
+
+        return $result;
+    }
+
+    /**
+     * Set the preferred (custom) thumbnail of an uploaded Facebook video: POST /{video-id}/thumbnails with
+     * source=<image> and is_preferred=true. Only reported as applied when Meta answers success.
+     * Never throws: the video is already published, so a thumbnail problem must not turn it into a failure.
+     *
+     * @return array{requested: bool, applied: bool, message: string}
+     */
+    public function setFacebookVideoThumbnail(string $videoId, string $accessToken, string $thumbnailPath): array
+    {
+        if (!is_file($thumbnailPath)) {
+            return ['requested' => true, 'applied' => false, 'message' => 'The custom thumbnail file is missing from server storage.'];
+        }
+
+        $url = "{$this->baseUrl}/{$this->apiVersion}/{$videoId}/thumbnails";
+        try {
+            $response = $this->client()
+                ->attach('source', file_get_contents($thumbnailPath), basename($thumbnailPath))
+                ->post($url, [
+                    'is_preferred' => 'true',
+                    'access_token' => $accessToken,
+                ]);
+
+            if ($response->successful() && ($response->json('success') === true || $response->json('id'))) {
+                \Illuminate\Support\Facades\Log::info('[FACEBOOK PUBLISH] Custom video thumbnail applied', ['video_id' => $videoId]);
+                return ['requested' => true, 'applied' => true, 'message' => 'Custom thumbnail applied.'];
+            }
+
+            $error = $response->json('error.error_user_msg') ?? $response->json('error.message') ?? "HTTP {$response->status()}";
+            \Illuminate\Support\Facades\Log::warning('[FACEBOOK PUBLISH] Custom video thumbnail rejected', ['video_id' => $videoId, 'error' => $error]);
+            return ['requested' => true, 'applied' => false, 'message' => "Facebook did not accept the custom thumbnail: {$error}"];
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('[FACEBOOK PUBLISH] Custom video thumbnail error: ' . $e->getMessage(), ['video_id' => $videoId]);
+            return ['requested' => true, 'applied' => false, 'message' => 'The custom thumbnail could not be sent to Facebook: ' . \Illuminate\Support\Str::limit($e->getMessage(), 160)];
+        }
+    }
+
+    protected function uploadFacebookVideo(string $pageId, string $accessToken, string $description, $fileOrUrl): array
     {
         $url = "https://graph-video.facebook.com/{$this->apiVersion}/{$pageId}/videos";
 
@@ -748,59 +814,64 @@ class FacebookGraphService
      */
     public function uploadToCloudinary($fileOrPath, string $filename, string $resourceType = 'image'): ?string
     {
-        $cloudName = config('services.cloudinary.cloud_name') ?? env('CLOUDINARY_CLOUD_NAME');
-        $apiKey    = config('services.cloudinary.api_key') ?? env('CLOUDINARY_API_KEY');
-        $apiSecret = config('services.cloudinary.api_secret') ?? env('CLOUDINARY_API_SECRET');
+        return $this->publicMedia()->uploadToCloudinary($fileOrPath, $filename, $resourceType);
+    }
 
-        $binary = is_object($fileOrPath) && method_exists($fileOrPath, 'getRealPath')
-            ? file_get_contents($fileOrPath->getRealPath())
-            : (is_string($fileOrPath) && file_exists($fileOrPath) ? file_get_contents($fileOrPath) : null);
+    /**
+     * Resolves post media into a validated public HTTPS URL that Meta can download (Instagram only;
+     * Facebook publishing uploads file bytes directly and does not use this).
+     */
+    protected function publicMedia(): \App\Services\PublicMediaUrlService
+    {
+        return app(\App\Services\PublicMediaUrlService::class);
+    }
 
-        if (!$binary) {
-            return null;
-        }
+    /**
+     * Poll an Instagram media container until Meta has finished downloading/processing the media.
+     *
+     * @throws Exception when Meta reports ERROR/EXPIRED or the container is still IN_PROGRESS after all attempts.
+     */
+    protected function waitForInstagramContainer(string $apiBase, string $containerId, string $accessToken, int $attempts, int $defaultIntervalSeconds, string $label): void
+    {
+        $configured = config('services.instagram.container_poll_seconds');
+        $interval   = ($configured === null || $configured === '') ? $defaultIntervalSeconds : max(0, (int) $configured);
+        $lastStatus = null;
 
-        if (!empty($cloudName) && !empty($apiKey) && !empty($apiSecret)) {
-            $timestamp = time();
-            $toSign    = "timestamp={$timestamp}{$apiSecret}";
-            $signature = sha1($toSign);
+        for ($i = 0; $i < $attempts; $i++) {
+            if ($interval > 0) {
+                sleep($interval);
+            }
 
-            try {
-                $response = $this->client()->attach('file', $binary, $filename)->post(
-                    "https://api.cloudinary.com/v1_1/{$cloudName}/{$resourceType}/upload",
-                    [
-                        'api_key'   => $apiKey,
-                        'timestamp' => $timestamp,
-                        'signature' => $signature,
-                    ]
-                );
+            $statusRes = $this->client()->get("{$apiBase}/{$containerId}", [
+                'fields'       => 'status_code,status',
+                'access_token' => $accessToken,
+            ]);
 
-                if ($response->successful() && $response->json('secure_url')) {
-                    $secureUrl = $response->json('secure_url');
-                    if ($resourceType === 'image' && !str_ends_with(strtolower($secureUrl), '.jpg') && !str_ends_with(strtolower($secureUrl), '.jpeg')) {
-                        // Meta Instagram Graph API requires JPEG image format
-                        $secureUrl = preg_replace('/\/image\/upload\/(v\d+\/)?/', '/image/upload/f_jpg/$1', $secureUrl);
-                        $secureUrl = preg_replace('/\.[a-zA-Z0-9]+$/', '.jpg', $secureUrl);
-                    }
+            if (!$statusRes->successful()) {
+                continue;
+            }
 
-                    \Illuminate\Support\Facades\Log::info('[Cloudinary Upload Success]', [
-                        'filename'      => $filename,
-                        'resource_type' => $resourceType,
-                        'secure_url'    => $secureUrl,
-                    ]);
-                    return $secureUrl;
-                } else {
-                    \Illuminate\Support\Facades\Log::warning('[Cloudinary Upload Error]', [
-                        'status'   => $response->status(),
-                        'response' => $response->json() ?? $response->body(),
-                    ]);
-                }
-            } catch (\Throwable $e) {
-                \Illuminate\Support\Facades\Log::warning('[Cloudinary Upload Exception] ' . $e->getMessage());
+            $statusCode = $statusRes->json('status_code');
+            $lastStatus = $statusCode;
+
+            // An empty status_code is treated as ready (matches the previous behaviour for image containers).
+            if (in_array($statusCode, ['FINISHED', 'FINISHED_SUCCESS', 'PUBLISHED'], true) || empty($statusCode)) {
+                return;
+            }
+
+            if ($statusCode === 'ERROR' || $statusCode === 'EXPIRED') {
+                $details = $statusRes->json('status') ?? $statusRes->json('error_message') ?? $statusRes->body();
+                $hint = $statusCode === 'EXPIRED'
+                    ? ' The container was not published within 24 hours; please publish again.'
+                    : ' Meta could not download or process the media. Make sure the media URL is public HTTPS, returns HTTP 200 and is a supported format.';
+                throw new Exception("Instagram {$label} container processing failed on Meta servers: [{$statusCode}] {$details}.{$hint}");
             }
         }
 
-        return null;
+        if ($lastStatus === 'IN_PROGRESS') {
+            $waited = $attempts * $interval;
+            throw new Exception("Instagram {$label} container processing timed out on Meta servers (still IN_PROGRESS after {$waited} seconds). Please try again in a few minutes.");
+        }
     }
 
     /**
@@ -838,54 +909,13 @@ class FacebookGraphService
             throw new Exception("Instagram publishing failed: Access token is missing.");
         }
 
-        $originalName = 'image.jpg';
-        $storedPath   = null;
-        $mediaUrl     = null;
+        $originalName = is_object($fileOrUrl) && method_exists($fileOrUrl, 'getClientOriginalName')
+            ? $fileOrUrl->getClientOriginalName()
+            : (is_string($fileOrUrl) ? basename(str_replace('\\', '/', $fileOrUrl)) : 'image.jpg');
 
-        if (is_object($fileOrUrl) && method_exists($fileOrUrl, 'getRealPath')) {
-            $originalName = method_exists($fileOrUrl, 'getClientOriginalName') ? $fileOrUrl->getClientOriginalName() : 'image.jpg';
-            $ext          = method_exists($fileOrUrl, 'getClientOriginalExtension') ? ($fileOrUrl->getClientOriginalExtension() ?: 'jpg') : 'jpg';
-
-            // Unique filename per upload under workspace-isolated directory
-            $uuid       = \Illuminate\Support\Str::uuid()->toString();
-            $filename   = "{$uuid}.{$ext}";
-            $path       = $fileOrUrl->storeAs("public/posts/{$workspaceId}", $filename);
-            $storedPath = "posts/{$workspaceId}/{$filename}";
-
-            // Generate valid public HTTPS URL for Meta
-            $publicDomain = env('PUBLIC_MEDIA_URL');
-            if (!empty($publicDomain) && str_starts_with($publicDomain, 'https://')) {
-                $mediaUrl = rtrim($publicDomain, '/') . "/storage/posts/{$workspaceId}/{$filename}";
-            } elseif (str_starts_with(env('APP_URL', ''), 'https://')) {
-                $mediaUrl = asset("storage/posts/{$workspaceId}/{$filename}");
-            } else {
-                $mediaUrl = $this->uploadToCloudinary($fileOrUrl, $filename, 'image');
-            }
-        } elseif (is_string($fileOrUrl) && file_exists($fileOrUrl)) {
-            $filename = basename($fileOrUrl);
-            $storedPath = $fileOrUrl;
-            $publicDomain = env('PUBLIC_MEDIA_URL');
-            if (!empty($publicDomain) && str_starts_with($publicDomain, 'https://')) {
-                $mediaUrl = rtrim($publicDomain, '/') . "/storage/posts/{$workspaceId}/{$filename}";
-            } elseif (str_starts_with(env('APP_URL', ''), 'https://')) {
-                $mediaUrl = asset("storage/posts/{$workspaceId}/{$filename}");
-            } else {
-                $mediaUrl = $this->uploadToCloudinary($fileOrUrl, $filename, 'image');
-            }
-        } else {
-            $mediaUrl = (string) $fileOrUrl;
-        }
-
-        // Step 2: Verify media URL is publicly accessible HTTPS
-        if (empty($mediaUrl)) {
-            throw new Exception("Media upload failed. A publicly accessible HTTPS URL is required for Instagram publishing.");
-        }
-        if (!str_starts_with($mediaUrl, 'https://')) {
-            throw new Exception("Instagram requires a publicly accessible HTTPS image URL. Provided URL is not HTTPS: '{$mediaUrl}'");
-        }
-        if (str_contains($mediaUrl, 'localhost') || str_contains($mediaUrl, '127.0.0.1')) {
-            throw new Exception("Instagram cannot fetch local URLs ('{$mediaUrl}'). Please ensure Cloudinary or a public HTTPS URL is configured.");
-        }
+        // Step 2: Build the public HTTPS URL Meta will download, from configuration (never from the request host),
+        // and verify it is HTTPS, public, returns HTTP 200 + image/jpeg and meets Instagram's format rules.
+        $mediaUrl = $this->publicMedia()->resolveForInstagram($fileOrUrl, $workspaceId, 'image');
 
         // Determine API endpoint base: graph.instagram.com for IGAA... tokens, graph.facebook.com for EAA... tokens
         $isIgToken = str_starts_with($accessToken, 'IGAA');
@@ -904,31 +934,7 @@ class FacebookGraphService
         }
 
         // Step 4: Wait until container is ready (up to 10 attempts, 2 seconds each)
-        $isReady = false;
-        $lastStatus = null;
-        for ($i = 0; $i < 10; $i++) {
-            sleep(2);
-            $statusRes = $this->client()->get("{$apiBase}/{$containerId}", [
-                'fields'       => 'status_code,status',
-                'access_token' => $accessToken,
-            ]);
-            if ($statusRes->successful()) {
-                $statusCode = $statusRes->json('status_code') ?? $statusRes->json('status');
-                $lastStatus = $statusCode;
-                if ($statusCode === 'FINISHED' || $statusCode === 'FINISHED_SUCCESS' || empty($statusCode)) {
-                    $isReady = true;
-                    break;
-                }
-                if ($statusCode === 'ERROR' || $statusCode === 'EXPIRED') {
-                    $errorDetails = $statusRes->json('error_message') ?? $statusRes->body();
-                    throw new Exception("Instagram media container processing failed on Meta servers: [{$statusCode}] {$errorDetails}");
-                }
-            }
-        }
-
-        if ($lastStatus === 'IN_PROGRESS' && !$isReady) {
-            throw new Exception("Instagram media container processing timed out on Meta servers (still IN_PROGRESS after 20 seconds).");
-        }
+        $this->waitForInstagramContainer($apiBase, (string) $containerId, $accessToken, 10, 2, 'media');
 
         // Step 5: Call media_publish
         $publishUrl = "{$apiBase}/{$igAccountId}/media_publish";
@@ -950,7 +956,6 @@ class FacebookGraphService
         \Illuminate\Support\Facades\Log::info('[Instagram Publishing Success]', [
             'workspace_id'         => $workspaceId,
             'selected_file_name'   => $originalName,
-            'uploaded_storage_path'=> $storedPath,
             'public_media_url'     => $mediaUrl,
             'instagram_account_id' => $igAccountId,
             'container_id'         => $containerId,
@@ -966,76 +971,56 @@ class FacebookGraphService
     /**
      * Publish Reel / Video Container & Post to Instagram Business Account
      */
-    public function publishInstagramVideo(string $igAccountId, string $accessToken, string $caption, $fileOrUrl, int $workspaceId = 1): array
+    public function publishInstagramVideo(string $igAccountId, string $accessToken, string $caption, $fileOrUrl, int $workspaceId = 1, $coverSource = null): array
     {
-        $originalName = 'video.mp4';
-        $storedPath   = null;
-        $videoUrl     = null;
+        $originalName = is_object($fileOrUrl) && method_exists($fileOrUrl, 'getClientOriginalName')
+            ? $fileOrUrl->getClientOriginalName()
+            : (is_string($fileOrUrl) ? basename(str_replace('\\', '/', $fileOrUrl)) : 'video.mp4');
 
-        if (is_object($fileOrUrl) && method_exists($fileOrUrl, 'getRealPath')) {
-            $originalName = method_exists($fileOrUrl, 'getClientOriginalName') ? $fileOrUrl->getClientOriginalName() : 'video.mp4';
-            $ext          = method_exists($fileOrUrl, 'getClientOriginalExtension') ? ($fileOrUrl->getClientOriginalExtension() ?: 'mp4') : 'mp4';
+        // Public HTTPS URL Meta downloads the video from (validated: HTTPS, public host, HTTP 200, video/*).
+        $videoUrl = $this->publicMedia()->resolveForInstagram($fileOrUrl, $workspaceId, 'video');
 
-            // Unique filename per upload under workspace-isolated directory
-            $uuid       = \Illuminate\Support\Str::uuid()->toString();
-            $filename   = "{$uuid}.{$ext}";
-            $path       = $fileOrUrl->storeAs("public/posts/{$workspaceId}", $filename);
-            $storedPath = "posts/{$workspaceId}/{$filename}";
-            $localAsset = asset("storage/posts/{$workspaceId}/{$filename}");
-
-            $publicDomain = env('PUBLIC_MEDIA_URL');
-            if (!empty($publicDomain)) {
-                $videoUrl = rtrim($publicDomain, '/') . "/storage/posts/{$workspaceId}/{$filename}";
-            } elseif (str_starts_with(env('APP_URL'), 'https://')) {
-                $videoUrl = asset("storage/posts/{$workspaceId}/{$filename}");
-            } else {
-                $videoUrl = $this->uploadToCloudinary($fileOrUrl, $filename, 'video') ?? $localAsset;
+        // Optional custom Reel cover (cover_url). Meta downloads it like the video, so it needs a public HTTPS
+        // JPEG URL too. If that is not possible the Reel is still published, without a custom cover, and the
+        // result says so; it is never reported as applied unless Meta published the container that carried it.
+        $thumbnail = null;
+        $coverUrl = null;
+        if ($coverSource !== null && $coverSource !== '') {
+            try {
+                $coverUrl = $this->publicMedia()->resolveForInstagram($coverSource, $workspaceId, 'cover');
+            } catch (\App\Exceptions\InstagramMediaException $e) {
+                $thumbnail = ['requested' => true, 'applied' => false, 'message' => 'Custom Reel cover not applied: ' . $e->getMessage()];
             }
-        } elseif (is_string($fileOrUrl) && file_exists($fileOrUrl)) {
-            $filename = basename($fileOrUrl);
-            $localAsset = asset("storage/posts/{$workspaceId}/{$filename}");
-            $publicDomain = env('PUBLIC_MEDIA_URL');
-            if (!empty($publicDomain)) {
-                $videoUrl = rtrim($publicDomain, '/') . "/storage/posts/{$workspaceId}/{$filename}";
-            } elseif (str_starts_with(env('APP_URL'), 'https://')) {
-                $videoUrl = asset("storage/posts/{$workspaceId}/{$filename}");
-            } else {
-                $videoUrl = $this->uploadToCloudinary($fileOrUrl, $filename, 'video') ?? $localAsset;
-            }
-        } else {
-            $videoUrl = (string) $fileOrUrl;
         }
 
         $isIgToken = str_starts_with($accessToken, 'IGAA');
         $apiBase   = $isIgToken ? 'https://graph.instagram.com/v23.0' : "{$this->baseUrl}/{$this->apiVersion}";
 
         $containerUrl = "{$apiBase}/{$igAccountId}/media";
-        $response = $this->client()->post($containerUrl, [
+        $containerParams = [
             'media_type'   => 'REELS',
             'video_url'    => $videoUrl,
             'caption'      => $caption,
             'access_token' => $accessToken,
-        ]);
+        ];
+        $response = $this->client()->post($containerUrl, $coverUrl ? $containerParams + ['cover_url' => $coverUrl] : $containerParams);
+
+        if ($coverUrl && (!$response->successful() || !$response->json('id'))) {
+            // The account/API rejected the container with a cover: retry once without cover_url so the Reel
+            // itself can still be published, and report why the cover was not applied.
+            $coverError = $response->json('error.error_user_msg') ?? $response->json('error.message') ?? "HTTP {$response->status()}";
+            \Illuminate\Support\Facades\Log::warning('[Instagram Reel] Container with cover_url rejected; retrying without cover', ['error' => $coverError]);
+            $thumbnail = ['requested' => true, 'applied' => false, 'message' => "Instagram did not accept the custom Reel cover: {$coverError}"];
+            $coverUrl = null;
+            $response = $this->client()->post($containerUrl, $containerParams);
+        }
 
         if (!$response->successful() || !($containerId = $response->json('id'))) {
             $this->logAndThrowMetaError('publishInstagramVideo (create container)', $containerUrl, $igAccountId, $response);
         }
 
-        // Wait for Meta container processing (up to 8 attempts for video, 3 seconds each)
-        for ($i = 0; $i < 8; $i++) {
-            sleep(3);
-            $statusRes = $this->client()->get("{$apiBase}/{$containerId}", [
-                'fields'       => 'status_code',
-                'access_token' => $accessToken,
-            ]);
-            $statusCode = $statusRes->json('status_code');
-            if ($statusCode === 'FINISHED' || $statusCode === 'FINISHED_SUCCESS' || empty($statusCode)) {
-                break;
-            }
-            if ($statusCode === 'ERROR') {
-                throw new Exception('Instagram video container processing failed on Meta servers.');
-            }
-        }
+        // Wait for Meta to download and transcode the video (up to 20 attempts, 3 seconds each)
+        $this->waitForInstagramContainer($apiBase, (string) $containerId, $accessToken, 20, 3, 'video');
 
         $publishUrl = "{$apiBase}/{$igAccountId}/media_publish";
         $pubResponse = $this->client()->post($publishUrl, [
@@ -1052,16 +1037,25 @@ class FacebookGraphService
         \Illuminate\Support\Facades\Log::info('[Instagram Video Publishing Flow]', [
             'workspace_id'         => $workspaceId,
             'selected_file_name'   => $originalName,
-            'uploaded_storage_path'=> $storedPath,
             'public_media_url'     => $videoUrl,
             'instagram_account_id' => $igAccountId,
             'container_response'   => $response->json(),
             'container_id'         => $containerId,
             'publish_response'     => $pubResponse->json(),
             'published_media_id'   => $publishedId,
+            'cover_url'            => $coverUrl,
         ]);
 
-        return $pubResponse->json();
+        $result = $pubResponse->json() ?? [];
+        if ($coverUrl && !empty($publishedId)) {
+            // Meta published the container that carried cover_url.
+            $thumbnail = ['requested' => true, 'applied' => true, 'message' => 'Custom Reel cover applied.'];
+        }
+        if ($thumbnail !== null) {
+            $result['thumbnail'] = $thumbnail;
+        }
+
+        return $result;
     }
 
     /**
@@ -1073,37 +1067,18 @@ class FacebookGraphService
         $isIgToken = str_starts_with($accessToken, 'IGAA');
         $apiBase   = $isIgToken ? 'https://graph.instagram.com/v23.0' : "{$this->baseUrl}/{$this->apiVersion}";
 
-        foreach ($filesOrUrls as $index => $fileOrUrl) {
-            $mediaUrl = null;
-            if (is_object($fileOrUrl) && method_exists($fileOrUrl, 'getRealPath')) {
-                $ext = method_exists($fileOrUrl, 'getClientOriginalExtension') ? ($fileOrUrl->getClientOriginalExtension() ?: 'jpg') : 'jpg';
-                $uuid = \Illuminate\Support\Str::uuid()->toString();
-                $filename = "{$uuid}.{$ext}";
-                $fileOrUrl->storeAs("public/posts/{$workspaceId}", $filename);
-                $localAsset = asset("storage/posts/{$workspaceId}/{$filename}");
-                $publicDomain = env('PUBLIC_MEDIA_URL');
-                if (!empty($publicDomain)) {
-                    $mediaUrl = rtrim($publicDomain, '/') . "/storage/posts/{$workspaceId}/{$filename}";
-                } elseif (str_starts_with(env('APP_URL'), 'https://')) {
-                    $mediaUrl = $localAsset;
-                } else {
-                    $mediaUrl = $this->uploadToCloudinary($fileOrUrl, $filename, 'image') ?? $localAsset;
-                }
-            } elseif (is_string($fileOrUrl) && file_exists($fileOrUrl)) {
-                $filename = basename($fileOrUrl);
-                $localAsset = asset("storage/posts/{$workspaceId}/{$filename}");
-                $publicDomain = env('PUBLIC_MEDIA_URL');
-                if (!empty($publicDomain)) {
-                    $mediaUrl = rtrim($publicDomain, '/') . "/storage/posts/{$workspaceId}/{$filename}";
-                } elseif (str_starts_with(env('APP_URL'), 'https://')) {
-                    $mediaUrl = $localAsset;
-                } else {
-                    $mediaUrl = $this->uploadToCloudinary($fileOrUrl, $filename, 'image') ?? $localAsset;
-                }
-            } else {
-                $mediaUrl = (string) $fileOrUrl;
+        // Resolve and validate every image URL before creating any container, so one bad image fails
+        // the whole carousel up front instead of leaving orphaned item containers on Meta.
+        $mediaUrls = [];
+        foreach (array_values($filesOrUrls) as $index => $fileOrUrl) {
+            try {
+                $mediaUrls[$index] = $this->publicMedia()->resolveForInstagram($fileOrUrl, $workspaceId, 'image');
+            } catch (\App\Exceptions\InstagramMediaException $e) {
+                throw new \App\Exceptions\InstagramMediaException('Carousel image ' . ($index + 1) . ': ' . $e->getMessage(), 0, $e);
             }
+        }
 
+        foreach ($mediaUrls as $index => $mediaUrl) {
             $itemContainerUrl = "{$apiBase}/{$igAccountId}/media";
             $itemResponse = $this->client()->post($itemContainerUrl, [
                 'media_type'        => 'IMAGE',
@@ -1135,20 +1110,7 @@ class FacebookGraphService
             $this->logAndThrowMetaError('publishInstagramCarousel (create parent container)', $carouselContainerUrl, $igAccountId, $carouselResponse);
         }
 
-        for ($i = 0; $i < 5; $i++) {
-            sleep(2);
-            $statusRes = $this->client()->get("{$apiBase}/{$carouselContainerId}", [
-                'fields'       => 'status_code',
-                'access_token' => $accessToken,
-            ]);
-            $statusCode = $statusRes->json('status_code');
-            if ($statusCode === 'FINISHED' || $statusCode === 'FINISHED_SUCCESS' || empty($statusCode)) {
-                break;
-            }
-            if ($statusCode === 'ERROR') {
-                throw new Exception('Instagram carousel container processing failed on Meta servers.');
-            }
-        }
+        $this->waitForInstagramContainer($apiBase, (string) $carouselContainerId, $accessToken, 5, 2, 'carousel');
 
         $publishUrl = "{$apiBase}/{$igAccountId}/media_publish";
         $pubResponse = $this->client()->post($publishUrl, [
@@ -1163,6 +1125,7 @@ class FacebookGraphService
         \Illuminate\Support\Facades\Log::info('[Instagram Carousel Publishing Flow]', [
             'workspace_id'         => $workspaceId,
             'item_count'           => count($childContainerIds),
+            'public_media_urls'    => array_values($mediaUrls),
             'instagram_account_id' => $igAccountId,
             'carousel_container_id'=> $carouselContainerId,
             'published_media_id'   => $pubResponse->json('id'),
@@ -2550,15 +2513,104 @@ class FacebookGraphService
         }
 
         $igAccountId = $this->resolveInstagramAccountId($accessToken, $igAccountId);
+        $this->lastInstagramMediaListError = null;
+
+        // Date-only filters are calendar days in the reporting timezone (same as the Facebook dashboard),
+        // not UTC days. A post published at 01:00 IST belongs to that IST day.
+        $sTime = $this->reportingDayBound($startDate, false);
+        $eTime = $this->reportingDayBound($endDate, true);
 
         $ttl = ($cacheTtl !== null && $cacheTtl > 0) ? $cacheTtl : 300;
-        $startStr = $startDate ? \Carbon\Carbon::parse($startDate)->format('Ymd') : '';
-        $endStr   = $endDate ? \Carbon\Carbon::parse($endDate)->format('Ymd') : '';
-        $cacheKey = "ig_media_list_" . md5($accessToken . ($igAccountId ?? '')) . "_{$limit}_{$startStr}_{$endStr}" . ($ttl < 300 ? "_{$ttl}" : "");
+        $startStr = $sTime ? $sTime->format('Ymd') : '';
+        $endStr   = $eTime ? $eTime->format('Ymd') : '';
+        $version  = self::instagramDashboardCacheVersion((string) $igAccountId);
+        $cacheKey = "ig_media_list_" . md5($accessToken . ($igAccountId ?? '')) . "_{$limit}_{$startStr}_{$endStr}_v{$version}" . ($ttl < 300 ? "_{$ttl}" : "");
         if ($forceRefresh) {
             \Illuminate\Support\Facades\Cache::forget($cacheKey);
+        } else {
+            $cached = \Illuminate\Support\Facades\Cache::get($cacheKey);
+            if (is_array($cached)) {
+                return $cached;
+            }
         }
-        return \Illuminate\Support\Facades\Cache::remember($cacheKey, $ttl, function () use ($accessToken, $igAccountId, $limit, $startDate, $endDate) {
+
+        $result = $this->fetchInstagramMediaItems($accessToken, $igAccountId, $limit, $sTime, $eTime);
+
+        // Only cache complete, successful fetches. A failed Meta call must not be cached as "no posts".
+        if ($result['error'] === null) {
+            \Illuminate\Support\Facades\Cache::put($cacheKey, $result['items'], $ttl);
+        } else {
+            $this->lastInstagramMediaListError = $result['error'];
+        }
+
+        return $result['items'];
+    }
+
+    /** Error from the most recent getInstagramMediaList() call that could not fetch media from Meta (null = OK). */
+    protected ?string $lastInstagramMediaListError = null;
+
+    public function lastInstagramMediaListError(): ?string
+    {
+        return $this->lastInstagramMediaListError;
+    }
+
+    /** Calendar-day timezone used by the dashboards for date-range filters and day buckets. */
+    public const REPORTING_TIMEZONE = 'Asia/Kolkata';
+
+    /**
+     * Start/end of a reporting-timezone calendar day. Accepts 'Y-m-d' strings or DateTime instances.
+     */
+    public function reportingDayBound($date, bool $endOfDay): ?\Carbon\Carbon
+    {
+        if ($date === null || $date === '' || $date === false || $date === 'all' || $date === 'null') {
+            return null;
+        }
+
+        $day = $date instanceof \DateTimeInterface
+            ? \Carbon\Carbon::instance($date)->setTimezone(self::REPORTING_TIMEZONE)
+            : \Carbon\Carbon::parse((string) $date, self::REPORTING_TIMEZONE);
+
+        return $endOfDay ? $day->endOfDay() : $day->startOfDay();
+    }
+
+    /**
+     * Cache generation for an Instagram account's dashboard data. Bumped whenever the app publishes to that
+     * account so every cached media list / stats / posts payload for it is bypassed immediately.
+     */
+    public static function instagramDashboardCacheVersion(string $igAccountId): int
+    {
+        return (int) \Illuminate\Support\Facades\Cache::get("ig_dash_ver_{$igAccountId}", 0);
+    }
+
+    /**
+     * Invalidate cached Instagram dashboard data after a post is published to Instagram.
+     * Bumps the cache generation of the account that was published to and of the workspace's Instagram integration.
+     */
+    public static function invalidateInstagramDashboardCache(int $workspaceId, ?string $publishedAccountId = null): void
+    {
+        $accountIds = \App\Models\Integration::where('workspace_id', $workspaceId)
+            ->where('platform', 'instagram')
+            ->pluck('account_id')
+            ->filter()
+            ->map(fn ($id) => (string) $id)
+            ->push((string) $publishedAccountId)
+            ->filter()
+            ->unique();
+
+        foreach ($accountIds as $accountId) {
+            \Illuminate\Support\Facades\Cache::forever("ig_dash_ver_{$accountId}", self::instagramDashboardCacheVersion($accountId) + 1);
+            \Illuminate\Support\Facades\Cache::forget("ig_profile_{$accountId}"); // media_count changed
+        }
+    }
+
+    /**
+     * Fetch media (newest first) for an Instagram account plus per-media insights.
+     *
+     * @return array{items: array, error: ?string}
+     */
+    protected function fetchInstagramMediaItems(string $accessToken, $igAccountId, int $limit, ?\Carbon\Carbon $sTime, ?\Carbon\Carbon $eTime): array
+    {
+            $fetchError = null;
             $isIgToken  = str_starts_with($accessToken, 'IGAA');
             $baseUrl    = $isIgToken ? 'https://graph.instagram.com/v23.0' : "{$this->baseUrl}/{$this->apiVersion}";
             $targetNode = !empty($igAccountId) ? $igAccountId : 'me';
@@ -2572,7 +2624,6 @@ class FacebookGraphService
                     'limit'        => min(100, max(1, $limit)),
                     'access_token' => $accessToken,
                 ];
-                $sTime = $startDate ? \Carbon\Carbon::parse($startDate)->startOfDay() : null;
                 $pageIter = 0;
                 $safetyLimit = 200;
 
@@ -2597,6 +2648,7 @@ class FacebookGraphService
                             'status' => $response->status(),
                             'error'  => $response->json('error') ?? $response->body(),
                         ]);
+                        $fetchError = (string) ($response->json('error.message') ?? "Instagram media request failed with HTTP {$response->status()}");
                         break;
                     }
 
@@ -2620,12 +2672,11 @@ class FacebookGraphService
                 }
 
                 if (empty($rawItems)) {
-                    return [];
+                    return ['items' => [], 'error' => $fetchError];
                 }
 
                 // Filter by date range if provided
                 $items = [];
-                $eTime = $endDate ? \Carbon\Carbon::parse($endDate)->endOfDay() : null;
 
                 foreach ($rawItems as $rawItem) {
                     if ($sTime && $eTime) {
@@ -2638,7 +2689,7 @@ class FacebookGraphService
                 }
 
                 if (empty($items)) {
-                    return [];
+                    return ['items' => [], 'error' => $fetchError];
                 }
 
                 // Concurrently fetch insights for all media items using Http::pool()
@@ -2732,12 +2783,11 @@ class FacebookGraphService
                     'total_shares' => $totalShares,
                 ]);
 
-                return $mediaItems;
+                return ['items' => $mediaItems, 'error' => $fetchError];
             } catch (\Exception $e) {
                 \Illuminate\Support\Facades\Log::warning("[Instagram API Exception] getInstagramMediaList: " . $e->getMessage());
-                return [];
+                return ['items' => [], 'error' => $e->getMessage()];
             }
-        });
     }
 
     /**
