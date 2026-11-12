@@ -3379,7 +3379,7 @@ Route::prefix('v1')->group(function () {
             'status'          => 'required|in:draft,scheduled,published',
             'scheduled_at'    => 'nullable|date',
             'platforms'       => 'nullable',
-            'youtube_privacy' => 'nullable|in:public,unlisted,private',
+            'youtube_privacy' => 'nullable|in:' . implode(',', \App\Support\PublishingRules::YOUTUBE_PRIVACY),
             'clear_media'     => 'nullable|boolean',
             'images'          => 'nullable|array|max:' . \App\Support\PublishingRules::CAROUSEL_MAX,
             'images.*'        => 'nullable|file|image|max:' . (\App\Support\PublishingRules::MAX_IMAGE_MB * 1024),
@@ -3399,6 +3399,7 @@ Route::prefix('v1')->group(function () {
             'images.*.image'  => 'Only image files (JPG, PNG, GIF, WebP) can be attached as images.',
             'video.max'       => 'The video must be ' . \App\Support\PublishingRules::MAX_VIDEO_MB . ' MB or smaller.',
             'video.mimes'     => 'The video must be an MP4, MOV, AVI or MKV file.',
+            'youtube_privacy.in' => 'YouTube visibility must be Public or Private.',
         ]);
 
         $workspaceId = (int) $validated['workspace_id'];
@@ -3419,7 +3420,6 @@ Route::prefix('v1')->group(function () {
                 return response()->json(['success' => false, 'message' => 'Post not found in this workspace.'], 404);
             }
         }
-        $youtubePrivacy = in_array($validated['youtube_privacy'] ?? '', ['public', 'unlisted', 'private']) ? $validated['youtube_privacy'] : 'unlisted';
         $videoTitle = !empty($validated['video_title']) ? $validated['video_title'] : (!empty($message) ? mb_substr($message, 0, 60) : 'Uploaded Video');
 
         $targetPlatforms = $request->input('platforms', ['Facebook']);
@@ -3445,6 +3445,28 @@ Route::prefix('v1')->group(function () {
             ['Facebook', 'Instagram', 'YouTube'],
             fn ($p) => in_array($p, $targetPlatforms, true)
         ));
+
+        // YouTube visibility: Public (default) or Private. Without a choice in the request, a saved post keeps its
+        // stored choice. An old YouTube post saved as Unlisted (no longer offered) stays as it is while it remains a
+        // draft, and cannot be scheduled or published until the user picks Public or Private (never silently Public).
+        $youtubePrivacy = $validated['youtube_privacy'] ?? null;
+        if ($youtubePrivacy === null) {
+            $storedPrivacy = $draft?->youtube_privacy;
+            if (\App\Support\PublishingRules::isValidYoutubePrivacy($storedPrivacy)) {
+                $youtubePrivacy = $storedPrivacy;
+            } elseif ($draft && $storedPrivacy !== null && $requiresYouTube) {
+                if ($status !== 'draft') {
+                    return response()->json([
+                        'success' => false,
+                        'message' => \App\Support\PublishingRules::YOUTUBE_PRIVACY_REQUIRED,
+                        'errors'  => ['youtube_privacy' => [\App\Support\PublishingRules::YOUTUBE_PRIVACY_REQUIRED]],
+                    ], 422);
+                }
+                $youtubePrivacy = $storedPrivacy;
+            } else {
+                $youtubePrivacy = \App\Support\PublishingRules::DEFAULT_YOUTUBE_PRIVACY;
+            }
+        }
 
         // B9/B15: composition rules are enforced here as well, so the API never trusts the UI.
         $newImages = $request->hasFile('images') ? \Illuminate\Support\Arr::wrap($request->file('images')) : [];
@@ -3725,6 +3747,20 @@ Route::prefix('v1')->group(function () {
             ? \Illuminate\Support\Facades\Storage::disk('public')->path($thumbnailRelative)
             : null;
 
+        // YouTube's own custom-thumbnail limits (JPG/PNG, at most 2 MB) are checked before anything is published,
+        // so the user's exact image is never dropped after the video is already live.
+        if ($requiresYouTube && $status !== 'draft' && $thumbnailAbsolute
+            && ($thumbProblem = app(\App\Services\YouTubeThumbnailPublisher::class)->fileProblem($thumbnailAbsolute))) {
+            if ($thumbnailUpload) {
+                \Illuminate\Support\Facades\Storage::disk('public')->delete($thumbnailRelative);
+            }
+            return response()->json([
+                'success' => false,
+                'message' => $thumbProblem,
+                'errors'  => ['thumbnail' => [$thumbProblem]],
+            ], 422);
+        }
+
         // Create (or update the edited draft's) database record
         $recordAttributes = [
             'workspace_id'     => $workspaceId,
@@ -3924,6 +3960,7 @@ Route::prefix('v1')->group(function () {
                     'status'    => 'published',
                     'id'        => $igMediaId,
                     'timestamp' => now()->toIso8601String(),
+                    'account_id' => (string) $igAccountId, // owner, for the Overview deletion check
                 ];
                 if ($postType === 'video' && $thumbnailAbsolute) {
                     $platformStatuses['instagram']['thumbnail'] = $igResult['thumbnail']
@@ -3955,9 +3992,9 @@ Route::prefix('v1')->group(function () {
                     $videoPath = $storedMediaFiles[0]['file_path'] ?? $request->file('video')->getRealPath();
                     $ytService = resolve(\App\Services\YouTubeService::class);
 
-                    $ytResult = $thumbnailAbsolute
-                        ? $ytService->uploadVideo($ytConn, $videoPath, $videoTitle, $message, $youtubePrivacy, null, '22', $thumbnailAbsolute)
-                        : $ytService->uploadVideo($ytConn, $videoPath, $videoTitle, $message, $youtubePrivacy);
+                    // The video is uploaded first; the custom thumbnail is a separate step (below) so its outcome
+                    // is reported, and retried, on its own without uploading the video again.
+                    $ytResult = $ytService->uploadVideo($ytConn, $videoPath, $videoTitle, $message, $youtubePrivacy);
 
                     $ytVideoId = $ytResult['id'] ?? null;
                     $post->yt_video_id = $ytVideoId;
@@ -3967,10 +4004,12 @@ Route::prefix('v1')->group(function () {
                         'id'             => $ytVideoId,
                         'url'            => $ytResult['url'] ?? "https://www.youtube.com/watch?v={$ytVideoId}",
                         'privacy_status' => $youtubePrivacy,
+                        'channel_id'     => $ytConn->channel_id, // owner, for the Overview deletion check
                         'timestamp'      => now()->toIso8601String(),
                     ];
-                    if ($thumbnailAbsolute) {
-                        $platformStatuses['youtube']['thumbnail'] = \App\Support\PublishingRules::youtubeThumbnailStatus($ytResult);
+                    if ($thumbnailAbsolute && $ytVideoId) {
+                        $platformStatuses['youtube']['thumbnail'] = app(\App\Services\YouTubeThumbnailPublisher::class)
+                            ->apply($ytConn, $ytVideoId, $thumbnailAbsolute, $thumbnailRelative);
                     }
                     $publishedSummary[] = "YouTube ({$ytConn->channel_name}) [{$youtubePrivacy}]";
                 } else {
@@ -4196,6 +4235,26 @@ Route::prefix('v1')->group(function () {
     });
 
     // ── Retry & Duplicate Post Actions ───────────────────────────────────────────
+    // Retry only the YouTube custom thumbnail of an already-published video (thumbnails.set with the saved file).
+    // The video is never uploaded again and the post's publishing status is not changed.
+    Route::post('/posts/{id}/youtube-thumbnail/retry', function (Request $request, $id) use ($findAuthorizedPost) {
+        [$post, $error] = $findAuthorizedPost($request, $id);
+        if ($error) return $error;
+
+        $outcome = app(\App\Services\YouTubeThumbnailPublisher::class)
+            ->applyToPost($post, (int) config('services.youtube.thumbnail_wait_seconds', 30));
+        if (isset($outcome['error'])) {
+            return response()->json(['success' => false, 'message' => $outcome['error']], 422);
+        }
+
+        $thumbnail = $outcome['thumbnail'];
+        return response()->json([
+            'success'   => $thumbnail['applied'],
+            'message'   => $thumbnail['message'],
+            'thumbnail' => $thumbnail,
+        ], $thumbnail['applied'] || $thumbnail['status'] === 'pending' ? 200 : 422);
+    });
+
     Route::post('/posts/{id}/retry', function (Request $request, $id) use ($findAuthorizedPost) {
         [$post, $error] = $findAuthorizedPost($request, $id);
         if ($error) return $error;
@@ -4279,6 +4338,25 @@ Route::prefix('v1')->group(function () {
         return response()->json(['success' => true, 'message' => 'Post duplicated as a new draft!', 'data' => $newPost->load('media')]);
     });
 
+    // ── Public post media (thumbnails) ─────────────────────────────────────────
+    // Serves files of the public disk's posts/ folder through PHP, so thumbnails work even where the
+    // public/storage symlink is missing (shared hosting). Public on purpose: <img> tags cannot send a bearer
+    // token, and these files are the same ones already published to social platforms.
+    Route::get('/media/{path}', function (string $path) {
+        $service  = app(\App\Services\PostMediaPreviewService::class);
+        $relative = $service->safeRelativePath($path);
+        $disk     = \Illuminate\Support\Facades\Storage::disk('public');
+        if ($relative === null || !$disk->exists($relative)) {
+            abort(404, 'Media not found.');
+        }
+
+        return response()->file($disk->path($relative), [
+            'Content-Type'           => $service->mimeType($relative),
+            'Cache-Control'          => 'public, max-age=86400',
+            'X-Content-Type-Options' => 'nosniff',
+        ]);
+    })->where('path', 'posts/.+')->withoutMiddleware(['auth:sanctum', 'role.permissions']);
+
     // ── Paginated Publishing History & Drafts Endpoint ────────────────────────
     Route::get('/posts/history', function (Request $request) use ($resolvePlatformList) {
         $requested = $request->query('workspace_id');
@@ -4316,12 +4394,15 @@ Route::prefix('v1')->group(function () {
         $totalPages   = (int)ceil($totalRecords / $perPage);
         $lastPage     = max(1, $totalPages);
 
+        $mediaPreview = app(\App\Services\PostMediaPreviewService::class);
         $posts = $query->skip(($page - 1) * $perPage)
             ->take($perPage)
             ->get()
-            ->map(function ($p) use ($resolvePlatformList) {
+            ->map(function ($p) use ($resolvePlatformList, $mediaPreview) {
                 $p->platform_list = $resolvePlatformList($p);
                 $p->unsetRelation('legacyPost');
+                // Thumbnail URLs are rebuilt from the stored file (see PostMediaPreviewService); file_url is kept as is.
+                $mediaPreview->decorate($p);
 
                 // If post is published in DB but has individual platform failures, present status as partial for frontend UI
                 if ($p->status === 'published' && !empty($p->platform_statuses)) {
@@ -5658,7 +5739,7 @@ Route::prefix('v1')->group(function () {
             }
         }
 
-        $postsCacheKey = 'fb_latest_posts_v9_' . sha1(implode('|', [
+        $postsCacheKey = 'fb_latest_posts_v10_' . sha1(implode('|', [
             $workspaceId,
             $fbPage->page_id,
             $page,
@@ -5683,25 +5764,35 @@ Route::prefix('v1')->group(function () {
         $buildQuery = function () use ($workspaceId, $pageIds, $fbPage, $allPosts, $startDate, $endDate) {
             $q = \App\Models\FacebookPost::with('media')
                 ->where('workspace_id', $workspaceId)
-                ->whereNotNull('fb_post_id')
-                ->where('fb_post_id', '!=', '')
-                ->where(function ($sub) {
-                    $sub->where('status', 'published')
-                        ->orWhereNull('status');
+                ->where(function ($outer) use ($pageIds, $fbPage) {
+                    // Posts on the Facebook page (published; deleted ones keep their record and show as Deleted)
+                    $outer->where(function ($onPage) use ($pageIds, $fbPage) {
+                        $onPage->whereNotNull('fb_post_id')
+                            ->where('fb_post_id', '!=', '')
+                            ->where(function ($sub) {
+                                $sub->where('status', 'published')
+                                    ->orWhereNull('status');
+                            });
+                        if (!empty($pageIds) && count($pageIds) > 0) {
+                            $onPage->where(function ($sub) use ($pageIds, $fbPage) {
+                                $sub->whereIn('facebook_page_id', $pageIds)
+                                    ->orWhere('fb_post_id', 'like', $fbPage->page_id . '\_%')
+                                    ->orWhereNull('facebook_page_id');
+                            });
+                        } else {
+                            $onPage->where(function ($sub) use ($fbPage) {
+                                $sub->where('fb_post_id', 'like', $fbPage->page_id . '\_%')
+                                    ->orWhereNull('facebook_page_id');
+                            });
+                        }
+                    })
+                    // Marketing Command posts meant for Facebook that are scheduled, failed, or failed on Facebook only
+                    ->orWhere(function ($app) {
+                        $app->where(fn ($n) => $n->whereNull('fb_post_id')->orWhere('fb_post_id', ''))
+                            ->where('platforms', 'like', '%"Facebook"%')
+                            ->whereIn('status', ['scheduled', 'processing', 'failed', 'published']);
+                    });
                 });
-
-            if (!empty($pageIds) && count($pageIds) > 0) {
-                $q->where(function ($sub) use ($pageIds, $fbPage) {
-                    $sub->whereIn('facebook_page_id', $pageIds)
-                        ->orWhere('fb_post_id', 'like', $fbPage->page_id . '\_%')
-                        ->orWhereNull('facebook_page_id');
-                });
-            } else {
-                $q->where(function ($sub) use ($fbPage) {
-                    $sub->where('fb_post_id', 'like', $fbPage->page_id . '\_%')
-                        ->orWhereNull('facebook_page_id');
-                });
-            }
 
             if (!$allPosts && $startDate && $endDate) {
                 $q->where(function ($sub) use ($startDate, $endDate) {
@@ -5709,6 +5800,10 @@ Route::prefix('v1')->group(function () {
                         ->orWhere(function ($nested) use ($startDate, $endDate) {
                             $nested->whereNull('published_at')
                                    ->whereBetween('created_at', [$startDate, $endDate]);
+                        })
+                        ->orWhere(function ($nested) use ($startDate, $endDate) {
+                            $nested->whereNull('published_at')
+                                   ->whereBetween('scheduled_at', [$startDate, $endDate]);
                         });
                 });
             }
@@ -5742,7 +5837,7 @@ Route::prefix('v1')->group(function () {
         }
 
         $query = $buildQuery();
-        $query->orderByRaw('COALESCE(published_at, created_at) DESC');
+        $query->orderByRaw('COALESCE(published_at, scheduled_at, created_at) DESC');
 
         $totalRecords = $query->count();
         $totalPages   = max(1, (int) ceil($totalRecords / $perPage));
@@ -5751,13 +5846,17 @@ Route::prefix('v1')->group(function () {
             ->take($perPage)
             ->get();
 
-        $posts = $rawPosts->map(function ($p) use ($fbPage) {
-            $mediaFirst = $p->media->first();
-            $imageUrl = $mediaFirst ? $mediaFirst->file_url : null;
-            if (!$imageUrl && !empty($p->fb_post_id)) {
-                $cacheKey = "fb_post_pic_{$p->fb_post_id}";
-                $imageUrl = \Illuminate\Support\Facades\Cache::get($cacheKey);
-            }
+        $statusPresenter = app(\App\Services\OverviewPostStatus::class)->load($rawPosts);
+        $mediaPreview = app(\App\Services\PostMediaPreviewService::class);
+
+        $posts = $rawPosts->map(function ($p) use ($fbPage, $statusPresenter, $mediaPreview) {
+            // Thumbnail from the stored file: custom thumbnail -> first image -> platform's generated thumbnail ->
+            // video frame (rendered by the browser) -> placeholder. Stored CDN/storage URLs are not used directly.
+            $preview = $mediaPreview->previewFor($p, array_values(array_filter([
+                $p->fb_post_id, $p->ig_media_id ? "ig_{$p->ig_media_id}" : null, $p->yt_video_id ? "yt_{$p->yt_video_id}" : null,
+            ])));
+            $imageUrl = $preview['kind'] === 'image' ? $preview['url'] : null;
+            $statuses = $statusPresenter->platformStatuses($p);
 
             $cachedViews = !empty($p->fb_post_id) ? \Illuminate\Support\Facades\Cache::get("fb_video_views_{$p->fb_post_id}") : null;
             $rawType = strtolower($p->post_type ?: 'single_image');
@@ -5774,20 +5873,25 @@ Route::prefix('v1')->group(function () {
             // Real views only: return Meta-provided post_media_view or existing video/reel views fallback.
             $views = $p->views_count !== null ? (int)$p->views_count : ($cachedViews !== null ? (int)$cachedViews : null);
 
-            $permalink = $p->link_url ?: (!empty($p->fb_post_id) ? "https://www.facebook.com/{$p->fb_post_id}" : null);
+            $permalink = !empty($p->fb_post_id) ? ($p->link_url ?: "https://www.facebook.com/{$p->fb_post_id}") : null;
 
             return [
                 'id'               => $p->id,
                 'fb_post_id'       => $p->fb_post_id,
                 'content'          => $p->content,
                 'image_url'        => $imageUrl,
+                'thumbnail'        => $preview,
+                'status'           => \App\Services\OverviewPostStatus::overall($statuses),
+                'platform_status'  => $statuses['facebook'] ?? null,
+                'statuses'         => $statuses,
+                'date_kind'        => $p->published_at ? 'published' : ($p->scheduled_at ? 'scheduled' : 'created'),
                 'permalink'        => $permalink,
                 'permalink_url'    => $permalink,
                 'media_count'      => $p->media->count(),
                 'post_type'        => $rawType,
                 'formatted_type'   => $formattedType,
                 'page_name'        => $p->page?->page_name ?? $fbPage?->page_name ?? '',
-                'published_at'     => $p->published_at ? $p->published_at->toIso8601String() : ($p->created_at ? $p->created_at->toIso8601String() : null),
+                'published_at'     => $p->published_at ? $p->published_at->toIso8601String() : ($p->scheduled_at ? $p->scheduled_at->toIso8601String() : ($p->created_at ? $p->created_at->toIso8601String() : null)),
                 'views'            => $views,
                 'views_count'      => $views,
                 'reach_count'      => null, // Organic post-level reach is not provided by Meta Graph API under Page tokens
@@ -6083,7 +6187,7 @@ Route::prefix('v1')->group(function () {
             }
         }
 
-        $postsCacheKey = 'ig_posts_v7_' . sha1(implode('|', [
+        $postsCacheKey = 'ig_posts_v8_' . sha1(implode('|', [
             $workspaceId,
             $igInteg->account_id,
             $page,
@@ -6144,12 +6248,63 @@ Route::prefix('v1')->group(function () {
             return strcmp((string)($b['timestamp'] ?? ''), (string)($a['timestamp'] ?? ''));
         });
 
-        $totalRecords = count($mediaItems);
+        // Marketing Command's own posts for this Instagram account: live ones get their custom thumbnail and
+        // per-platform statuses; ones no longer in Meta's list (deleted / unable to verify) and scheduled or
+        // failed ones are listed from the database, with the status from the background verification.
+        $liveIds = [];
+        foreach ($mediaItems as $item) {
+            $liveIds[(string) ($item['id'] ?? '')] = true;
+        }
+        $appPostsQuery = \App\Models\FacebookPost::with('media')
+            ->where('workspace_id', $workspaceId)
+            ->where(function ($q) {
+                $q->where(fn ($w) => $w->whereNotNull('ig_media_id')->where('ig_media_id', '!=', ''))
+                  ->orWhere(fn ($w) => $w->where('platforms', 'like', '%"Instagram"%')->whereIn('status', ['scheduled', 'processing', 'failed', 'published']));
+            });
+        $appPosts = $appPostsQuery->get();
+        $appByMedia = $appPosts->filter(fn ($p) => !empty($p->ig_media_id))->keyBy(fn ($p) => (string) $p->ig_media_id);
+        $statusPresenter = app(\App\Services\OverviewPostStatus::class)->load($appPosts);
+        $mediaPreview = app(\App\Services\PostMediaPreviewService::class);
+
+        // A post seen in Meta's list exists now: record it (this also records which account owns it).
+        if (\App\Models\PostPlatformVerification::available() && $mediaError === null) {
+            $verifier = app(\App\Services\PlatformPostVerifier::class);
+            foreach ($appByMedia as $mediaId => $appPost) {
+                if (isset($liveIds[$mediaId])) {
+                    try {
+                        $verifier->record($appPost, 'instagram', $mediaId, 'exists', (string) $igInteg->account_id);
+                    } catch (\Throwable $e) {
+                        \Illuminate\Support\Facades\Log::warning('[INSTAGRAM POSTS] verification record failed: ' . $e->getMessage());
+                    }
+                }
+            }
+            $statusPresenter->load($appPosts);
+        }
+
+        $inRange = function ($post) use ($allPosts, $startDate, $endDate) {
+            if ($allPosts || !$startDate || !$endDate) return true;
+            $when = $post->published_at ?? $post->scheduled_at ?? $post->created_at;
+            return $when && $when->between($startDate, $endDate);
+        };
+        $entries = [];
+        foreach ($mediaItems as $item) {
+            $entries[] = ['ts' => \Carbon\Carbon::parse($item['timestamp'] ?? '1970-01-01')->getTimestamp(), 'live' => $item, 'post' => $appByMedia[(string) ($item['id'] ?? '')] ?? null];
+        }
+        foreach ($appPosts as $appPost) {
+            $mediaId = (string) $appPost->ig_media_id;
+            if (($mediaId !== '' && isset($liveIds[$mediaId])) || !$inRange($appPost)) continue;
+            if ($mediaId === '' && ($appPost->platform_statuses['instagram']['status'] ?? null) !== 'failed' && !in_array($appPost->status, ['scheduled', 'processing', 'failed'], true)) continue;
+            $when = $appPost->published_at ?? $appPost->scheduled_at ?? $appPost->created_at;
+            $entries[] = ['ts' => $when ? $when->getTimestamp() : 0, 'live' => null, 'post' => $appPost];
+        }
+        usort($entries, fn ($a, $b) => $b['ts'] <=> $a['ts']);
+
+        $totalRecords = count($entries);
         $totalPages = max(1, (int) ceil($totalRecords / $perPage));
         $safePage = min($page, $totalPages);
-        $slice = array_slice($mediaItems, ($safePage - 1) * $perPage, $perPage);
+        $slice = array_slice($entries, ($safePage - 1) * $perPage, $perPage);
 
-        $posts = array_map(function ($item) use ($igInteg) {
+        $liveRow = function ($item) use ($igInteg) {
             $mediaType = strtoupper((string)($item['media_type'] ?? ''));
             $productType = strtoupper((string)($item['media_product_type'] ?? ''));
             if ($productType === 'REELS' || $mediaType === 'REELS') {
@@ -6215,6 +6370,81 @@ Route::prefix('v1')->group(function () {
                 'shares_supported' => (bool)($item['shares_supported'] ?? false),
                 'views_supported'  => (bool)($item['views_supported'] ?? false),
             ];
+        };
+
+        $posts = array_map(function ($entry) use ($liveRow, $statusPresenter, $mediaPreview, $igInteg) {
+            $post = $entry['post'];
+            $keys = $post ? array_values(array_filter(["ig_{$post->ig_media_id}", $post->fb_post_id, $post->yt_video_id ? "yt_{$post->yt_video_id}" : null])) : [];
+            if ($entry['live']) {
+                $row = $liveRow($entry['live']);
+                $live = ['platform' => 'Instagram', 'status' => 'published', 'label' => 'Published', 'message' => 'On Instagram now.', 'reason' => null, 'verified_at' => now()->toIso8601String(), 'deleted_at' => null];
+                $statuses = $post ? array_merge($statusPresenter->platformStatuses($post), ['instagram' => $live]) : ['instagram' => $live];
+                $metaThumb = $row['thumbnail_url'];
+                $isVideo = in_array($row['post_type'], ['reel', 'video'], true);
+                // Custom thumbnail uploaded in Marketing Command first; otherwise Meta's own (cover / first image).
+                $preview = $post ? $mediaPreview->previewFor($post, $keys) : null;
+                $thumbnail = ($preview && $preview['source'] === 'custom')
+                    ? $preview
+                    : ($metaThumb
+                        ? ['url' => $metaThumb, 'kind' => 'image', 'status' => 'remote', 'source' => $isVideo ? 'platform' : 'image', 'is_video' => $isVideo, 'media_count' => $row['media_count'] ?? null, 'video_url' => null]
+                        : ($preview ?? ['url' => null, 'kind' => 'none', 'status' => 'none', 'source' => 'none', 'is_video' => $isVideo, 'media_count' => null, 'video_url' => null]));
+                return $row + [
+                    'thumbnail'       => $thumbnail,
+                    'status'          => \App\Services\OverviewPostStatus::overall($statuses),
+                    'platform_status' => $statuses['instagram'],
+                    'statuses'        => $statuses,
+                    'post_id'         => $post?->id,
+                    'date_kind'       => 'published',
+                ];
+            }
+
+            // Only in Marketing Command (deleted / unverifiable / scheduled / failed)
+            $statuses = $statusPresenter->platformStatuses($post);
+            if (($statuses['instagram']['reason'] ?? null) === 'not_checked') {
+                // Missing from Instagram's current list but not checked yet: never show it as Published.
+                $statuses['instagram'] = array_merge($statuses['instagram'], [
+                    'status' => 'unknown', 'label' => \App\Services\OverviewPostStatus::LABELS['unknown'], 'reason' => 'not_in_list',
+                    'message' => "Not in Instagram's current post list; the background check has not confirmed whether it was deleted yet.",
+                ]);
+            }
+            $preview = $mediaPreview->previewFor($post, $keys);
+            $rawType = match ($post->post_type) { 'multi_image' => 'multi_image', 'video', 'reel' => 'reel', default => 'single_image' };
+            $when = $post->published_at ?? $post->scheduled_at ?? $post->created_at;
+            return [
+                'id'               => 'mc_' . $post->id,
+                'post_id'          => $post->id,
+                'ig_media_id'      => $post->ig_media_id,
+                'content_id'       => $post->ig_media_id,
+                'platform'         => 'instagram',
+                'title'            => $post->content ? strtok($post->content, "\n") : 'Instagram Post',
+                'content'          => $post->content,
+                'image_url'        => $preview['kind'] === 'image' ? $preview['url'] : null,
+                'thumbnail_url'    => $preview['kind'] === 'image' ? $preview['url'] : null,
+                'thumbnail'        => $preview,
+                'media_url'        => null,
+                'post_url'         => null,
+                'permalink'        => null,
+                'media_count'      => $post->media->count(),
+                'post_type'        => $rawType,
+                'formatted_type'   => match ($rawType) { 'multi_image' => 'Carousel', 'reel' => 'Reel', default => 'Photo' },
+                'page_name'        => '@' . ltrim((string) ($igInteg->account_name ?? ''), '@'),
+                'published_at'     => $when?->toIso8601String(),
+                'date_kind'        => $post->published_at ? 'published' : ($post->scheduled_at ? 'scheduled' : 'created'),
+                'views'            => null,
+                'views_count'      => null,
+                'reach_count'      => null,
+                'followers_count'  => null,
+                'likes_count'      => null,
+                'comments_count'   => null,
+                'shares_count'     => null,
+                'reactions_count'  => null,
+                'engagement_count' => null,
+                'shares_supported' => false,
+                'views_supported'  => false,
+                'status'           => \App\Services\OverviewPostStatus::overall($statuses),
+                'platform_status'  => $statuses['instagram'] ?? null,
+                'statuses'         => $statuses,
+            ];
         }, $slice);
 
         $payload = [
@@ -6233,6 +6463,85 @@ Route::prefix('v1')->group(function () {
         }
 
         return response()->json($payload);
+    });
+
+    // ── Overview: YouTube posts published from Marketing Command (Latest Posts) ──────────────────
+    // Built from the database plus the background verification (PlatformPostVerifier), so deleted videos stay
+    // listed as Deleted. Metrics come from the last verification (YouTube Data API has no share count).
+    Route::get('/youtube/published-posts', function (Request $request) {
+        $request->validate(['workspace_id' => 'required|integer|exists:workspaces,id']);
+        if ($denied = \App\Support\WorkspaceAccess::guard($request, $request->query('workspace_id'))) {
+            return $denied;
+        }
+        $workspaceId = (int) $request->query('workspace_id');
+        $page    = max(1, (int) $request->query('page', 1));
+        $perPage = max(1, min(50, (int) $request->query('per_page', 5)));
+        $tz = 'Asia/Kolkata';
+        $start = $request->query('start_date');
+        $end   = $request->query('end_date');
+        $allPosts = in_array($request->query('all_posts'), ['1', 'true'], true);
+
+        $query = \App\Models\FacebookPost::with('media')
+            ->where('workspace_id', $workspaceId)
+            ->where(function ($q) {
+                $q->where(fn ($w) => $w->whereNotNull('yt_video_id')->where('yt_video_id', '!=', ''))
+                  ->orWhere(fn ($w) => $w->where('platforms', 'like', '%"YouTube"%')->whereIn('status', ['scheduled', 'processing', 'failed', 'published']));
+            });
+        if (!$allPosts) {
+            $from = ($start && $end && $start !== 'null' && $end !== 'null') ? \Carbon\Carbon::parse($start, $tz)->startOfDay()->utc() : now($tz)->subDays(29)->startOfDay()->utc();
+            $to   = ($start && $end && $start !== 'null' && $end !== 'null') ? \Carbon\Carbon::parse($end, $tz)->endOfDay()->utc() : now($tz)->endOfDay()->utc();
+            $query->whereRaw('COALESCE(published_at, scheduled_at, created_at) BETWEEN ? AND ?', [$from, $to]);
+        }
+        $posts = $query->orderByRaw('COALESCE(published_at, scheduled_at, created_at) DESC')->get()
+            // A post meant for YouTube too, but without a YouTube result yet, is only listed if it is scheduled or failed.
+            ->filter(fn ($p) => $p->yt_video_id || in_array($p->status, ['scheduled', 'processing', 'failed'], true) || (($p->platform_statuses['youtube']['status'] ?? null) === 'failed'))
+            ->values();
+
+        $total = $posts->count();
+        $totalPages = max(1, (int) ceil($total / $perPage));
+        $page = min($page, $totalPages);
+        $slice = $posts->slice(($page - 1) * $perPage, $perPage)->values();
+
+        $statusPresenter = app(\App\Services\OverviewPostStatus::class)->load($slice);
+        $mediaPreview = app(\App\Services\PostMediaPreviewService::class);
+
+        $data = $slice->map(function ($p) use ($statusPresenter, $mediaPreview) {
+            $statuses = $statusPresenter->platformStatuses($p);
+            $verification = $statusPresenter->verification($p, 'youtube');
+            $metrics = $verification?->metrics ?? [];
+            $preview = $mediaPreview->previewFor($p, array_values(array_filter([$p->yt_video_id ? "yt_{$p->yt_video_id}" : null, $p->fb_post_id, $p->ig_media_id ? "ig_{$p->ig_media_id}" : null])));
+            if (in_array($preview['source'], ['video_frame', 'none'], true) && !empty($metrics['thumbnail'])) {
+                // YouTube's own generated thumbnail (i.ytimg.com URLs do not expire)
+                $preview = ['url' => $metrics['thumbnail'], 'kind' => 'image', 'status' => 'remote', 'source' => 'platform'] + $preview;
+            }
+            $isShort = ($metrics['vertical'] ?? false) === true && isset($metrics['duration_seconds']) && $metrics['duration_seconds'] <= 180;
+            $when = $p->published_at ?? $p->scheduled_at ?? $p->created_at;
+            return [
+                'id'              => $p->id,
+                'yt_video_id'     => $p->yt_video_id,
+                'title'           => $p->video_title ?: ($p->content ? mb_substr($p->content, 0, 60) : 'YouTube video'),
+                'content'         => $p->content,
+                'thumbnail'       => $preview,
+                'permalink'       => $p->yt_video_id ? ($isShort ? "https://www.youtube.com/shorts/{$p->yt_video_id}" : "https://www.youtube.com/watch?v={$p->yt_video_id}") : null,
+                'post_type'       => 'video',
+                'formatted_type'  => $isShort ? 'Short' : 'Video',
+                'published_at'    => $when?->toIso8601String(),
+                'date_kind'       => $p->published_at ? 'published' : ($p->scheduled_at ? 'scheduled' : 'created'),
+                'privacy_status'  => $metrics['privacy_status'] ?? ($p->platform_statuses['youtube']['privacy_status'] ?? $p->youtube_privacy),
+                'views_count'     => $metrics['views'] ?? null,
+                'likes_count'     => $metrics['likes'] ?? null,
+                'comments_count'  => $metrics['comments'] ?? null,
+                'shares_count'    => null,
+                'status'          => \App\Services\OverviewPostStatus::overall($statuses),
+                'platform_status' => $statuses['youtube'] ?? null,
+                'statuses'        => $statuses,
+            ];
+        });
+
+        return response()->json([
+            'success' => true, 'data' => $data->all(), 'current_page' => $page, 'per_page' => $perPage,
+            'total' => $total, 'total_pages' => $totalPages, 'has_prev' => $page > 1, 'has_next' => $page < $totalPages,
+        ]);
     });
 
     // Google Analytics (GA4) Integration Routes (Dedicated OAuth 2.0 Flow)

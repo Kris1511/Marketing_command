@@ -135,6 +135,52 @@ export function postPreviewImage(post) {
   return firstImage ? firstImage.file_url : '';
 }
 
+const IMAGE_FILE = /\.(jpe?g|png|webp|gif)(\?|#|$)/i;
+
+/**
+ * Thumbnail of a history row: { url, kind: 'image'|'video'|'none', status, isVideo, isCarousel, count }.
+ * Uses the backend `preview` block (URLs rebuilt from the stored file, expired/missing media flagged); older
+ * responses without it fall back to the stored URLs.
+ */
+export function postThumbnail(post) {
+  const media = post && Array.isArray(post.media)
+    ? [...post.media].filter(Boolean).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || (a.id ?? 0) - (b.id ?? 0))
+    : [];
+  const type = post?.post_type || '';
+  const isVideo = type === 'video' || type === 'reel' || media.some((m) => m.media_type === 'video');
+  const isCarousel = type === 'multi_image' || (!isVideo && media.length > 1);
+  const base = { isVideo, isCarousel, count: media.length };
+  if (!post) return { ...base, url: '', kind: 'none', status: 'none' };
+
+  const p = post.preview;
+  if (p && typeof p === 'object') {
+    return {
+      ...base,
+      count: Number.isFinite(p.media_count) ? p.media_count : media.length,
+      url: p.url || '',
+      kind: p.url ? (p.kind === 'video' ? 'video' : 'image') : 'none',
+      status: p.status || (p.url ? 'ok' : 'none'),
+    };
+  }
+
+  const urlOf = (m) => m.display_url || m.file_url || '';
+  if (post.thumbnail_url) return { ...base, url: post.thumbnail_url, kind: 'image', status: 'ok' };
+  // An imported video's stored file is often its poster image, so look at the file, not only media_type.
+  const image = media.find((m) => urlOf(m) && (m.media_type === 'image' || IMAGE_FILE.test(urlOf(m))));
+  if (image) return { ...base, url: urlOf(image), kind: 'image', status: 'ok' };
+  const video = media.find((m) => urlOf(m) && m.media_type === 'video');
+  if (video) return { ...base, url: urlOf(video), kind: 'video', status: 'ok' };
+  return { ...base, url: '', kind: 'none', status: media.length ? 'missing' : 'none' };
+}
+
+/** Tooltip text for a thumbnail placeholder. */
+export function thumbnailProblem(status) {
+  if (status === 'missing') return 'The original media file is no longer available on the server.';
+  if (status === 'expired') return 'The Facebook image link has expired and no saved copy is available yet.';
+  if (status === 'error') return 'The media file could not be loaded.';
+  return 'No media attached.';
+}
+
 /** "YYYY-MM-DD" of an instant in IST (the app's scheduling timezone). */
 export function istDateKey(value) {
   if (!value) return '';
@@ -228,4 +274,56 @@ export function isFutureSchedule(dateStr, timeStr, nowMs = Date.now()) {
   const timestamp = new Date(isoStr).getTime();
   if (isNaN(timestamp)) return false;
   return timestamp > nowMs + 60 * 1000;
+}
+
+/** YouTube visibility offered in Publishing. Unlisted is no longer offered. Mirrors PublishingRules::YOUTUBE_PRIVACY. */
+export const YOUTUBE_PRIVACY_OPTIONS = [
+  { id: 'public', label: 'Public', desc: 'Anyone on YouTube can watch' },
+  { id: 'private', label: 'Private', desc: 'Only you can watch' },
+];
+export const DEFAULT_YOUTUBE_PRIVACY = 'public';
+export const YOUTUBE_PRIVACY_REQUIRED =
+  'This post was saved as Unlisted, which is no longer available. Choose Public or Private for YouTube.';
+
+export function isValidYoutubePrivacy(value) {
+  return value === 'public' || value === 'private';
+}
+
+/**
+ * Composer value for a saved post: its Public/Private choice; '' (the user must choose) for a YouTube post saved
+ * as Unlisted, so it never becomes Public without the user confirming; Public otherwise (posts that never
+ * targeted YouTube only carry the old column default).
+ */
+export function youtubePrivacyFromSaved(saved, platformList) {
+  if (isValidYoutubePrivacy(saved)) return saved;
+  const targetsYouTube = Array.isArray(platformList) && platformList.includes('YouTube');
+  return saved === 'unlisted' && targetsYouTube ? '' : DEFAULT_YOUTUBE_PRIVACY;
+}
+
+export function youtubePrivacyLabel(value) {
+  return value === 'public' ? 'Public' : value === 'private' ? 'Private' : 'Not chosen';
+}
+
+/** YouTube's own custom-thumbnail size limit (PublishingRules::YOUTUBE_THUMBNAIL_MAX_MB). */
+export const YOUTUBE_THUMBNAIL_MAX_MB = 2;
+
+/** Why YouTube would reject this thumbnail file ('' when it is fine). Only checked when YouTube is a target. */
+export function youtubeThumbnailProblem(file) {
+  if (!file || typeof file.size !== 'number') return '';
+  return file.size > YOUTUBE_THUMBNAIL_MAX_MB * MB
+    ? `YouTube accepts custom thumbnails up to ${YOUTUBE_THUMBNAIL_MAX_MB} MB; "${file.name}" is ${formatMb(file.size)} MB. Choose a smaller image or untick YouTube.`
+    : '';
+}
+
+/**
+ * Custom-thumbnail outcome of a post's published YouTube video, from platform_statuses.youtube.thumbnail:
+ * { status: 'applied'|'pending'|'failed', label, message, canRetry }, or null when no thumbnail was requested.
+ */
+export function youtubeThumbnailState(post) {
+  const yt = post && post.platform_statuses && post.platform_statuses.youtube;
+  const t = yt && yt.thumbnail;
+  if (!yt || yt.status !== 'published' || !t || !t.requested) return null;
+  const status = t.applied ? 'applied' : t.status === 'pending' ? 'pending' : 'failed';
+  const label = { applied: 'YouTube thumbnail applied', pending: 'YouTube thumbnail pending', failed: 'YouTube thumbnail failed' }[status];
+  return { status, label, message: t.message || '', canRetry: status !== 'applied' };
 }

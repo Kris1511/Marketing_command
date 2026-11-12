@@ -60,6 +60,15 @@ return [
         'redirect_uri'  => env('GOOGLE_REDIRECT_URI', env('YOUTUBE_REDIRECT_URI', 'http://localhost:8000/api/youtube/callback')),
     ],
 
+    // Publishing -> YouTube custom thumbnails: how long to wait (seconds) for YouTube to finish processing an
+    // uploaded video before thumbnails.set. Unfinished ones are left "pending" and finished by
+    // `php artisan posts:apply-youtube-thumbnails` (scheduled) or the Retry thumbnail button.
+    'youtube' => [
+        'thumbnail_wait_seconds'     => (int) env('YOUTUBE_THUMBNAIL_WAIT_SECONDS', 30),   // immediate publish (web request)
+        'thumbnail_job_wait_seconds' => (int) env('YOUTUBE_THUMBNAIL_JOB_WAIT_SECONDS', 120), // scheduled job (CLI)
+        'thumbnail_poll_seconds'     => (int) env('YOUTUBE_THUMBNAIL_POLL_SECONDS', 5),
+    ],
+
     /*
     | Public media URLs for Instagram publishing.
     | Instagram downloads post media from a URL (it cannot receive file uploads), so that URL must be

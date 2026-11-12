@@ -342,6 +342,7 @@ class PublishScheduledPostJob implements ShouldQueue
                         'status'    => 'published',
                         'id'        => $igMediaId,
                         'timestamp' => now()->toIso8601String(),
+                        'account_id' => (string) $igAccountId, // owner, for the Overview deletion check
                     ];
                     if ($thumbnailPath && $firstMedia->media_type === 'video') {
                         $platformStatuses['instagram']['thumbnail'] = $igResult['thumbnail']
@@ -404,14 +405,21 @@ class PublishScheduledPostJob implements ShouldQueue
                     $videoTitle = !empty($post->video_title)
                         ? $post->video_title
                         : (!empty($post->content) ? mb_substr($post->content, 0, 60) : 'Scheduled Video');
-                    $privacy = in_array($post->youtube_privacy, ['public', 'unlisted', 'private'], true)
-                        ? $post->youtube_privacy
-                        : 'unlisted';
+                    // Public or Private as chosen (Public when nothing was recorded). A post scheduled as Unlisted
+                    // before that option was removed goes up as Private: never more visible than the user chose.
+                    $privacyNote = null;
+                    if (\App\Support\PublishingRules::isValidYoutubePrivacy($post->youtube_privacy)) {
+                        $privacy = $post->youtube_privacy;
+                    } elseif (empty($post->youtube_privacy)) {
+                        $privacy = \App\Support\PublishingRules::DEFAULT_YOUTUBE_PRIVACY;
+                    } else {
+                        $privacy = 'private';
+                        $privacyNote = "Scheduled as '{$post->youtube_privacy}', which is no longer offered: uploaded as Private. Change the visibility in YouTube Studio if needed.";
+                    }
 
                     $ytService = app(YouTubeService::class);
-                    $ytResult = $thumbnailPath
-                        ? $ytService->uploadVideo($ytConn, $videoPath, $videoTitle, $post->content ?? '', $privacy, null, '22', $thumbnailPath)
-                        : $ytService->uploadVideo($ytConn, $videoPath, $videoTitle, $post->content ?? '', $privacy);
+                    // Video first; the custom thumbnail is applied as a separate step after the checkpoint below.
+                    $ytResult = $ytService->uploadVideo($ytConn, $videoPath, $videoTitle, $post->content ?? '', $privacy);
 
                     $ytVideoId = $ytResult['id'] ?? null;
                     if (empty($ytVideoId)) {
@@ -425,10 +433,11 @@ class PublishScheduledPostJob implements ShouldQueue
                         'id'             => $ytVideoId,
                         'url'            => $ytResult['url'] ?? "https://www.youtube.com/watch?v={$ytVideoId}",
                         'privacy_status' => $privacy,
+                        'channel_id'     => $ytConn->channel_id, // owner, for the Overview deletion check
                         'timestamp'      => now()->toIso8601String(),
                     ];
-                    if ($thumbnailPath) {
-                        $platformStatuses['youtube']['thumbnail'] = \App\Support\PublishingRules::youtubeThumbnailStatus($ytResult);
+                    if ($privacyNote) {
+                        $platformStatuses['youtube']['privacy_note'] = $privacyNote;
                     }
                     $publishedSummary[] = "YouTube ({$ytConn->channel_name})";
                     Log::info("[PublishScheduledPostJob] YouTube published: {$ytVideoId}", ['post_id' => $post->id]);
@@ -436,6 +445,17 @@ class PublishScheduledPostJob implements ShouldQueue
                     // publishes to a platform that already has the post.
                     $post->platform_statuses = $platformStatuses;
                     $post->save();
+
+                    // Custom thumbnail: the exact saved file, after YouTube has processed the video. Its outcome is
+                    // stored separately and never changes the video's published status.
+                    if ($post->thumbnail_path) {
+                        $platformStatuses['youtube']['thumbnail'] = app(\App\Services\YouTubeThumbnailPublisher::class)->apply(
+                            $ytConn, $ytVideoId, $thumbnailPath, $post->thumbnail_path, [],
+                            (int) config('services.youtube.thumbnail_job_wait_seconds', 120)
+                        );
+                        $post->platform_statuses = $platformStatuses;
+                        $post->save();
+                    }
                 } catch (\Throwable $e) {
                     $errors['youtube'] = 'YouTube: ' . $e->getMessage();
                     $platformStatuses['youtube'] = [

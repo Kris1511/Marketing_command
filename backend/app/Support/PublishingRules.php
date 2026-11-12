@@ -14,6 +14,16 @@ class PublishingRules
     public const CAROUSEL_MAX = 10;
     public const INSTAGRAM_MAX_HASHTAGS = 30;
 
+    /** YouTube visibility offered by Publishing (Unlisted is no longer offered); sent as status.privacyStatus. */
+    public const YOUTUBE_PRIVACY = ['public', 'private'];
+    public const DEFAULT_YOUTUBE_PRIVACY = 'public';
+    public const YOUTUBE_PRIVACY_REQUIRED = 'This post was saved as Unlisted, which is no longer available. Choose Public or Private for YouTube.';
+
+    public static function isValidYoutubePrivacy(mixed $value): bool
+    {
+        return in_array($value, self::YOUTUBE_PRIVACY, true);
+    }
+
     /*
      * Custom video thumbnail / Reel cover. One image is shared by every selected platform, so the limits are
      * the intersection of what they accept: JPG/PNG (Instagram converts covers to JPEG), at most 8 MB
@@ -27,17 +37,8 @@ class PublishingRules
     public const THUMBNAIL_MAX_RATIO = 16 / 9;
     private const THUMBNAIL_RATIO_TOLERANCE = 0.01;
 
-    /**
-     * Thumbnail outcome of a YouTube upload (YouTubeService::uploadVideo reports thumbnail_uploaded).
-     *
-     * @return array{requested: bool, applied: bool, message: string}
-     */
-    public static function youtubeThumbnailStatus(array $ytResult): array
-    {
-        return !empty($ytResult['thumbnail_uploaded'])
-            ? ['requested' => true, 'applied' => true, 'message' => 'Custom thumbnail applied.']
-            : ['requested' => true, 'applied' => false, 'message' => 'YouTube did not accept the custom thumbnail. Custom thumbnails require a verified YouTube channel (and YouTube allows at most 2 MB).'];
-    }
+    /** YouTube's own custom-thumbnail size limit (checked when YouTube is a target). */
+    public const YOUTUBE_THUMBNAIL_MAX_MB = 2;
 
     /**
      * Validate a thumbnail image file. Returns user-facing messages (empty when valid).

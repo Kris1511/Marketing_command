@@ -26,3 +26,13 @@ Artisan::command('inspire', function () {
 Schedule::command('posts:process-scheduled')
     ->everyMinute()
     ->timezone('Asia/Kolkata');
+
+// Apply YouTube custom thumbnails that were waiting for YouTube to finish processing the video.
+Schedule::command('posts:apply-youtube-thumbnails')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();
+
+// Check whether published posts still exist on Facebook / Instagram / YouTube (Overview "Deleted" status).
+Schedule::command('posts:verify-platform-status')
+    ->hourly()
+    ->withoutOverlapping();

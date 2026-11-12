@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import AiCaptionModal from '../components/AiCaptionModal';
 import VisualContentCalendar from '../components/VisualContentCalendar';
+import PostThumbnail from '../components/PostThumbnail';
 import {
   CAROUSEL_MAX,
   MAX_IMAGE_MB,
@@ -43,8 +44,16 @@ import {
   captionLimitFor,
   contentTypeFromPostType,
   contentTypeLabel,
-  postPreviewImage,
   statusLabel,
+  DEFAULT_YOUTUBE_PRIVACY,
+  YOUTUBE_PRIVACY_OPTIONS,
+  YOUTUBE_PRIVACY_REQUIRED,
+  isValidYoutubePrivacy,
+  youtubePrivacyFromSaved,
+  youtubePrivacyLabel,
+  youtubeThumbnailProblem,
+  youtubeThumbnailState,
+  YOUTUBE_THUMBNAIL_MAX_MB,
   hashtagProblems,
   isAllWorkspaces,
   isUsableWorkspaceId,
@@ -61,7 +70,7 @@ import {
 
 const DEFAULT_CTA = 'Learn More';
 const EMPTY_CONNECTIONS = { facebook: null, instagram: null, youtube: null };
-const EMPTY_FIELD_ERRORS = { caption: '', media: '', platforms: '', hashtags: '', workspace: '' };
+const EMPTY_FIELD_ERRORS = { caption: '', media: '', platforms: '', hashtags: '', workspace: '', youtubePrivacy: '', thumbnail: '' };
 
 // Visually hidden but still focusable/interactable (the whole drop area opens the picker).
 const SR_ONLY_INPUT = {
@@ -113,7 +122,7 @@ export default function PublishingPage() {
 
   const [postTitle, setPostTitle] = useState('');
   const [videoTitle, setVideoTitle] = useState('');
-  const [youtubePrivacy, setYoutubePrivacy] = useState('unlisted');
+  const [youtubePrivacy, setYoutubePrivacy] = useState(DEFAULT_YOUTUBE_PRIVACY);
   const [publishResults, setPublishResults] = useState(null); // Platform-level publish breakdown
   const [postCaption, setPostCaption] = useState('');
   const [postHashtags, setPostHashtags] = useState('');
@@ -162,6 +171,7 @@ export default function PublishingPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [schedulerStatus, setSchedulerStatus] = useState(null); // { running, last_run_at } from /scheduled-posts
   const [retryingPostId, setRetryingPostId] = useState(null);
+  const [retryingThumbnailId, setRetryingThumbnailId] = useState(null);
 
   // Unsaved changes & submit locks
   const [isDirty, setIsDirty] = useState(false);
@@ -317,7 +327,7 @@ export default function PublishingPage() {
     setPlatforms(defaultPlatformSelection(connectionsRef.current));
     setPostTitle('');
     setVideoTitle('');
-    setYoutubePrivacy('unlisted');
+    setYoutubePrivacy(DEFAULT_YOUTUBE_PRIVACY);
     setPublishResults(null);
     setPostCaption('');
     setPostHashtags('');
@@ -954,6 +964,21 @@ export default function PublishingPage() {
       }
     }
 
+    // E2. YouTube visibility must be Public or Private before scheduling/publishing (old Unlisted drafts)
+    if (action !== 'draft' && contentType === 'video' && selectedPlatformNames.includes('YouTube') && !isValidYoutubePrivacy(youtubePrivacy)) {
+      errors.youtubePrivacy = YOUTUBE_PRIVACY_REQUIRED;
+      hasErrors = true;
+    }
+
+    // E3. YouTube takes custom thumbnails up to 2 MB: refuse before the video goes live without it
+    if (action !== 'draft' && contentType === 'video' && selectedPlatformNames.includes('YouTube') && thumbnailFile) {
+      const thumbProblem = youtubeThumbnailProblem(thumbnailFile);
+      if (thumbProblem) {
+        errors.thumbnail = thumbProblem;
+        hasErrors = true;
+      }
+    }
+
     // F. Instagram specific requirement: cannot be text-only
     if (action === 'publish' && selectedPlatformNames.includes('Instagram') && mediaCount === 0) {
       errors.media = 'Instagram requires an image or video to create a post. Please attach media.';
@@ -975,6 +1000,7 @@ export default function PublishingPage() {
       hashtags: first('hashtags') || prev.hashtags,
       media: mediaMsg || prev.media,
       workspace: first('workspace_id') || prev.workspace,
+      youtubePrivacy: first('youtube_privacy') || prev.youtubePrivacy,
     }));
   };
 
@@ -986,6 +1012,7 @@ export default function PublishingPage() {
     // 2. Validation
     const { errors, hasErrors } = validateComposer(action);
     setFieldErrors(errors);
+    if (errors.thumbnail) setThumbnailError(errors.thumbnail);
 
     if (hasErrors) {
       setPublishConfirm(null);
@@ -1046,7 +1073,7 @@ export default function PublishingPage() {
         if (videoTitle.trim()) {
           formData.append('video_title', videoTitle.trim());
         }
-        formData.append('youtube_privacy', youtubePrivacy);
+        if (isValidYoutubePrivacy(youtubePrivacy)) formData.append('youtube_privacy', youtubePrivacy);
         // Custom thumbnail: only (re)uploaded when it changed since the draft was last stored
         const hasVideo = selectedFiles.length > 0 || existingMedia.length > 0;
         if (thumbnailFile && hasVideo && (thumbnailDirty || !draftId)) {
@@ -1169,7 +1196,8 @@ export default function PublishingPage() {
       setPostTitle(draft.internal_title || '');
       setPostCTA(draft.cta || DEFAULT_CTA);
       setVideoTitle(draft.video_title || '');
-      setYoutubePrivacy(draft.youtube_privacy || 'unlisted');
+      // A YouTube post saved as Unlisted (no longer offered) loads with no choice: the user must pick Public or Private.
+      setYoutubePrivacy(youtubePrivacyFromSaved(draft.youtube_privacy, savedPlatforms));
       setSelectedFiles([]);
       setMediaPreviews([]);
       setExistingMedia(media);
@@ -1237,6 +1265,22 @@ export default function PublishingPage() {
     } finally {
       setRetryingPostId(null);
       loadWorkspaceData();
+      reloadHistory(historyPage);
+    }
+  };
+
+  // Re-applies only the custom thumbnail to the existing YouTube video (the video is not uploaded again).
+  const handleRetryThumbnail = async (post) => {
+    if (retryingThumbnailId) return;
+    setRetryingThumbnailId(post.id);
+    try {
+      const res = await axiosInstance.post(`/posts/${post.id}/youtube-thumbnail/retry`);
+      const t = res.data?.thumbnail;
+      setStatusMsg({ type: t?.applied ? 'success' : 'warning', text: res.data?.message || 'Thumbnail retried.' });
+    } catch (err) {
+      setStatusMsg({ type: 'error', text: apiErrorText(err, 'The thumbnail could not be applied.') });
+    } finally {
+      setRetryingThumbnailId(null);
       reloadHistory(historyPage);
     }
   };
@@ -1584,12 +1628,13 @@ export default function PublishingPage() {
                     )}
                     {isSuccess && res.thumbnail && res.thumbnail.requested && (
                       <div
-                        style={{ color: res.thumbnail.applied ? '#15803d' : '#b45309', fontSize: '12px', marginTop: '4px', display: 'flex', alignItems: 'flex-start', gap: '4px' }}
+                        data-thumbnail-status={res.thumbnail.applied ? 'applied' : res.thumbnail.status || 'failed'}
+                        style={{ color: res.thumbnail.applied ? '#15803d' : res.thumbnail.status === 'pending' ? '#1d4ed8' : '#b45309', fontSize: '12px', marginTop: '4px', display: 'flex', alignItems: 'flex-start', gap: '4px' }}
                       >
-                        {res.thumbnail.applied ? <CheckCircle2 size={13} style={{ marginTop: '1px', flexShrink: 0 }} /> : <AlertTriangle size={13} style={{ marginTop: '1px', flexShrink: 0 }} />}
+                        {res.thumbnail.applied ? <CheckCircle2 size={13} style={{ marginTop: '1px', flexShrink: 0 }} /> : res.thumbnail.status === 'pending' ? <Loader2 size={13} style={{ marginTop: '1px', flexShrink: 0 }} /> : <AlertTriangle size={13} style={{ marginTop: '1px', flexShrink: 0 }} />}
                         <span>
                           {res.thumbnail.applied
-                            ? (platKey === 'instagram' ? 'Custom Reel cover applied.' : 'Custom thumbnail applied.')
+                            ? (platKey === 'instagram' ? 'Custom Reel cover applied.' : platKey === 'youtube' ? 'Custom thumbnail applied on YouTube (confirmed by the YouTube API).' : 'Custom thumbnail applied.')
                             : res.thumbnail.message || 'The custom thumbnail was not applied.'}
                         </span>
                       </div>
@@ -1953,20 +1998,22 @@ export default function PublishingPage() {
                 <div className="form-field full">
                   <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                     <span style={{ fontWeight: '600' }}>YouTube Privacy Setting</span>
-                    <span style={{ fontSize: '11.5px', color: '#047857', fontWeight: '700' }}>Default: Unlisted</span>
+                    <span style={{ fontSize: '11.5px', color: '#047857', fontWeight: '700' }}>Default: Public</span>
                   </label>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
-                    {[
-                      { id: 'unlisted', label: 'Unlisted', desc: 'Only people with the link can view' },
-                      { id: 'public', label: 'Public', desc: 'Anyone on YouTube can watch' },
-                      { id: 'private', label: 'Private', desc: 'Only you can watch' },
-                    ].map((item) => (
+                  {!isValidYoutubePrivacy(youtubePrivacy) && (
+                    <div role="status" className="form-help" style={{ color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '8px 10px', marginBottom: '8px' }}>
+                      {YOUTUBE_PRIVACY_REQUIRED}
+                    </div>
+                  )}
+                  <div role="group" aria-label="YouTube privacy setting" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+                    {YOUTUBE_PRIVACY_OPTIONS.map((item) => (
                       <button
                         key={item.id}
                         type="button"
                         aria-pressed={youtubePrivacy === item.id}
                         onClick={() => {
                           setYoutubePrivacy(item.id);
+                          setFieldErrors((prev) => ({ ...prev, youtubePrivacy: '' }));
                           setIsDirty(true);
                         }}
                         style={{
@@ -1988,6 +2035,11 @@ export default function PublishingPage() {
                       </button>
                     ))}
                   </div>
+                  {fieldErrors.youtubePrivacy && !isValidYoutubePrivacy(youtubePrivacy) && (
+                    <div className="form-error" role="alert" style={{ color: '#b91c1c', fontSize: '12px', marginTop: '6px' }}>
+                      {fieldErrors.youtubePrivacy}
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -2585,7 +2637,7 @@ export default function PublishingPage() {
                   <div style={{ flex: 1, minWidth: '200px' }}>
                     <strong style={{ fontSize: '12.5px', color: '#0f172a', display: 'block' }}>Thumbnail / cover image (optional)</strong>
                     <div className="form-help" style={{ marginTop: '2px' }}>
-                      JPG or PNG, up to {THUMBNAIL_MAX_MB} MB, at least 320px, between 9:16 and 16:9. Used as the Facebook video thumbnail, the Instagram Reel cover and the YouTube thumbnail where the platform allows it.
+                      JPG or PNG, up to {THUMBNAIL_MAX_MB} MB ({YOUTUBE_THUMBNAIL_MAX_MB} MB for YouTube), at least 320px, between 9:16 and 16:9. Used as the Facebook video thumbnail, the Instagram Reel cover and the YouTube thumbnail. YouTube needs a verified channel for custom thumbnails.
                     </div>
                     {thumbnailError && (
                       <div role="alert" style={{ color: '#dc2626', fontSize: '12px', fontWeight: '600', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -2947,7 +2999,7 @@ export default function PublishingPage() {
                         flexShrink: 0,
                       }}
                     >
-                      {youtubePrivacy}
+                      {youtubePrivacyLabel(youtubePrivacy)}
                     </span>
                   </div>
                 </div>
@@ -3141,31 +3193,14 @@ export default function PublishingPage() {
                   <tr key={post.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
                     <td style={{ padding: '10px 14px', maxWidth: '320px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-                        <div
-                          style={{ width: '40px', height: '40px', borderRadius: '6px', overflow: 'hidden', background: '#f1f5f9', border: '1px solid #e2e8f0', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}
-                        >
-                          {postPreviewImage(post) ? (
-                            <img
-                              src={postPreviewImage(post)}
-                              alt=""
-                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                              onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                            />
-                          ) : post.post_type === 'video' ? (
-                            <Video size={16} />
-                          ) : post.post_type === 'multi_image' ? (
-                            <Layers size={16} />
-                          ) : (
-                            <ImageIcon size={16} />
-                          )}
-                        </div>
+                        <PostThumbnail post={post} />
                         <div style={{ minWidth: 0 }}>
                           <strong style={{ display: 'block', fontSize: '13.5px', color: '#0f172a' }}>
                             {post.content ? (post.content.length > 60 ? post.content.substring(0, 60) + '...' : post.content) : 'Media Content'}
                           </strong>
                           <span style={{ fontSize: '11.5px', color: '#64748b' }}>
                             {contentTypeLabel(post.post_type, post.platform_list)}
-                            {post.post_type === 'multi_image' && Array.isArray(post.media) && post.media.length > 0 ? ` · ${post.media.length} images` : ''}
+                            {post.post_type === 'multi_image' && Array.isArray(post.media) && post.media.length > 1 ? ` · ${post.media.length} images` : ''}
                           </span>
                         </div>
                       </div>
@@ -3187,6 +3222,20 @@ export default function PublishingPage() {
                               </span>
                             );
                           })}
+                          {(() => {
+                            const yt = youtubeThumbnailState(post);
+                            if (!yt) return null;
+                            return (
+                              <span
+                                className={`pill ${yt.status === 'applied' ? 'success' : yt.status === 'pending' ? 'info' : 'warning'}`}
+                                data-yt-thumbnail={yt.status}
+                                title={yt.message}
+                                style={{ fontSize: '11px', cursor: yt.message ? 'help' : 'default' }}
+                              >
+                                {yt.label}
+                              </span>
+                            );
+                          })()}
                         </div>
                       ) : (
                         <span className={`pill ${Array.isArray(post.platform_list) && post.platform_list.includes('YouTube') ? 'warning' : 'info'}`}>
@@ -3227,6 +3276,18 @@ export default function PublishingPage() {
                     </td>
                     <td style={{ padding: '10px 14px' }}>
                       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        {youtubeThumbnailState(post)?.canRetry && (
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => handleRetryThumbnail(post)}
+                            disabled={retryingThumbnailId === post.id}
+                            style={{ padding: '4px 8px', fontSize: '12px' }}
+                            title="Apply the uploaded custom thumbnail to the existing YouTube video again (the video is not re-uploaded)"
+                          >
+                            {retryingThumbnailId === post.id ? <Loader2 size={12} className="spin" /> : <RotateCw size={12} />} Retry thumbnail
+                          </button>
+                        )}
                         {(post.status === 'failed' || post.status === 'partial') && (
                           <button
                             type="button"
@@ -3407,7 +3468,7 @@ export default function PublishingPage() {
                 {contentType === 'video' ? 'Video' : contentType === 'carousel' ? `Carousel (${mediaCount} images)` : mediaCount > 0 ? 'Single image post' : 'Text post'}
               </li>
               {publishConfirm.platforms.includes('YouTube') && (
-                <li><strong>YouTube visibility:</strong> {youtubePrivacy} — title “{youtubePreviewTitle}”</li>
+                <li><strong>YouTube visibility:</strong> {youtubePrivacyLabel(youtubePrivacy)} — title “{youtubePreviewTitle}”</li>
               )}
               <li><strong>Caption:</strong> {fullMessage.length > 90 ? `${fullMessage.slice(0, 90)}…` : fullMessage || '(media only)'}</li>
             </ul>

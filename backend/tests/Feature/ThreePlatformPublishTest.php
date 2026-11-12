@@ -200,13 +200,13 @@ class ThreePlatformPublishTest extends TestCase
                 $this->isType('string'),
                 $this->equalTo('Sample Video Title'),
                 $this->equalTo('Video post test description'),
-                $this->equalTo('unlisted')
+                $this->equalTo('private')
             )
             ->willReturn([
                 'success'        => true,
                 'id'             => 'yt_vid_404',
                 'url'            => 'https://www.youtube.com/watch?v=yt_vid_404',
-                'privacy_status' => 'unlisted',
+                'privacy_status' => 'private',
             ]);
 
         $this->app->instance(\App\Services\YouTubeService::class, $mockYtService);
@@ -217,7 +217,7 @@ class ThreePlatformPublishTest extends TestCase
             'workspace_id'    => $this->workspace->id,
             'message'         => 'Video post test description',
             'video_title'     => 'Sample Video Title',
-            'youtube_privacy' => 'unlisted',
+            'youtube_privacy' => 'private',
             'status'          => 'published',
             'platforms'       => ['YouTube'],
             'post_type'       => 'video',
@@ -227,7 +227,7 @@ class ThreePlatformPublishTest extends TestCase
         $response->assertStatus(200);
         $post = FacebookPost::where('workspace_id', $this->workspace->id)->first();
         $this->assertEquals('yt_vid_404', $post->yt_video_id);
-        $this->assertEquals('unlisted', $post->youtube_privacy);
+        $this->assertEquals('private', $post->youtube_privacy);
         $this->assertEquals('published', $post->platform_statuses['youtube']['status']);
     }
 

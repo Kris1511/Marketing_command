@@ -152,3 +152,77 @@ test('status labels, preview image and IST day keys', async () => {
   assert.equal(istDateKey('2026-11-09T20:30:00Z'), '2026-11-10');
   assert.equal(istDateKey(''), '');
 });
+
+test('postThumbnail: backend preview block wins and carries status/count', async () => {
+  const { postThumbnail, thumbnailProblem } = await import('./publishingRules.js');
+  const carousel = postThumbnail({
+    post_type: 'multi_image',
+    media: [{ id: 2, sort_order: 1, media_type: 'image' }, { id: 1, sort_order: 0, media_type: 'image' }, { id: 3, sort_order: 2, media_type: 'image' }],
+    preview: { url: 'https://api.example.com/api/v1/media/posts/6/a.jpg', kind: 'image', status: 'ok', media_count: 3 },
+  });
+  assert.deepEqual(
+    { url: carousel.url, kind: carousel.kind, isCarousel: carousel.isCarousel, count: carousel.count },
+    { url: 'https://api.example.com/api/v1/media/posts/6/a.jpg', kind: 'image', isCarousel: true, count: 3 }
+  );
+
+  const reel = postThumbnail({ post_type: 'reel', media: [{ media_type: 'video' }], preview: { url: 'https://x/v.mp4', kind: 'video', status: 'ok', media_count: 1 } });
+  assert.equal(reel.kind, 'video');
+  assert.equal(reel.isVideo, true);
+
+  const gone = postThumbnail({ post_type: 'single_image', media: [{ media_type: 'image' }], preview: { url: null, kind: 'none', status: 'missing', media_count: 1 } });
+  assert.deepEqual({ url: gone.url, kind: gone.kind, status: gone.status }, { url: '', kind: 'none', status: 'missing' });
+  assert.match(thumbnailProblem('missing'), /no longer available/);
+  assert.match(thumbnailProblem('expired'), /expired/);
+});
+
+test('postThumbnail: falls back to stored URLs (older API responses)', async () => {
+  const { postThumbnail } = await import('./publishingRules.js');
+  // Imported Facebook video: media_type video but the stored file is the poster JPG.
+  assert.equal(postThumbnail({ post_type: 'video', media: [{ media_type: 'video', file_url: 'https://cdn/x/poster.jpg?oe=1' }] }).kind, 'image');
+  // Uploaded video without a poster: render the video's first frame.
+  const vid = postThumbnail({ post_type: 'video', media: [{ media_type: 'video', file_url: 'https://api/v.mp4' }] });
+  assert.deepEqual({ kind: vid.kind, url: vid.url }, { kind: 'video', url: 'https://api/v.mp4' });
+  // Carousel cover = lowest sort_order; display_url preferred over file_url.
+  const c = postThumbnail({ post_type: 'multi_image', media: [
+    { id: 9, sort_order: 1, media_type: 'image', file_url: 'b.jpg' },
+    { id: 8, sort_order: 0, media_type: 'image', file_url: 'old.jpg', display_url: 'a.jpg' },
+  ] });
+  assert.equal(c.url, 'a.jpg');
+  assert.equal(c.count, 2);
+  assert.equal(postThumbnail({ post_type: 'single_image', media: [] }).status, 'none');
+  assert.equal(postThumbnail(null).kind, 'none');
+});
+
+test('YouTube privacy: only Public and Private, Public by default, Unlisted drafts need a choice', async () => {
+  const { YOUTUBE_PRIVACY_OPTIONS, DEFAULT_YOUTUBE_PRIVACY, isValidYoutubePrivacy, youtubePrivacyFromSaved, youtubePrivacyLabel } = await import('./publishingRules.js');
+  assert.deepEqual(YOUTUBE_PRIVACY_OPTIONS.map((o) => o.id), ['public', 'private']);
+  assert.equal(DEFAULT_YOUTUBE_PRIVACY, 'public');
+  assert.equal(isValidYoutubePrivacy('public'), true);
+  assert.equal(isValidYoutubePrivacy('private'), true);
+  assert.equal(isValidYoutubePrivacy('unlisted'), false);
+  assert.equal(isValidYoutubePrivacy(''), false);
+  assert.equal(youtubePrivacyFromSaved('private', ['YouTube']), 'private');
+  assert.equal(youtubePrivacyFromSaved('public', ['YouTube']), 'public');
+  assert.equal(youtubePrivacyFromSaved('unlisted', ['YouTube', 'Facebook']), '');      // must confirm
+  assert.equal(youtubePrivacyFromSaved('unlisted', ['Facebook']), 'public');           // column default only
+  assert.equal(youtubePrivacyFromSaved(null, ['YouTube']), 'public');
+  assert.equal(youtubePrivacyLabel(''), 'Not chosen');
+});
+
+test('YouTube custom thumbnail: 2 MB limit and per-post status', async () => {
+  const { youtubeThumbnailProblem, youtubeThumbnailState, YOUTUBE_THUMBNAIL_MAX_MB } = await import('./publishingRules.js');
+  assert.equal(YOUTUBE_THUMBNAIL_MAX_MB, 2);
+  assert.equal(youtubeThumbnailProblem({ name: 'a.jpg', size: 2 * 1024 * 1024 }), '');
+  assert.match(youtubeThumbnailProblem({ name: 'big.jpg', size: 3 * 1024 * 1024 }), /up to 2 MB.*big\.jpg/);
+  assert.equal(youtubeThumbnailProblem(null), '');
+
+  const post = (thumbnail, status = 'published') => ({ platform_statuses: { youtube: { status, thumbnail } } });
+  assert.equal(youtubeThumbnailState({ platform_statuses: { youtube: { status: 'published' } } }), null);
+  assert.equal(youtubeThumbnailState(post({ requested: true, applied: false, status: 'failed' }, 'failed')), null);
+  assert.deepEqual(youtubeThumbnailState(post({ requested: true, applied: true, status: 'applied', message: 'ok' })), { status: 'applied', label: 'YouTube thumbnail applied', message: 'ok', canRetry: false });
+  assert.equal(youtubeThumbnailState(post({ requested: true, applied: false, status: 'pending' })).canRetry, true);
+  const failed = youtubeThumbnailState(post({ requested: true, applied: false, status: 'failed', message: 'forbidden' }));
+  assert.deepEqual([failed.status, failed.canRetry, failed.message], ['failed', true, 'forbidden']);
+  // Older records (before the status field) count as failed unless applied
+  assert.equal(youtubeThumbnailState(post({ requested: true, applied: false })).status, 'failed');
+});

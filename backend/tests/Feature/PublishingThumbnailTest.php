@@ -256,17 +256,35 @@ class PublishingThumbnailTest extends TestCase
         ]);
         Integration::create(['workspace_id' => $this->ws->id, 'platform' => 'youtube', 'is_connected' => true, 'account_id' => 'UC_thumb', 'account_name' => 'Chan']);
 
+        $thumb = $this->thumb();
+        $thumbSha = hash_file('sha256', $thumb->getRealPath());
+
+        // The video goes up without the thumbnail; thumbnails.set then gets the exact uploaded file.
         $yt = $this->createMock(YouTubeService::class);
         $yt->expects($this->once())->method('uploadVideo')
-            ->with($this->anything(), $this->anything(), $this->anything(), $this->anything(), $this->anything(), $this->isNull(), '22',
-                $this->callback(fn ($p) => is_string($p) && is_file($p)))
-            ->willReturn(['id' => 'yt_1', 'url' => 'https://youtu.be/yt_1', 'thumbnail_uploaded' => false]);
+            ->with($this->anything(), $this->anything(), $this->anything(), $this->anything(), 'public')
+            ->willReturn(['id' => 'yt_1', 'url' => 'https://youtu.be/yt_1']);
+        $yt->method('getProcessingStatus')->willReturn(['found' => true, 'processing_status' => 'succeeded', 'upload_status' => 'processed', 'reason' => null]);
+        $yt->expects($this->once())->method('setCustomThumbnail')
+            ->with($this->anything(), 'yt_1', $this->callback(fn ($p) => is_file($p) && hash_file('sha256', $p) === $thumbSha), 'image/jpeg')
+            ->willThrowException(new \Google\Service\Exception(
+                'The authenticated user doesn\'t have permissions to upload and set custom video thumbnails.', 403, null,
+                [['reason' => 'forbidden', 'message' => 'The authenticated user doesn\'t have permissions to upload and set custom video thumbnails.']]
+            ));
         $this->app->instance(YouTubeService::class, $yt);
 
-        $res = $this->save(['status' => 'published', 'platforms' => ['YouTube'], 'video' => $this->video(), 'thumbnail' => $this->thumb()]);
+        $res = $this->save(['status' => 'published', 'platforms' => ['YouTube'], 'video' => $this->video(), 'thumbnail' => $thumb]);
 
-        $res->assertOk()->assertJsonPath('platform_statuses.youtube.thumbnail.applied', false);
-        $this->assertStringContainsString('verified YouTube channel', $res->json('platform_statuses.youtube.thumbnail.message'));
+        // The video is published; the thumbnail failure is reported on its own, with YouTube's real error.
+        $res->assertOk()
+            ->assertJsonPath('platform_statuses.youtube.status', 'published')
+            ->assertJsonPath('platform_statuses.youtube.thumbnail.applied', false)
+            ->assertJsonPath('platform_statuses.youtube.thumbnail.status', 'failed')
+            ->assertJsonPath('platform_statuses.youtube.thumbnail.error.reason', 'forbidden')
+            ->assertJsonPath('platform_statuses.youtube.thumbnail.error.code', 403)
+            ->assertJsonPath('platform_statuses.youtube.thumbnail.sha256', $thumbSha);
+        $this->assertStringContainsString('youtube.com/verify', $res->json('platform_statuses.youtube.thumbnail.message'));
+        $this->assertStringContainsString("doesn't have permissions", $res->json('platform_statuses.youtube.thumbnail.message'));
     }
 
     // ── Drafts & scheduling ────────────────────────────────────────────────

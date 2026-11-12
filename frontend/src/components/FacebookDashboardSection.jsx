@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import axiosInstance from "../api/axiosInstance";
+import PostThumbnail from "./PostThumbnail";
+import PostStatusBadge from "./PostStatusBadge";
+import { thumbnailPost } from "./overviewStatus";
 import {
   Users,
   ThumbsUp,
@@ -10,10 +13,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Info,
-  Video,
-  Camera,
-  Layers,
-  Film,
 } from "lucide-react";
 
 function formatNum(n) {
@@ -721,9 +720,10 @@ export default function FacebookDashboardSection({ workspaceId, startDate, endDa
           <table className="dash-table">
             <thead>
               <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
-                <th style={{ padding: "11px 22px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "left", width: "36%" }}>Post</th>
+                <th style={{ padding: "11px 22px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "left", width: "32%" }}>Post</th>
                 <th className="dash-col-md" style={{ padding: "11px 14px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "left", width: "14%" }}>Date</th>
-                <th className="dash-col-md" style={{ padding: "11px 10px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "center", width: "10%" }}>Type</th>
+                <th className="dash-col-md" style={{ padding: "11px 10px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "center", width: "9%" }}>Type</th>
+                <th style={{ padding: "11px 10px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "left", width: "13%" }}>Status</th>
                 <th style={{ padding: "11px 10px", fontSize: "12px", fontWeight: "600", color: "#64748b", textAlign: "center", width: "10%" }}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: "3px" }}>
                     Views <Tooltip text={cfg.viewsTooltip} />
@@ -737,14 +737,14 @@ export default function FacebookDashboardSection({ workspaceId, startDate, endDa
             <tbody>
               {postsLoading ? (
                 <tr>
-                  <td colSpan={7} className="dash-span-all" style={{ padding: "36px", textAlign: "center", color: "#64748b" }}>
+                  <td colSpan={8} className="dash-span-all" style={{ padding: "36px", textAlign: "center", color: "#64748b" }}>
                     <RefreshCw size={20} className="spin" style={{ margin: "0 auto 8px", display: "block", color: cfg.accent || "#1877f2" }} />
                     <span style={{ fontSize: "13px" }}>Loading posts...</span>
                   </td>
                 </tr>
               ) : posts.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="dash-span-all" style={{ padding: "36px", textAlign: "center", color: "#94a3b8", fontSize: "13px" }}>
+                  <td colSpan={8} className="dash-span-all" style={{ padding: "36px", textAlign: "center", color: "#94a3b8", fontSize: "13px" }}>
                     {cfg.emptyPosts}
                   </td>
                 </tr>
@@ -753,9 +753,6 @@ export default function FacebookDashboardSection({ workspaceId, startDate, endDa
                   const dtParts = formatPostDateTimeParts(post.published_at);
                   const date = dtParts.date;
                   const time = dtParts.time;
-                  const isVideo = post.formatted_type === "Video" || post.post_type === "video";
-                  const isReel = post.formatted_type === "Reel" || post.post_type === "reel";
-                  const isCarousel = post.formatted_type === "Carousel" || post.post_type === "multi_image";
                   const viewsValue = post.views ?? post.views_count;
                   return (
                     <tr key={post.id} style={{ borderBottom: "1px solid #f1f5f9", transition: "background 0.1s" }}
@@ -764,16 +761,7 @@ export default function FacebookDashboardSection({ workspaceId, startDate, endDa
                     >
                       <td className="dash-post-cell" style={{ padding: "13px 22px" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: "11px", minWidth: 0 }}>
-                          <div style={{ width: "42px", height: "42px", borderRadius: "6px", overflow: "hidden", background: "#f1f5f9", border: "1px solid #e2e8f0", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            {post.image_url ? (
-                              <img src={post.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                                onError={e => { e.currentTarget.style.display = "none"; if (e.currentTarget.nextSibling) e.currentTarget.nextSibling.style.display = "flex"; }}
-                              />
-                            ) : null}
-                            <div style={{ display: post.image_url ? "none" : "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", color: "#94a3b8" }}>
-                              {isReel ? <Film size={16} /> : isVideo ? <Video size={16} /> : isCarousel ? <Layers size={16} /> : <Camera size={16} />}
-                            </div>
-                          </div>
+                          <PostThumbnail post={thumbnailPost(post)} size={42} />
                           <div className="dash-post-text">
                           {post.permalink || post.permalink_url ? (
                             <a
@@ -813,9 +801,13 @@ export default function FacebookDashboardSection({ workspaceId, startDate, endDa
                       <td className="dash-col-md dash-date-cell" style={{ padding: "13px 14px" }}>
                         <div style={{ fontSize: "13px", fontWeight: "500", color: "#0f172a" }}>{date}</div>
                         {time && <div style={{ fontSize: "11.5px", color: "#94a3b8", marginTop: "2px" }}>{time}</div>}
+                        {post.date_kind === "scheduled" && <div style={{ fontSize: "11px", color: "#1d4ed8", marginTop: "2px" }}>Scheduled</div>}
                       </td>
                       <td className="dash-col-md" style={{ padding: "13px 10px", textAlign: "center" }}>
                         <TypeBadge type={post.formatted_type || "Photo"} />
+                      </td>
+                      <td data-label="Status" className="dash-status-cell" style={{ padding: "13px 10px" }}>
+                        <PostStatusBadge post={post} platformKey={platform} />
                       </td>
                       <td data-label="Views" style={{ padding: "13px 10px", textAlign: "center", fontSize: "13.5px", color: "#334155" }}>
                         {viewsValue !== null && viewsValue !== undefined ? formatNum(viewsValue) : (

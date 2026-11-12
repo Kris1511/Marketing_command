@@ -487,6 +487,136 @@ class YouTubeService
     }
 
     /**
+     * thumbnails.set with the exact file the user uploaded: one "media" upload whose body is the file's bytes,
+     * unchanged. Returns the thumbnail URLs from YouTube's ThumbnailSetResponse. Throws \Google\Service\Exception
+     * for API errors, and Exception when the response holds no thumbnail (success is never assumed).
+     *
+     * @return array{video_id: string, kind: ?string, thumbnails: array<string, string>}
+     */
+    public function setCustomThumbnail(YouTubeConnection $connection, string $videoId, string $thumbnailPath, string $mimeType): array
+    {
+        $bytes = @file_get_contents($thumbnailPath);
+        if ($bytes === false || $bytes === '') {
+            throw new Exception("Thumbnail file could not be read: {$thumbnailPath}");
+        }
+
+        $connection = $this->refreshAccessTokenIfNeeded($connection);
+        $this->client->setAccessToken($connection->access_token);
+        $this->client->setDefer(false);
+        $youtube = new GoogleYouTube($this->client);
+
+        $response = $youtube->thumbnails->set($videoId, [
+            'data'       => $bytes,
+            'mimeType'   => $mimeType,
+            'uploadType' => 'media',
+        ]);
+
+        $urls = [];
+        foreach ($response->getItems() ?? [] as $details) {
+            foreach (['default', 'medium', 'high', 'standard', 'maxres'] as $size) {
+                $thumb = $details->{'get' . ucfirst($size)}();
+                if ($thumb && $thumb->getUrl()) {
+                    $urls[$size] = $thumb->getUrl();
+                }
+            }
+        }
+        if ($urls === []) {
+            throw new Exception('YouTube did not confirm the custom thumbnail (thumbnails.set returned no thumbnail).');
+        }
+
+        return ['video_id' => $videoId, 'kind' => $response->getKind(), 'thumbnails' => $urls];
+    }
+
+    /**
+     * Upload/processing state of an uploaded video (videos.list processingDetails + status, owner only).
+     *
+     * @return array{found: bool, processing_status: ?string, upload_status: ?string, reason: ?string}
+     */
+    public function getProcessingStatus(YouTubeConnection $connection, string $videoId): array
+    {
+        $connection = $this->refreshAccessTokenIfNeeded($connection);
+        $this->client->setAccessToken($connection->access_token);
+        $this->client->setDefer(false);
+        $youtube = new GoogleYouTube($this->client);
+
+        $video = $youtube->videos->listVideos('processingDetails,status', ['id' => $videoId])->getItems()[0] ?? null;
+        if (!$video) {
+            return ['found' => false, 'processing_status' => null, 'upload_status' => null, 'reason' => null];
+        }
+        $status = $video->getStatus();
+
+        return [
+            'found'             => true,
+            'processing_status' => $video->getProcessingDetails()?->getProcessingStatus(),
+            'upload_status'     => $status?->getUploadStatus(),
+            'reason'            => $status?->getFailureReason() ?: $status?->getRejectionReason(),
+        ];
+    }
+
+    /**
+     * Status, best thumbnail, statistics and shape of up to 50 videos in one videos.list call (1 quota unit),
+     * authorised as the channel owner (so the owner's private videos are returned too). Videos YouTube does
+     * not return are absent from the result. Throws on API/auth errors (the caller classifies them).
+     *
+     * @param list<string> $videoIds
+     * @return array<string, array{upload_status: ?string, privacy_status: ?string, reason: ?string, channel_id: ?string,
+     *     thumbnail: ?string, duration_seconds: ?int, vertical: ?bool, views: ?int, likes: ?int, comments: ?int}>
+     */
+    public function getVideosStatus(YouTubeConnection $connection, array $videoIds): array
+    {
+        $connection = $this->refreshAccessTokenIfNeeded($connection);
+        $this->client->setAccessToken($connection->access_token);
+        $this->client->setDefer(false);
+        $youtube = new GoogleYouTube($this->client);
+
+        $result = [];
+        $response = $youtube->videos->listVideos('id,status,snippet,statistics,contentDetails,player', [
+            'id'        => implode(',', array_slice(array_values(array_unique($videoIds)), 0, 50)),
+            'maxHeight' => 720,
+        ]);
+        foreach ($response->getItems() ?? [] as $video) {
+            $status = $video->getStatus();
+            $snippet = $video->getSnippet();
+            $stats = $video->getStatistics();
+            $thumbs = $snippet?->getThumbnails();
+            $thumb = null;
+            foreach (['getMaxres', 'getStandard', 'getHigh', 'getMedium', 'getDefault'] as $getter) {
+                if ($thumbs && $thumbs->{$getter}() && $thumbs->{$getter}()->getUrl()) {
+                    $thumb = $thumbs->{$getter}()->getUrl();
+                    break;
+                }
+            }
+            $duration = null;
+            if ($iso = $video->getContentDetails()?->getDuration()) {
+                try {
+                    $interval = new \DateInterval($iso);
+                    $duration = $interval->d * 86400 + $interval->h * 3600 + $interval->i * 60 + $interval->s;
+                } catch (\Throwable $e) {
+                }
+            }
+            $player = $video->getPlayer();
+            $vertical = ($player && $player->getEmbedWidth() && $player->getEmbedHeight())
+                ? (int) $player->getEmbedHeight() > (int) $player->getEmbedWidth()
+                : null;
+
+            $result[$video->getId()] = [
+                'upload_status'    => $status?->getUploadStatus(),
+                'privacy_status'   => $status?->getPrivacyStatus(),
+                'reason'           => $status?->getRejectionReason() ?: $status?->getFailureReason(),
+                'channel_id'       => $snippet?->getChannelId(),
+                'thumbnail'        => $thumb,
+                'duration_seconds' => $duration,
+                'vertical'         => $vertical,
+                'views'            => $stats && $stats->getViewCount() !== null ? (int) $stats->getViewCount() : null,
+                'likes'            => $stats && $stats->getLikeCount() !== null ? (int) $stats->getLikeCount() : null,
+                'comments'         => $stats && $stats->getCommentCount() !== null ? (int) $stats->getCommentCount() : null,
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
      * Retrieve full video details for a specific video ID.
      */
     public function getVideoDetails(YouTubeConnection $connection, string $videoId): array

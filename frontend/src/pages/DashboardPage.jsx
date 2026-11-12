@@ -22,6 +22,7 @@ import {
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
 import YouTubeStudioPerformanceSection from '../components/YouTubeStudioPerformanceSection';
+import YouTubeLatestPostsSection from '../components/YouTubeLatestPostsSection';
 import FacebookDashboardSection from '../components/FacebookDashboardSection';
 import GoogleAnalyticsDashboardSection from '../components/GoogleAnalyticsDashboardSection';
 import GoogleSearchConsoleDashboardSection from '../components/GoogleSearchConsoleDashboardSection';
@@ -1252,6 +1253,15 @@ function WorkspaceDashboard() {
             refreshTrigger={refreshKey}
             initialChannel={overview?.youtube_connection || overview?.youtube_metrics}
           />
+          {selectedPlatform === 'youtube' && (
+            <YouTubeLatestPostsSection
+              key={`yt_posts_${selectedWorkspaceId}`}
+              workspaceId={selectedWorkspaceId || overview?.workspace_id}
+              startDate={customStartDate}
+              endDate={customEndDate}
+              refreshTrigger={refreshKey}
+            />
+          )}
         </div>
       )}
 

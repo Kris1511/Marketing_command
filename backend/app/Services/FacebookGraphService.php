@@ -1558,7 +1558,7 @@ class FacebookGraphService
                 }
 
                 $pageIter++;
-                $response = $this->client()->timeout(20)->get($nextUrl, $currentParams);
+                $response = $this->client()->timeout(20)->get($nextUrl, $currentParams ?: null);
                 if (!$response->successful()) {
                     \Illuminate\Support\Facades\Log::warning(
                         "[FACEBOOK PAGINATION] Non-200 response on page {$pageIter} for {$pageId}: " .
@@ -1994,6 +1994,27 @@ class FacebookGraphService
     }
 
     /**
+     * Current (freshly signed) picture URL of a published Page post, or null when Meta does not return one.
+     * Read-only GET; used to restore thumbnails whose stored CDN link has expired.
+     */
+    public function fetchPostPicture(string $postId, string $accessToken): ?string
+    {
+        try {
+            $res = $this->client()->timeout(15)->get("{$this->baseUrl}/{$this->apiVersion}/{$postId}", [
+                'fields'       => 'full_picture',
+                'access_token' => $accessToken,
+            ]);
+            $url = $res->successful() ? $res->json('full_picture') : null;
+
+            return is_string($url) && $url !== '' ? $url : null;
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning("[FACEBOOK POST PICTURE] {$postId}: " . $e->getMessage());
+
+            return null;
+        }
+    }
+
+    /**
      * Safely persist Facebook post and media attachments to database with column constraint fallbacks.
      */
     public function persistFacebookPost(
@@ -2058,14 +2079,33 @@ class FacebookGraphService
 
         if ($dbPost && !empty($imageUrl)) {
             try {
-                \App\Models\FacebookPostMedia::updateOrCreate(
-                    ['facebook_post_id' => $dbPost->id],
-                    [
+                $previews = app(\App\Services\PostMediaPreviewService::class);
+                $existing = \App\Models\FacebookPostMedia::where('facebook_post_id', $dbPost->id)->get();
+
+                // Media uploaded through Marketing Command is the original: never replace it with Meta's CDN copy.
+                $hasOriginalUpload = $existing->contains(fn ($m) => !empty($m->file_path) && !$previews->isMirrorPath($m->file_path));
+
+                if (!$hasOriginalUpload) {
+                    // Meta CDN links expire after a few days, so keep a local copy for the thumbnail (file_url keeps
+                    // Meta's link for other consumers; file_path points at the copy).
+                    // Downloads are capped per process so a first sync of many posts does not stall the request;
+                    // later syncs (or `php artisan posts:repair-media`) copy the rest.
+                    static $mirrorBudget = 25;
+                    $mirror = $previews->existingMirror((int) $fbPage->workspace_id, $fbPostId);
+                    if ($mirror === null && $mirrorBudget > 0) {
+                        $mirrorBudget--;
+                        $mirror = $previews->mirrorRemoteImage($imageUrl, (int) $fbPage->workspace_id, $fbPostId);
+                    }
+
+                    $values = [
                         'media_type' => $isVideoOrReel ? 'video' : 'image',
                         'file_url'   => $imageUrl,
                         'sort_order' => 0,
-                    ]
-                );
+                    ];
+                    // Without a local copy, fall back to Meta's fresh link (drops a stale copy path, never an upload).
+                    $values['file_path'] = $mirror;
+                    \App\Models\FacebookPostMedia::updateOrCreate(['facebook_post_id' => $dbPost->id], $values);
+                }
                 \Illuminate\Support\Facades\Cache::put("fb_post_pic_{$fbPostId}", $imageUrl, 86400);
             } catch (\Throwable $medEx) {
                 \Illuminate\Support\Facades\Log::warning("[FACEBOOK POST MEDIA ERROR] Failed to save media for {$fbPostId}: " . $medEx->getMessage());
@@ -2159,7 +2199,7 @@ class FacebookGraphService
             while ($nextUrl && $pageIter < $maxPages) {
                 $pageIter++;
                 try {
-                    $response = $this->client()->timeout(20)->get($nextUrl, $currentParams);
+                    $response = $this->client()->timeout(20)->get($nextUrl, $currentParams ?: null);
                     if (!$response->successful()) {
                         \Illuminate\Support\Facades\Log::warning("[FACEBOOK POSTS SYNC] Graph API non-200: " . $response->status() . " for {$ep}");
                         break;
@@ -2641,7 +2681,7 @@ class FacebookGraphService
                     }
 
                     $pageIter++;
-                    $response = $this->client()->timeout(15)->get($nextUrl, $currentParams);
+                    $response = $this->client()->timeout(15)->get($nextUrl, $currentParams ?: null);
 
                     if (!$response->successful()) {
                         \Illuminate\Support\Facades\Log::warning("[Instagram API Error] getInstagramMediaList", [
@@ -2668,6 +2708,8 @@ class FacebookGraphService
                     }
 
                     $nextUrl = $response->json('paging.next');
+                    // Cursor URL already carries token/fields; an empty array (not null) would make Guzzle drop its
+                    // query string, so page 2+ failed with "(#200) Provide valid app ID" and lists stopped at page 1.
                     $currentParams = [];
                 }
 

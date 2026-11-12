@@ -153,7 +153,13 @@ class ScheduledMixedContentPublishingTest extends TestCase
         $yt->method('uploadVideo')->willReturnCallback(function ($conn, $videoPath, $title, $desc, $privacy, $tags = null, $cat = null, $thumb = null) {
             if ($this->onYouTubeUpload) ($this->onYouTubeUpload)();
             $this->youtubeUploads[] = [basename($videoPath), $thumb ? basename($thumb) : null];
-            return ['id' => 'yt_' . (++$this->seq), 'url' => 'https://youtu.be/x', 'thumbnail_uploaded' => (bool) $thumb];
+            return ['id' => 'yt_' . (++$this->seq), 'url' => 'https://youtu.be/x'];
+        });
+        // Custom thumbnail: separate thumbnails.set after processing, recorded against the last upload.
+        $yt->method('getProcessingStatus')->willReturn(['found' => true, 'processing_status' => 'succeeded', 'upload_status' => 'processed', 'reason' => null]);
+        $yt->method('setCustomThumbnail')->willReturnCallback(function ($conn, $videoId, $path) {
+            $this->youtubeUploads[count($this->youtubeUploads) - 1][1] = basename($path);
+            return ['video_id' => $videoId, 'kind' => 'youtube#thumbnailSetResponse', 'thumbnails' => ['default' => 'https://i.ytimg.com/vi/' . $videoId . '/default.jpg']];
         });
         $this->app->instance(YouTubeService::class, $yt);
     }
