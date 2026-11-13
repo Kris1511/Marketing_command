@@ -44,6 +44,7 @@ import {
   captionLimitFor,
   contentTypeFromPostType,
   contentTypeLabel,
+  postPreviewImage,
   statusLabel,
   DEFAULT_YOUTUBE_PRIVACY,
   YOUTUBE_PRIVACY_OPTIONS,
